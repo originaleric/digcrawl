@@ -2,6 +2,7 @@ package platformprov
 
 import (
 	"context"
+	"errors"
 
 	"github.com/originaleric/diggate/runtime/artifact"
 	"github.com/originaleric/diggate/runtime/executor"
@@ -111,6 +112,10 @@ func platformReadHandler(
 
 		content, err := read(ctx, in.toPlatformReadInput())
 		if err != nil {
+			var re *iplatform.ReadError
+			if errors.As(err, &re) {
+				return iplatform.ErrorOutput(re), nil, nil
+			}
 			return nil, nil, err
 		}
 		out := iplatform.ApplyFormats(content, in.Format)

@@ -6,7 +6,7 @@ import (
 	"github.com/originaleric/diggate/internal/platform/douyin"
 )
 
-var douyinDefaultDomains = []string{"douyin.com", "www.douyin.com", "iesdouyin.com"}
+var douyinDefaultDomains = []string{"douyin.com", "www.douyin.com", "iesdouyin.com", "v.douyin.com"}
 
 // DouyinVideoReadEntry returns registry entry for douyin.video.read.
 func DouyinVideoReadEntry(configDomains []string, artStore artifact.Store) registry.Entry {

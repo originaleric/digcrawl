@@ -26,12 +26,30 @@ func MetaString(meta map[string]any, key string) string {
 }
 
 func metaInt(meta map[string]any, key string) int {
-	s := MetaString(meta, key)
-	if s == "" {
+	if meta == nil {
 		return 0
 	}
-	n, _ := strconv.Atoi(strings.ReplaceAll(s, ",", ""))
-	return n
+	v, ok := meta[key]
+	if !ok || v == nil {
+		return 0
+	}
+	switch t := v.(type) {
+	case int:
+		return t
+	case int64:
+		return int(t)
+	case float64:
+		return int(t)
+	case float32:
+		return int(t)
+	default:
+		s := MetaString(meta, key)
+		if s == "" {
+			return 0
+		}
+		n, _ := strconv.Atoi(strings.ReplaceAll(s, ",", ""))
+		return n
+	}
 }
 
 // MetaStringSlice reads a string slice from metadata.

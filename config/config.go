@@ -146,7 +146,7 @@ func init() {
 				AllowedDomains: []string{
 					"mp.weixin.qq.com", "weixin.qq.com",
 					"xiaohongshu.com", "www.xiaohongshu.com", "xhslink.com",
-					"douyin.com", "www.douyin.com", "iesdouyin.com",
+					"douyin.com", "www.douyin.com", "iesdouyin.com", "v.douyin.com",
 					"x.com", "twitter.com", "www.twitter.com",
 				},
 				Headless:       &enabled,

@@ -24,7 +24,7 @@ type urlRule struct {
 var rules = []urlRule{
 	{platform: "wechat", tool: platformprov.ToolWechatArticleRead, hosts: []string{"mp.weixin.qq.com", "weixin.qq.com"}},
 	{platform: "xiaohongshu", tool: platformprov.ToolXiaohongshuNoteRead, hosts: []string{"xiaohongshu.com", "www.xiaohongshu.com", "xhslink.com"}},
-	{platform: "douyin", tool: platformprov.ToolDouyinVideoRead, hosts: []string{"douyin.com", "www.douyin.com", "iesdouyin.com"}},
+	{platform: "douyin", tool: platformprov.ToolDouyinVideoRead, hosts: []string{"douyin.com", "www.douyin.com", "iesdouyin.com", "v.douyin.com"}},
 	{platform: "x", tool: platformprov.ToolXPostRead, hosts: []string{"x.com", "twitter.com", "www.twitter.com"}},
 }
 

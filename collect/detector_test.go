@@ -29,6 +29,50 @@ func TestDetectWebFallback(t *testing.T) {
 	}
 }
 
+func TestDetectXiaohongshu(t *testing.T) {
+	t.Parallel()
+	m, err := Detect("https://www.xiaohongshu.com/explore/abc123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.Tool != platformprov.ToolXiaohongshuNoteRead || m.Platform != "xiaohongshu" {
+		t.Fatalf("got %+v", m)
+	}
+}
+
+func TestDetectXHSLink(t *testing.T) {
+	t.Parallel()
+	m, err := Detect("https://xhslink.com/a/xyz")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.Tool != platformprov.ToolXiaohongshuNoteRead {
+		t.Fatalf("got %+v", m)
+	}
+}
+
+func TestDetectDouyin(t *testing.T) {
+	t.Parallel()
+	m, err := Detect("https://www.douyin.com/video/123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.Tool != platformprov.ToolDouyinVideoRead {
+		t.Fatalf("got %+v", m)
+	}
+}
+
+func TestDetectXPost(t *testing.T) {
+	t.Parallel()
+	m, err := Detect("https://twitter.com/u/status/99")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.Tool != platformprov.ToolXPostRead {
+		t.Fatalf("got %+v", m)
+	}
+}
+
 func TestDetectUnsupported(t *testing.T) {
 	t.Parallel()
 	_, err := Detect("ftp://example.com/page")
