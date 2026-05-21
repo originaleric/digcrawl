@@ -77,7 +77,9 @@ go install ./cmd/digcollect
 | `InboxDir` | 收件箱目录，默认 `collect-inbox` |
 | `DefaultFormats` | 默认导出格式：`md`、`html`、`json` |
 | `DownloadMedia` | 是否下载正文中的媒体到 `.assets/` |
-| `IndexEnabled` | 是否维护 `index.json`（同 URL 覆盖更新） |
+| `PersistMode` | 持久化方案：`files`（仅文件）/ `index`（默认，+ index.json）/ `sqlite`（+ collect.db）/ `both` |
+| `DBPath` | SQLite 库路径，默认 `storage/diggate/collect.db` |
+| `IndexEnabled` | `index`/`both` 模式下是否写 `index.json`（同 URL 覆盖更新） |
 | `RateLimitMs` | inbox 批处理时 URL 之间的间隔（毫秒） |
 | `InboxPollIntervalSec` | `inbox --watch` 轮询间隔 |
 
@@ -310,11 +312,23 @@ diggate collect inbox --watch
 
 批处理受 `Collect.RateLimitMs` 节流，避免对目标站请求过快。
 
+### 查询与迁移（SQLite）
+
+当 `PersistMode` 为 `sqlite` 或 `both` 时：
+
+```bash
+diggate collect list
+diggate collect list --q wechat --limit 50
+diggate collect show <collect-id>
+diggate collect show "https://mp.weixin.qq.com/s/..."
+diggate collect migrate-index   # 将已有 index.json 导入 collect.db
+```
+
 ### 输出目录结构
 
 ```text
 collect-output/
-  index.json                 # 采集索引（URL → 标题、路径、平台）
+  index.json                 # PersistMode=index|both
   2026-05-21/
     文章标题.md
     文章标题.html
@@ -322,6 +336,9 @@ collect-output/
     文章标题.assets/         # 媒体与截图
       media.json
       001.jpg
+
+storage/diggate/
+  collect.db                 # PersistMode=sqlite|both
 
 collect-inbox/
   pending.url                # 待处理（示例文件名）

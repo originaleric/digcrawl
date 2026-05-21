@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/originaleric/diggate/collect/store"
 	"github.com/originaleric/diggate/config"
 	"github.com/originaleric/diggate/runtime"
 	"github.com/originaleric/diggate/runtime/artifact"
@@ -13,9 +14,10 @@ import (
 
 // Service runs local content collect and export.
 type Service struct {
-	cfg   *config.Config
-	rt    *runtime.Runtime
-	store artifact.Store
+	cfg       *config.Config
+	rt        *runtime.Runtime
+	artifacts artifact.Store
+	collectDB store.Store
 }
 
 // NewService builds a collect service with platform and browser tools.
@@ -24,13 +26,21 @@ func NewService(cfg *config.Config) (*Service, error) {
 	if err != nil {
 		return nil, err
 	}
-	var store artifact.Store
+	var artifacts artifact.Store
 	if cfg.Gateway.ArtifactEnabled == nil || *cfg.Gateway.ArtifactEnabled {
 		if s, err := runtime.NewArtifactStore(cfg); err == nil {
-			store = s
+			artifacts = s
 		}
 	}
-	return &Service{cfg: cfg, rt: rt, store: store}, nil
+	var collectDB store.Store
+	if cfg.Collect.UseSQLite() {
+		db, err := store.OpenSQLite(cfg.Collect.DBPathOrDefault())
+		if err != nil {
+			return nil, fmt.Errorf("open collect db: %w", err)
+		}
+		collectDB = db
+	}
+	return &Service{cfg: cfg, rt: rt, artifacts: artifacts, collectDB: collectDB}, nil
 }
 
 func (s *Service) exportOpts(outDir string, formats []string) ExportOptions {
@@ -41,7 +51,7 @@ func (s *Service) exportOpts(outDir string, formats []string) ExportOptions {
 		DownloadMedia:   download,
 		MaxMediaBytes:   s.cfg.Collect.MaxMediaBytes,
 		MediaTimeoutSec: s.cfg.Collect.MediaTimeoutSec,
-		ArtifactStore: s.store,
+		ArtifactStore: s.artifacts,
 	}
 }
 
@@ -86,14 +96,27 @@ func (s *Service) CollectURL(ctx context.Context, url string, formats []string, 
 		return ExportResult{}, err
 	}
 
-	if s.cfg.Collect.IndexEnabled == nil || *s.cfg.Collect.IndexEnabled {
+	if err := s.persistCollect(ctx, url, match, out, &result, root); err != nil {
+		return result, err
+	}
+	return result, nil
+}
+
+func (s *Service) persistCollect(ctx context.Context, url string, match Match, out map[string]any, result *ExportResult, root string) error {
+	if s.cfg.Collect.UseIndexJSON() {
 		entry := EntryFromExport(url, match.Platform, out, result.Paths, result.Written)
 		if err := UpsertEntry(root, entry); err != nil {
-			return result, err
+			return err
 		}
 		result.Written = append(result.Written, IndexPath(root))
 	}
-	return result, nil
+	if s.cfg.Collect.UseSQLite() && s.collectDB != nil {
+		in := UpsertInputFromExport(url, match, out, result.Paths, result.Downloaded, root)
+		if _, err := s.collectDB.Upsert(ctx, in); err != nil {
+			return fmt.Errorf("sqlite upsert: %w", err)
+		}
+	}
+	return nil
 }
 
 // CollectFile reads URLs from a text file (one per line) and collects each.

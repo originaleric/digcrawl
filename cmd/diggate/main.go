@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
@@ -13,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/originaleric/diggate/collect"
+	"github.com/originaleric/diggate/collect/store"
 	"github.com/originaleric/diggate/config"
 	"github.com/originaleric/diggate/runtime"
 	"github.com/originaleric/diggate/transport/collector"
@@ -74,6 +76,9 @@ func printUsage() {
   diggate dev-host [flags]    本地参考宿主（仅开发）
   diggate collect <url>       采集 URL 并导出 Markdown/HTML/JSON
   diggate collect inbox       处理 collect-inbox/ 中的链接文件
+  diggate collect list        列出 SQLite 采集记录（需 PersistMode=sqlite/both）
+  diggate collect show <id>   查看单条采集详情（id 或 URL）
+  diggate collect migrate-index  从 index.json 导入 SQLite
   diggate connect [flags]     保存宿主配置并启动 Collector
   diggate login [flags]       保存 Collector Token 到配置
   diggate help
@@ -200,9 +205,21 @@ func runMCP(args []string) {
 }
 
 func runCollectCommand(args []string) {
-	if len(args) > 0 && args[0] == "inbox" {
-		runCollectInbox(args[1:])
-		return
+	if len(args) > 0 {
+		switch args[0] {
+		case "inbox":
+			runCollectInbox(args[1:])
+			return
+		case "list":
+			runCollectList(args[1:])
+			return
+		case "show":
+			runCollectShow(args[1:])
+			return
+		case "migrate-index":
+			runCollectMigrateIndex(args[1:])
+			return
+		}
 	}
 	runCollect(args)
 }
@@ -301,6 +318,83 @@ func logCollectResults(results []collect.ExportResult) {
 			log.Printf("wrote %s", w)
 		}
 	}
+}
+
+func runCollectList(args []string) {
+	fs := flag.NewFlagSet("collect list", flag.ExitOnError)
+	configPath := fs.String("config", "config/config.yaml", "path to config.yaml")
+	limit := fs.Int("limit", 20, "max rows")
+	offset := fs.Int("offset", 0, "offset")
+	query := fs.String("q", "", "search query")
+	_ = fs.Parse(args)
+
+	cfg, err := loadConfig(*configPath)
+	if err != nil {
+		log.Fatalf("load config: %v", err)
+	}
+	ctx := context.Background()
+	var rows []store.CollectRecord
+	if strings.TrimSpace(*query) != "" {
+		rows, err = collect.SearchCollects(ctx, cfg, *query, *limit)
+	} else {
+		rows, err = collect.ListCollects(ctx, cfg, *limit, *offset)
+	}
+	if err != nil {
+		log.Fatalf("collect list: %v", err)
+	}
+	if len(rows) == 0 {
+		log.Printf("no collects found")
+		return
+	}
+	for _, r := range rows {
+		fmt.Printf("%s\t%s\t%s\t%s\n", r.ID, r.Platform, r.Title, r.SourceURL)
+	}
+}
+
+func runCollectShow(args []string) {
+	fs := flag.NewFlagSet("collect show", flag.ExitOnError)
+	configPath := fs.String("config", "config/config.yaml", "path to config.yaml")
+	_ = fs.Parse(args)
+	if len(fs.Args()) == 0 {
+		log.Fatal("collect show: provide collect id or URL")
+	}
+
+	cfg, err := loadConfig(*configPath)
+	if err != nil {
+		log.Fatalf("load config: %v", err)
+	}
+	detail, err := collect.ShowCollect(context.Background(), cfg, fs.Args()[0])
+	if err != nil {
+		log.Fatalf("collect show: %v", err)
+	}
+	if detail == nil {
+		log.Fatal("collect not found")
+	}
+	data, err := json.MarshalIndent(detail, "", "  ")
+	if err != nil {
+		log.Fatalf("marshal: %v", err)
+	}
+	fmt.Println(string(data))
+}
+
+func runCollectMigrateIndex(args []string) {
+	fs := flag.NewFlagSet("collect migrate-index", flag.ExitOnError)
+	configPath := fs.String("config", "config/config.yaml", "path to config.yaml")
+	outDir := fs.String("out", "", "output directory (overrides Collect.OutputDir)")
+	_ = fs.Parse(args)
+
+	cfg, err := loadConfig(*configPath)
+	if err != nil {
+		log.Fatalf("load config: %v", err)
+	}
+	if *outDir != "" {
+		cfg.Collect.OutputDir = *outDir
+	}
+	n, err := collect.MigrateIndexToSQLite(context.Background(), cfg, cfg.Collect.OutputDir)
+	if err != nil {
+		log.Fatalf("migrate-index: %v", err)
+	}
+	log.Printf("imported %d entries into %s", n, cfg.Collect.DBPathOrDefault())
 }
 
 func parseFormats(flagVal string, defaults []string) []string {

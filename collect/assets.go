@@ -10,11 +10,16 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
+	"golang.org/x/net/html"
+
 	"github.com/originaleric/diggate/runtime/artifact"
 )
+
+var markdownImageRe = regexp.MustCompile(`!\[[^\]]*\]\((https?://[^\s\)]+)\)`)
 
 // AssetDownloadOptions configures media file downloads into assets dir.
 type AssetDownloadOptions struct {
@@ -39,6 +44,12 @@ func DownloadAssets(ctx context.Context, assetsDir string, out map[string]any, o
 	}
 
 	items := extractMediaItems(out)
+	if len(items) == 0 {
+		items = fallbackMediaItems(out)
+		if len(items) > 0 {
+			out["media"] = items
+		}
+	}
 	if len(items) > 0 || len(manifest) > 0 {
 		if opts.MaxBytes <= 0 {
 			opts.MaxBytes = 10 * 1024 * 1024
@@ -47,6 +58,7 @@ func DownloadAssets(ctx context.Context, assetsDir string, out map[string]any, o
 			opts.TimeoutSec = 30
 		}
 		client := &http.Client{Timeout: time.Duration(opts.TimeoutSec) * time.Second}
+		referer := refererForDownload(out)
 		for i, item := range items {
 			rawURL, _ := item["url"].(string)
 			rawURL = strings.TrimSpace(rawURL)
@@ -62,7 +74,7 @@ func DownloadAssets(ctx context.Context, assetsDir string, out map[string]any, o
 			mediaType, _ := item["type"].(string)
 			name := assetFilename(rawURL, mediaType, i)
 			dest := filepath.Join(assetsDir, name)
-			if err := downloadFile(ctx, client, rawURL, dest, opts.MaxBytes); err != nil {
+			if err := downloadFile(ctx, client, rawURL, dest, opts.MaxBytes, referer); err != nil {
 				manifest = append(manifest, map[string]any{
 					"type": item["type"], "url": rawURL, "error": err.Error(),
 				})
@@ -165,14 +177,99 @@ func extractMediaItems(out map[string]any) []map[string]any {
 	case []any:
 		var items []map[string]any
 		for _, v := range t {
-			if m, ok := v.(map[string]any); ok {
+			switch m := v.(type) {
+			case map[string]any:
 				items = append(items, m)
+			default:
+				// platform.MediaItem JSON decodes as map with type/url keys
+				if b, err := json.Marshal(v); err == nil {
+					var mm map[string]any
+					if json.Unmarshal(b, &mm) == nil {
+						items = append(items, mm)
+					}
+				}
 			}
 		}
 		return items
 	default:
 		return nil
 	}
+}
+
+func fallbackMediaItems(out map[string]any) []map[string]any {
+	seen := make(map[string]struct{})
+	var items []map[string]any
+	add := func(rawURL string) {
+		rawURL = strings.TrimSpace(rawURL)
+		if rawURL == "" || !strings.HasPrefix(rawURL, "http") {
+			return
+		}
+		if _, ok := seen[rawURL]; ok {
+			return
+		}
+		seen[rawURL] = struct{}{}
+		items = append(items, map[string]any{"type": "image", "url": rawURL})
+	}
+	if md, ok := out["markdown"].(string); ok {
+		for _, m := range markdownImageRe.FindAllStringSubmatch(md, -1) {
+			if len(m) > 1 {
+				add(m[1])
+			}
+		}
+	}
+	if htmlBody, ok := out["html"].(string); ok && strings.TrimSpace(htmlBody) != "" {
+		for _, u := range imageURLsFromHTML(htmlBody) {
+			add(u)
+		}
+	}
+	if len(items) == 0 {
+		return nil
+	}
+	return items
+}
+
+func imageURLsFromHTML(body string) []string {
+	doc, err := html.Parse(strings.NewReader(body))
+	if err != nil {
+		return nil
+	}
+	var urls []string
+	seen := make(map[string]struct{})
+	var walk func(*html.Node)
+	walk = func(n *html.Node) {
+		if n.Type == html.ElementNode && n.Data == "img" {
+			for _, a := range n.Attr {
+				if a.Key != "src" && a.Key != "data-src" {
+					continue
+				}
+				u := strings.TrimSpace(a.Val)
+				if u == "" || strings.HasPrefix(u, "data:") {
+					continue
+				}
+				if _, ok := seen[u]; !ok {
+					seen[u] = struct{}{}
+					urls = append(urls, u)
+				}
+			}
+		}
+		for c := n.FirstChild; c != nil; c = c.NextSibling {
+			walk(c)
+		}
+	}
+	walk(doc)
+	return urls
+}
+
+func refererForDownload(out map[string]any) string {
+	if platform, _ := out["platform"].(string); platform == "wechat" {
+		return "https://mp.weixin.qq.com/"
+	}
+	for _, key := range []string{"source_url", "canonical_url"} {
+		if u, _ := out[key].(string); strings.Contains(u, "mp.weixin.qq.com") {
+			return "https://mp.weixin.qq.com/"
+		}
+	}
+	return ""
 }
 
 func assetFilename(rawURL, mediaType string, index int) string {
@@ -195,10 +292,13 @@ func assetFilename(rawURL, mediaType string, index int) string {
 	return fmt.Sprintf("%03d%s", index+1, ext)
 }
 
-func downloadFile(ctx context.Context, client *http.Client, rawURL, dest string, maxBytes int64) error {
+func downloadFile(ctx context.Context, client *http.Client, rawURL, dest string, maxBytes int64, referer string) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
 		return err
+	}
+	if referer != "" {
+		req.Header.Set("Referer", referer)
 	}
 	resp, err := client.Do(req)
 	if err != nil {
@@ -229,6 +329,9 @@ func downloadFile(ctx context.Context, client *http.Client, rawURL, dest string,
 }
 
 func writeAssetsManifest(assetsDir string, out map[string]any, downloaded []map[string]any) ([]string, error) {
+	if err := os.MkdirAll(assetsDir, 0o755); err != nil {
+		return nil, err
+	}
 	manifest := map[string]any{
 		"media":                  out["media"],
 		"screenshot_artifact_id": out["screenshot_artifact_id"],

@@ -25,11 +25,55 @@ type CollectConfig struct {
 	DefaultFormats    []string `yaml:"DefaultFormats" json:"DefaultFormats,omitempty"`
 	IncludeMedia      *bool    `yaml:"IncludeMedia" json:"IncludeMedia,omitempty"`
 	DownloadMedia     *bool    `yaml:"DownloadMedia" json:"DownloadMedia,omitempty"`
+	PersistMode       string   `yaml:"PersistMode" json:"PersistMode,omitempty"` // files | index | sqlite | both
+	DBPath            string   `yaml:"DBPath" json:"DBPath,omitempty"`
 	IndexEnabled      *bool    `yaml:"IndexEnabled" json:"IndexEnabled,omitempty"`
 	MaxMediaBytes     int64    `yaml:"MaxMediaBytes" json:"MaxMediaBytes,omitempty"`
 	MediaTimeoutSec   int      `yaml:"MediaTimeoutSec" json:"MediaTimeoutSec,omitempty"`
 	InboxPollInterval int      `yaml:"InboxPollIntervalSec" json:"InboxPollIntervalSec,omitempty"`
 	RateLimitMs       int      `yaml:"RateLimitMs" json:"RateLimitMs,omitempty"`
+}
+
+// PersistModeOrDefault returns files | index | sqlite | both (default index).
+func (c CollectConfig) PersistModeOrDefault() string {
+	mode := strings.ToLower(strings.TrimSpace(c.PersistMode))
+	switch mode {
+	case "files", "index", "sqlite", "both":
+		return mode
+	default:
+		return "index"
+	}
+}
+
+// UseIndexJSON reports whether index.json should be maintained.
+func (c CollectConfig) UseIndexJSON() bool {
+	switch c.PersistModeOrDefault() {
+	case "index", "both":
+		if c.IndexEnabled != nil && !*c.IndexEnabled {
+			return false
+		}
+		return true
+	default:
+		return false
+	}
+}
+
+// UseSQLite reports whether collect.db should be maintained.
+func (c CollectConfig) UseSQLite() bool {
+	switch c.PersistModeOrDefault() {
+	case "sqlite", "both":
+		return true
+	default:
+		return false
+	}
+}
+
+// DBPathOrDefault returns the SQLite database path.
+func (c CollectConfig) DBPathOrDefault() string {
+	if strings.TrimSpace(c.DBPath) != "" {
+		return c.DBPath
+	}
+	return "storage/diggate/collect.db"
 }
 
 // LocalBrowserConfig local browser used by platform tools and collect.
@@ -131,6 +175,8 @@ func init() {
 				DefaultFormats:    []string{"md", "json"},
 				IncludeMedia:      &enabled,
 				DownloadMedia:     &enabled,
+				PersistMode:       "index",
+				DBPath:            "storage/diggate/collect.db",
 				IndexEnabled:      &enabled,
 				MaxMediaBytes:     10 * 1024 * 1024,
 				MediaTimeoutSec:   30,
@@ -259,6 +305,9 @@ func mergeDefaults(cfg *Config) {
 	}
 	if cfg.Collect.RateLimitMs == 0 {
 		cfg.Collect.RateLimitMs = defaultCfg.Collect.RateLimitMs
+	}
+	if cfg.Collect.DBPath == "" {
+		cfg.Collect.DBPath = defaultCfg.Collect.DBPath
 	}
 	if cfg.LocalBrowser.MaxConcurrency == 0 {
 		cfg.LocalBrowser.MaxConcurrency = defaultCfg.LocalBrowser.MaxConcurrency

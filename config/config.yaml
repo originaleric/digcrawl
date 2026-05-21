@@ -40,6 +40,9 @@ Collect:
   OutputDir: "collect-output"
   InboxDir: "collect-inbox"
   DefaultFormats: ["md", "json"]
+  # 持久化方案：files | index | sqlite | both
+  PersistMode: index
+  DBPath: "storage/diggate/collect.db"
   IncludeMedia: true
   DownloadMedia: true
   IndexEnabled: true

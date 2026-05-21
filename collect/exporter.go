@@ -25,8 +25,9 @@ type ExportOptions struct {
 
 // ExportResult lists written files.
 type ExportResult struct {
-	Paths   OutputPaths
-	Written []string
+	Paths      OutputPaths
+	Written    []string
+	Downloaded []map[string]any
 }
 
 // Export writes collect output to Markdown / HTML / JSON, downloads media, and updates assets manifest.
@@ -111,7 +112,7 @@ func Export(ctx context.Context, out map[string]any, opts ExportOptions) (Export
 		_ = RewriteMarkdownAssets(paths.Markdown, paths.Assets, downloaded)
 	}
 
-	return ExportResult{Paths: paths, Written: written}, nil
+	return ExportResult{Paths: paths, Written: written, Downloaded: downloaded}, nil
 }
 
 func normalizeExportFormats(formats []string) []string {

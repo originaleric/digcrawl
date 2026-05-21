@@ -73,6 +73,9 @@ func normalizeArticle(in platform.ReadInput, resp *browser.BrowserBrowseResponse
 		}
 		c.PlatformMetadata = resp.Metadata
 	}
+	if in.IncludeMedia && resp.Metadata != nil {
+		c.Media = platform.MediaFromMeta(resp.Metadata)
+	}
 	if in.IncludeScreenshot {
 		c.ScreenshotBase64 = resp.ScreenshotBase
 	}
@@ -88,6 +91,20 @@ func metadataScript() string {
   const published = document.querySelector('#publish_time')?.innerText
     || document.querySelector('meta[property="og:article:published_time"]')?.content
     || '';
-  return { author_name: (author || '').trim(), published_at: (published || '').trim() };
+  const root = document.querySelector('#js_content') || document;
+  const seen = new Set();
+  const image_urls = [];
+  for (const img of root.querySelectorAll('img')) {
+    const raw = (img.getAttribute('data-src') || img.getAttribute('src') || '').trim();
+    if (!raw || raw.startsWith('data:')) continue;
+    if (seen.has(raw)) continue;
+    seen.add(raw);
+    image_urls.push(raw);
+  }
+  return {
+    author_name: (author || '').trim(),
+    published_at: (published || '').trim(),
+    image_urls
+  };
 })()`
 }
