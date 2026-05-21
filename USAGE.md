@@ -68,6 +68,10 @@ go install ./cmd/digcollect
 | `InstanceID` | 本机 Collector 实例 ID（空则自动生成） |
 | `PullIntervalSec` | `>0` 时由 Collector 主动拉取任务；`0` 为推送模式 |
 | `MaxConcurrentCalls` | 并发执行工具数上限 |
+| `RateLimitCooldownMs` | 相同 `RateLimitKey` 工具调用完成后的冷却时间 |
+| `CallQueueSize` | Collector 会话内有界任务队列长度，队列满时返回 `RATE_LIMITED` |
+| `CallQueueWaitMs` | 保留字段，兼容旧配置；当前 worker queue 入队不阻塞 read loop |
+| `RetryMaxAttempts` / `RetryDelayMs` | 对 transient 工具失败做有限重试 |
 
 ### Collect（本地采集）
 
@@ -81,6 +85,7 @@ go install ./cmd/digcollect
 | `DBPath` | SQLite 库路径，默认 `storage/diggate/collect.db` |
 | `IndexEnabled` | `index`/`both` 模式下是否写 `index.json`（同 URL 覆盖更新） |
 | `RateLimitMs` | inbox 批处理时 URL 之间的间隔（毫秒） |
+| `PlatformRateLimits` | 按平台覆盖批处理间隔，如 `xiaohongshu`、`douyin`、`toutiao` |
 | `InboxPollIntervalSec` | `inbox --watch` 轮询间隔 |
 
 ### LocalBrowser（本地浏览器）
@@ -91,6 +96,19 @@ go install ./cmd/digcollect
 | `AllowedDomains` | 允许访问的域名列表（Collect / 平台工具均受约束） |
 | `Headless` | 是否无头模式 |
 | `CookieStoreDir` | 按域名持久化 Cookie，便于登录态采集 |
+| `CDPMode` / `CDPPort` | 启动浏览器时开启 CDP 调试端口 |
+| `CDPConnectExisting` | 连接已有 CDP 浏览器（如手动启动的 Chrome） |
+| `UserDataDir` | 持久化浏览器 profile 根目录 |
+| `ProxyURL` | 浏览器代理地址，页面 fetch/API fallback 共用 |
+
+### Platform（平台读取）
+
+| 字段 | 说明 |
+|------|------|
+| `BrowseRetryMaxAttempts` | Browser 兜底读取 transient 错误最大尝试次数 |
+| `BrowseRetryDelayMs` | Browser 重试间隔 |
+| `ReadMetricsEnabled` | 是否输出 `[platform-read]` 结构化日志 |
+| `HealthProbes` | `diggate browser check --trial` 的平台默认试读 URL |
 
 ### Providers（内置 Provider 开关）
 
@@ -115,6 +133,8 @@ diggate stdio [flags]         # 逐行 JSON 协议
 diggate dev-host [flags]      # 本地参考宿主（仅开发调试）
 diggate collect <url>         # 采集单个 URL
 diggate collect inbox         # 处理收件箱
+diggate browser login         # 平台扫码/交互登录并保存 Cookie
+diggate browser check         # 检查平台会话，可选试读
 digcollect <url>              # 轻量采集入口，等价于 diggate collect <url>
 diggate help
 ```
@@ -271,14 +291,35 @@ Collect 在**无云端宿主**的情况下，把链接抓取并导出到本地�
 | 微信公众号 | `mp.weixin.qq.com` 等 | `wechat.article.read` |
 | 小红书 | `xiaohongshu.com`、`xhslink.com` 等 | `xiaohongshu.note.read` |
 | 抖音 | `douyin.com` 等 | `douyin.video.read` |
+| 今日头条 | `toutiao.com`、`m.toutiao.com` 等 | `toutiao.article.read` |
 | X / Twitter | `x.com`、`twitter.com` 等 | `x.post.read` |
 | 任意网页 | 其他 `http(s)` URL | `browser.browse`（通用网页） |
+
+小红书、抖音、头条采用 **API 优先 + Browser 兜底** 的 strategy chain：先尝试页面运行时 `fetch(credentials:"include")`，失败时回落到 hydration/meta/DOM 提取。输出 JSON 的 `platform_metadata` 会包含 `read_channel`、`extraction_source`、`api_http_status`、`api_error_code` 等诊断字段。`LOGIN_REQUIRED`、`CAPTCHA_REQUIRED`、`RATE_LIMITED`、内容删除/私密会作为结构化错误返回。
 
 ### 单条 URL
 
 ```bash
 diggate collect "https://mp.weixin.qq.com/s/xxxx"
+diggate collect "https://www.toutiao.com/article/xxxx"
 diggate collect "https://example.com/article" --format md,html,json --out ./my-output
+```
+
+### 平台登录与健康检查
+
+部分平台在未登录或 Cookie 过期时会返回 `LOGIN_REQUIRED`。可使用有头浏览器完成登录并保存 Cookie：
+
+```bash
+diggate browser login --platform xiaohongshu
+diggate browser login --platform douyin
+diggate browser login --platform toutiao
+```
+
+登录后可检查会话，并可选试读一个 URL：
+
+```bash
+diggate browser check --platform toutiao \
+  --url "https://www.toutiao.com/article/xxxx" --trial
 ```
 
 | 参数 | 说明 |
@@ -311,6 +352,7 @@ diggate collect inbox --watch
 ```
 
 批处理受 `Collect.RateLimitMs` 节流，避免对目标站请求过快。
+若配置了 `Collect.PlatformRateLimits`，会按 URL 检测到的平台使用更细粒度的间隔，并加 ±20% jitter。
 
 ### 查询与迁移（SQLite）
 
@@ -368,6 +410,7 @@ collect-inbox/
 | `wechat.article.read` | 微信公众号文章 |
 | `xiaohongshu.note.read` | 小红书笔记 |
 | `douyin.video.read` | 抖音视频页 |
+| `toutiao.article.read` | 今日头条文章 |
 | `x.post.read` | X 帖子 |
 
 ### 浏览器（browser）
@@ -523,3 +566,115 @@ internal/browser/   go-rod 本地浏览器
 - 示例配置：[`config/config.yaml`](config/config.yaml)
 - Collect 模块：[`collect/README.md`](collect/README.md)
 - 更新记录：[`updates/`](updates/)
+
+---
+
+## 16. 本地抓取测试方案
+
+建议按“基础网页 → 头条 → 登录态平台 → 批量”的顺序测试，方便定位是导出、URL 归一化、登录态、API 通道还是 Browser 兜底的问题。
+
+### 16.1 构建与基础检查
+
+```bash
+/Users/dig/.gvm/gos/go1.24.8/bin/go build -o diggate ./cmd/diggate
+./diggate --help
+```
+
+### 16.2 通用网页 fallback
+
+```bash
+./diggate collect "https://example.com" --format md,json --out ./collect-output-test
+```
+
+预期：生成 md/json，说明 collect、browser 与 export 基础链路可用。
+
+### 16.3 今日头条文章
+
+```bash
+./diggate collect "https://www.toutiao.com/article/你的文章ID/" \
+  --format md,json --out ./collect-output-test
+```
+
+检查 JSON：
+
+- `platform` 应为 `toutiao`
+- `content_type` 应为 `article`
+- `platform_metadata.read_channel` 为 `api` 或 `browser`
+- `platform_metadata.extraction_source` 有值
+- `title` / `text` 不为空
+
+### 16.4 登录后试读
+
+```bash
+./diggate browser login --platform xiaohongshu
+./diggate browser login --platform douyin
+./diggate browser login --platform toutiao
+
+./diggate browser check --platform toutiao \
+  --url "https://www.toutiao.com/article/你的文章ID/" --trial
+```
+
+如果未登录或风控，会看到结构化错误，如 `LOGIN_REQUIRED`、`CAPTCHA_REQUIRED`、`RATE_LIMITED`。
+
+### 16.5 小红书与抖音 URL
+
+小红书优先使用带 `xsec_token` 的 URL：
+
+```bash
+./diggate collect "https://www.xiaohongshu.com/explore/笔记ID?xsec_token=xxx&xsec_source=pc_search" \
+  --format md,json --out ./collect-output-test
+```
+
+抖音测试标准视频和 `modal_id`：
+
+```bash
+./diggate collect "https://www.douyin.com/video/视频ID" \
+  --format md,json --out ./collect-output-test
+
+./diggate collect "https://www.douyin.com/user/SEC_UID?modal_id=视频ID" \
+  --format md,json --out ./collect-output-test
+```
+
+预期：`canonical_url` 归一到作品详情 URL，`platform_metadata.risk_flags` 可反映 `modal_id_resolved`、`xsec_token_missing` 等诊断信息。
+
+### 16.6 批量文件
+
+准备 `test-urls.txt`：
+
+```text
+https://example.com
+https://www.toutiao.com/article/你的文章ID/
+https://www.douyin.com/video/视频ID
+```
+
+执行：
+
+```bash
+./diggate collect --file test-urls.txt --format md,json --out ./collect-output-test
+```
+
+预期：批量采集按 `Collect.RateLimitMs` / `Collect.PlatformRateLimits` 节流；失败 URL 不影响其他 URL 继续处理。
+
+### 16.7 查看输出与诊断字段
+
+```bash
+find ./collect-output-test -maxdepth 3 -type f | sort
+```
+
+重点查看每个 JSON 的：
+
+```json
+{
+  "platform": "...",
+  "content_type": "...",
+  "title": "...",
+  "platform_metadata": {
+    "read_channel": "api 或 browser",
+    "extraction_source": "...",
+    "api_http_status": 200,
+    "api_error_code": "...",
+    "api_fetch_mode": "browser_context_fetch",
+    "api_signature_mode": "page_runtime"
+  }
+}
+```
