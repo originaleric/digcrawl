@@ -1,0 +1,25 @@
+Gateway:
+  ListenAddr: ":8787"
+  InstanceID: "diggate-local"
+  AuthToken: ""
+  AllowedTools: []
+  AllowedReadPaths: []
+  AllowedDomains: []
+  ArtifactEnabled: true
+  ArtifactDir: "storage/diggate/artifacts"
+  ArtifactTTLMinutes: 60
+
+Collector:
+  ServerURL: ""
+  WSPath: "/diggate/v1/collector/ws"
+  Token: ""
+  InstanceID: ""
+  HeartbeatIntervalSec: 30
+  PullIntervalSec: 0
+  PullBatchSize: 1
+  ReconnectDelaySec: 5
+  MaxConcurrentCalls: 1
+  AllowedTools: []
+
+Providers:
+  ExampleEnabled: true

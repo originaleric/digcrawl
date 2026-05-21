@@ -1,0 +1,28 @@
+# Binaries
+/bin/
+/dist/
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Go
+/vendor/
+
+# DigGate runtime data
+/storage/
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+*.swp
+*.swo
+
+# SpecStory (local only)
+.specstory/
+
+# Env / secrets
+.env
+.env.*
+*.pem
