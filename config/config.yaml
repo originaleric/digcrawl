@@ -1,13 +1,21 @@
 Gateway:
-  ListenAddr: ":8787"
+  ListenAddr: "127.0.0.1:8787"
   InstanceID: "diggate-local"
   AuthToken: ""
-  AllowedTools: []
+  AllowedTools:
+    - gateway.ping
+    - browser.browse
+    - browser.snapshot
+    - wechat.article.read
+    - xiaohongshu.note.read
+    - douyin.video.read
+    - x.post.read
   AllowedReadPaths: []
   AllowedDomains: []
   ArtifactEnabled: true
   ArtifactDir: "storage/diggate/artifacts"
   ArtifactTTLMinutes: 60
+  RequireApproval: true
 
 Collector:
   ServerURL: ""
@@ -19,7 +27,51 @@ Collector:
   PullBatchSize: 1
   ReconnectDelaySec: 5
   MaxConcurrentCalls: 1
-  AllowedTools: []
+  AllowedTools:
+    - gateway.ping
+    - browser.browse
+    - browser.snapshot
+    - wechat.article.read
+    - xiaohongshu.note.read
+    - douyin.video.read
+    - x.post.read
+
+Collect:
+  OutputDir: "collect-output"
+  InboxDir: "collect-inbox"
+  DefaultFormats: ["md", "json"]
+  IncludeMedia: true
+  DownloadMedia: true
+  IndexEnabled: true
+  MaxMediaBytes: 10485760
+  MediaTimeoutSec: 30
+  InboxPollIntervalSec: 5
+  RateLimitMs: 1500
+
+LocalBrowser:
+  Enabled: true
+  MaxConcurrency: 2
+  TotalTimeoutSec: 90
+  NavigateTimeoutSec: 45
+  WaitSelectorTimeoutSec: 25
+  AllowedDomains:
+    - mp.weixin.qq.com
+    - weixin.qq.com
+    - xiaohongshu.com
+    - www.xiaohongshu.com
+    - xhslink.com
+    - douyin.com
+    - www.douyin.com
+    - iesdouyin.com
+    - x.com
+    - twitter.com
+    - www.twitter.com
+  ChromePath: ""
+  Headless: true
+  CookieStoreDir: "storage/diggate/browser_cookies"
 
 Providers:
   ExampleEnabled: true
+  PlatformEnabled: true
+  BrowserEnabled: true
+  StubEnabled: false

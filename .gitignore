@@ -12,6 +12,10 @@
 # DigGate runtime data
 /storage/
 
+# Local planning notes
+/plans/
+/updates/
+
 # IDE / OS
 .idea/
 .vscode/

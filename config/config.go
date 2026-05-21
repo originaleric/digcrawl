@@ -2,6 +2,8 @@ package config
 
 import (
 	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 
 	"gopkg.in/yaml.v3"
@@ -9,9 +11,38 @@ import (
 
 // Config holds DigGate runtime settings.
 type Config struct {
-	Gateway   GatewayConfig   `yaml:"Gateway" json:"Gateway"`
-	Collector CollectorConfig `yaml:"Collector" json:"Collector"`
-	Providers ProvidersConfig `yaml:"Providers" json:"Providers"`
+	Gateway      GatewayConfig      `yaml:"Gateway" json:"Gateway"`
+	Collector    CollectorConfig    `yaml:"Collector" json:"Collector"`
+	Collect      CollectConfig      `yaml:"Collect" json:"Collect"`
+	LocalBrowser LocalBrowserConfig `yaml:"LocalBrowser" json:"LocalBrowser"`
+	Providers    ProvidersConfig    `yaml:"Providers" json:"Providers"`
+}
+
+// CollectConfig local content collect and export settings.
+type CollectConfig struct {
+	OutputDir         string   `yaml:"OutputDir" json:"OutputDir,omitempty"`
+	InboxDir          string   `yaml:"InboxDir" json:"InboxDir,omitempty"`
+	DefaultFormats    []string `yaml:"DefaultFormats" json:"DefaultFormats,omitempty"`
+	IncludeMedia      *bool    `yaml:"IncludeMedia" json:"IncludeMedia,omitempty"`
+	DownloadMedia     *bool    `yaml:"DownloadMedia" json:"DownloadMedia,omitempty"`
+	IndexEnabled      *bool    `yaml:"IndexEnabled" json:"IndexEnabled,omitempty"`
+	MaxMediaBytes     int64    `yaml:"MaxMediaBytes" json:"MaxMediaBytes,omitempty"`
+	MediaTimeoutSec   int      `yaml:"MediaTimeoutSec" json:"MediaTimeoutSec,omitempty"`
+	InboxPollInterval int      `yaml:"InboxPollIntervalSec" json:"InboxPollIntervalSec,omitempty"`
+	RateLimitMs       int      `yaml:"RateLimitMs" json:"RateLimitMs,omitempty"`
+}
+
+// LocalBrowserConfig local browser used by platform tools and collect.
+type LocalBrowserConfig struct {
+	Enabled                *bool    `yaml:"Enabled" json:"Enabled,omitempty"`
+	MaxConcurrency         int      `yaml:"MaxConcurrency" json:"MaxConcurrency,omitempty"`
+	TotalTimeoutSec        int      `yaml:"TotalTimeoutSec" json:"TotalTimeoutSec,omitempty"`
+	NavigateTimeoutSec     int      `yaml:"NavigateTimeoutSec" json:"NavigateTimeoutSec,omitempty"`
+	WaitSelectorTimeoutSec int      `yaml:"WaitSelectorTimeoutSec" json:"WaitSelectorTimeoutSec,omitempty"`
+	AllowedDomains         []string `yaml:"AllowedDomains" json:"AllowedDomains,omitempty"`
+	ChromePath             string   `yaml:"ChromePath" json:"ChromePath,omitempty"`
+	Headless               *bool    `yaml:"Headless" json:"Headless,omitempty"`
+	CookieStoreDir         string   `yaml:"CookieStoreDir" json:"CookieStoreDir,omitempty"`
 }
 
 // GatewayConfig HTTP Tool Gateway settings.
@@ -26,6 +57,7 @@ type GatewayConfig struct {
 	ArtifactEnabled    *bool    `yaml:"ArtifactEnabled" json:"ArtifactEnabled,omitempty"`
 	ArtifactDir        string   `yaml:"ArtifactDir" json:"ArtifactDir,omitempty"`
 	ArtifactTTLMinutes int      `yaml:"ArtifactTTLMinutes" json:"ArtifactTTLMinutes,omitempty"`
+	RequireApproval    *bool    `yaml:"RequireApproval" json:"RequireApproval,omitempty"`
 }
 
 // CollectorConfig WebSocket reverse connector settings.
@@ -42,9 +74,12 @@ type CollectorConfig struct {
 	AllowedTools         []string `yaml:"AllowedTools" json:"AllowedTools,omitempty"`
 }
 
-// ProvidersConfig toggles built-in example tools.
+// ProvidersConfig toggles built-in tool providers.
 type ProvidersConfig struct {
-	ExampleEnabled *bool `yaml:"ExampleEnabled" json:"ExampleEnabled,omitempty"`
+	ExampleEnabled  *bool `yaml:"ExampleEnabled" json:"ExampleEnabled,omitempty"`
+	PlatformEnabled *bool `yaml:"PlatformEnabled" json:"PlatformEnabled,omitempty"`
+	BrowserEnabled  *bool `yaml:"BrowserEnabled" json:"BrowserEnabled,omitempty"`
+	StubEnabled     *bool `yaml:"StubEnabled" json:"StubEnabled,omitempty"`
 }
 
 var (
@@ -57,11 +92,21 @@ func init() {
 		enabled := true
 		defaultCfg = Config{
 			Gateway: GatewayConfig{
-				ListenAddr:         ":8787",
-				InstanceID:         "diggate-local",
+				ListenAddr: "127.0.0.1:8787",
+				InstanceID: "diggate-local",
+				AllowedTools: []string{
+					"gateway.ping",
+					"browser.browse",
+					"browser.snapshot",
+					"wechat.article.read",
+					"xiaohongshu.note.read",
+					"douyin.video.read",
+					"x.post.read",
+				},
 				ArtifactDir:        "storage/diggate/artifacts",
 				ArtifactTTLMinutes: 60,
 				ArtifactEnabled:    &enabled,
+				RequireApproval:    &enabled,
 			},
 			Collector: CollectorConfig{
 				WSPath:               "/diggate/v1/collector/ws",
@@ -70,9 +115,47 @@ func init() {
 				ReconnectDelaySec:    5,
 				PullBatchSize:        1,
 				MaxConcurrentCalls:   1,
+				AllowedTools: []string{
+					"gateway.ping",
+					"browser.browse",
+					"browser.snapshot",
+					"wechat.article.read",
+					"xiaohongshu.note.read",
+					"douyin.video.read",
+					"x.post.read",
+				},
+			},
+			Collect: CollectConfig{
+				OutputDir:         "collect-output",
+				InboxDir:          "collect-inbox",
+				DefaultFormats:    []string{"md", "json"},
+				IncludeMedia:      &enabled,
+				DownloadMedia:     &enabled,
+				IndexEnabled:      &enabled,
+				MaxMediaBytes:     10 * 1024 * 1024,
+				MediaTimeoutSec:   30,
+				InboxPollInterval: 5,
+				RateLimitMs:       1500,
+			},
+			LocalBrowser: LocalBrowserConfig{
+				Enabled:                &enabled,
+				MaxConcurrency:         2,
+				TotalTimeoutSec:        90,
+				NavigateTimeoutSec:     45,
+				WaitSelectorTimeoutSec: 25,
+				AllowedDomains: []string{
+					"mp.weixin.qq.com", "weixin.qq.com",
+					"xiaohongshu.com", "www.xiaohongshu.com", "xhslink.com",
+					"douyin.com", "www.douyin.com", "iesdouyin.com",
+					"x.com", "twitter.com", "www.twitter.com",
+				},
+				Headless:       &enabled,
+				CookieStoreDir: "storage/diggate/browser_cookies",
 			},
 			Providers: ProvidersConfig{
-				ExampleEnabled: &enabled,
+				ExampleEnabled:  &enabled,
+				PlatformEnabled: &enabled,
+				BrowserEnabled:  &enabled,
 			},
 		}
 	})
@@ -111,6 +194,12 @@ func mergeDefaults(cfg *Config) {
 	if cfg.Gateway.ArtifactTTLMinutes == 0 {
 		cfg.Gateway.ArtifactTTLMinutes = defaultCfg.Gateway.ArtifactTTLMinutes
 	}
+	if cfg.Gateway.RequireApproval == nil {
+		cfg.Gateway.RequireApproval = defaultCfg.Gateway.RequireApproval
+	}
+	if len(cfg.Gateway.AllowedTools) == 0 {
+		cfg.Gateway.AllowedTools = defaultCfg.Gateway.AllowedTools
+	}
 	if cfg.Collector.WSPath == "" {
 		cfg.Collector.WSPath = defaultCfg.Collector.WSPath
 	}
@@ -126,7 +215,110 @@ func mergeDefaults(cfg *Config) {
 	if cfg.Collector.MaxConcurrentCalls == 0 {
 		cfg.Collector.MaxConcurrentCalls = defaultCfg.Collector.MaxConcurrentCalls
 	}
+	if len(cfg.Collector.AllowedTools) == 0 {
+		cfg.Collector.AllowedTools = defaultCfg.Collector.AllowedTools
+	}
 	if cfg.Providers.ExampleEnabled == nil {
 		cfg.Providers.ExampleEnabled = defaultCfg.Providers.ExampleEnabled
 	}
+	if cfg.Providers.PlatformEnabled == nil {
+		cfg.Providers.PlatformEnabled = defaultCfg.Providers.PlatformEnabled
+	}
+	if cfg.Providers.BrowserEnabled == nil {
+		cfg.Providers.BrowserEnabled = defaultCfg.Providers.BrowserEnabled
+	}
+	if cfg.Providers.StubEnabled == nil {
+		cfg.Providers.StubEnabled = defaultCfg.Providers.StubEnabled
+	}
+	if cfg.Collect.OutputDir == "" {
+		cfg.Collect.OutputDir = defaultCfg.Collect.OutputDir
+	}
+	if len(cfg.Collect.DefaultFormats) == 0 {
+		cfg.Collect.DefaultFormats = defaultCfg.Collect.DefaultFormats
+	}
+	if cfg.Collect.IncludeMedia == nil {
+		cfg.Collect.IncludeMedia = defaultCfg.Collect.IncludeMedia
+	}
+	if cfg.Collect.InboxDir == "" {
+		cfg.Collect.InboxDir = defaultCfg.Collect.InboxDir
+	}
+	if cfg.Collect.DownloadMedia == nil {
+		cfg.Collect.DownloadMedia = defaultCfg.Collect.DownloadMedia
+	}
+	if cfg.Collect.IndexEnabled == nil {
+		cfg.Collect.IndexEnabled = defaultCfg.Collect.IndexEnabled
+	}
+	if cfg.Collect.MaxMediaBytes == 0 {
+		cfg.Collect.MaxMediaBytes = defaultCfg.Collect.MaxMediaBytes
+	}
+	if cfg.Collect.MediaTimeoutSec == 0 {
+		cfg.Collect.MediaTimeoutSec = defaultCfg.Collect.MediaTimeoutSec
+	}
+	if cfg.Collect.InboxPollInterval == 0 {
+		cfg.Collect.InboxPollInterval = defaultCfg.Collect.InboxPollInterval
+	}
+	if cfg.Collect.RateLimitMs == 0 {
+		cfg.Collect.RateLimitMs = defaultCfg.Collect.RateLimitMs
+	}
+	if cfg.LocalBrowser.MaxConcurrency == 0 {
+		cfg.LocalBrowser.MaxConcurrency = defaultCfg.LocalBrowser.MaxConcurrency
+	}
+	if cfg.LocalBrowser.TotalTimeoutSec == 0 {
+		cfg.LocalBrowser.TotalTimeoutSec = defaultCfg.LocalBrowser.TotalTimeoutSec
+	}
+	if cfg.LocalBrowser.NavigateTimeoutSec == 0 {
+		cfg.LocalBrowser.NavigateTimeoutSec = defaultCfg.LocalBrowser.NavigateTimeoutSec
+	}
+	if cfg.LocalBrowser.WaitSelectorTimeoutSec == 0 {
+		cfg.LocalBrowser.WaitSelectorTimeoutSec = defaultCfg.LocalBrowser.WaitSelectorTimeoutSec
+	}
+	if cfg.LocalBrowser.CookieStoreDir == "" {
+		cfg.LocalBrowser.CookieStoreDir = defaultCfg.LocalBrowser.CookieStoreDir
+	}
+	if cfg.LocalBrowser.Enabled == nil {
+		cfg.LocalBrowser.Enabled = defaultCfg.LocalBrowser.Enabled
+	}
+	if cfg.LocalBrowser.Headless == nil {
+		cfg.LocalBrowser.Headless = defaultCfg.LocalBrowser.Headless
+	}
+	if len(cfg.LocalBrowser.AllowedDomains) == 0 {
+		cfg.LocalBrowser.AllowedDomains = defaultCfg.LocalBrowser.AllowedDomains
+	}
+}
+
+// MergedAllowedDomains returns gateway + local browser domain allowlists.
+func (c *Config) MergedAllowedDomains() []string {
+	seen := make(map[string]struct{})
+	var out []string
+	for _, d := range append(c.Gateway.AllowedDomains, c.LocalBrowser.AllowedDomains...) {
+		d = strings.TrimSpace(d)
+		if d == "" {
+			continue
+		}
+		if _, ok := seen[d]; ok {
+			continue
+		}
+		seen[d] = struct{}{}
+		out = append(out, d)
+	}
+	return out
+}
+
+// Save writes configuration to a YAML file.
+func Save(path string, cfg *Config) error {
+	mergeDefaults(cfg)
+	data, err := yaml.Marshal(cfg)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0o600)
+}
+
+// DefaultConfigPath returns the default user config path.
+func DefaultConfigPath() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "config/config.yaml"
+	}
+	return filepath.Join(home, ".diggate", "config.yaml")
 }

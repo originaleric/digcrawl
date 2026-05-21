@@ -7,55 +7,84 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 
+	"strings"
+
+	"github.com/originaleric/diggate/collect"
 	"github.com/originaleric/diggate/config"
-	"github.com/originaleric/diggate/gateway"
-	"github.com/originaleric/diggate/gateway/collector"
-	"github.com/originaleric/diggate/gateway/devhost"
-	httpgw "github.com/originaleric/diggate/gateway/http"
-	mcpgw "github.com/originaleric/diggate/gateway/mcp"
-	stdiogw "github.com/originaleric/diggate/gateway/stdio"
+	"github.com/originaleric/diggate/runtime"
+	"github.com/originaleric/diggate/transport/collector"
+	"github.com/originaleric/diggate/transport/devhost"
+	httpgw "github.com/originaleric/diggate/transport/http"
+	mcpgw "github.com/originaleric/diggate/transport/mcp"
+	stdiogw "github.com/originaleric/diggate/transport/stdio"
 )
 
 func main() {
-	if len(os.Args) < 2 {
+	run(os.Args)
+}
+
+func run(argv []string) {
+	prog := filepath.Base(argv[0])
+	if prog == "digcollect" {
+		runCollectCommand(argv[1:])
+		return
+	}
+	if len(argv) < 2 {
 		printUsage()
 		os.Exit(1)
 	}
 
-	switch os.Args[1] {
+	switch argv[1] {
 	case "gateway":
-		runGateway(os.Args[2:])
+		runGateway(argv[2:])
 	case "collector":
-		runCollector(os.Args[2:])
+		runCollector(argv[2:])
 	case "dev-host":
-		runDevHost(os.Args[2:])
+		runDevHost(argv[2:])
 	case "mcp":
-		runMCP(os.Args[2:])
+		runMCP(argv[2:])
 	case "stdio":
-		runStdio(os.Args[2:])
+		runStdio(argv[2:])
+	case "collect":
+		runCollectCommand(argv[2:])
+	case "connect":
+		runConnect(argv[2:])
+	case "login":
+		runLogin(argv[2:])
 	case "help", "-h", "--help":
 		printUsage()
 	default:
-		fmt.Fprintf(os.Stderr, "unknown command: %s\n\n", os.Args[1])
+		fmt.Fprintf(os.Stderr, "未知命令: %s\n\n", argv[1])
 		printUsage()
 		os.Exit(1)
 	}
 }
 
 func printUsage() {
-	fmt.Fprintf(os.Stderr, `DigGate — Agent-agnostic Local Tool Gateway
+	fmt.Fprintf(os.Stderr, `DigGate — 面向任意 Agent 的本地工具网关
 
-Usage:
-  diggate gateway [flags]     HTTP Tool Gateway
-  diggate collector [flags]   WebSocket reverse connector
-  diggate mcp [flags]         MCP server (stdio, for IDE)
-  diggate stdio [flags]       JSON-line gateway on stdin/stdout
-  diggate dev-host [flags]    Local reference host (dev only)
+用法:
+  diggate gateway [flags]     HTTP 工具网关
+  diggate collector [flags]   WebSocket 反向连接 Collector
+  diggate mcp [flags]         MCP 服务（stdio，供 IDE 使用）
+  diggate stdio [flags]       stdin/stdout 逐行 JSON 协议
+  diggate dev-host [flags]    本地参考宿主（仅开发）
+  diggate collect <url>       采集 URL 并导出 Markdown/HTML/JSON
+  diggate collect inbox       处理 collect-inbox/ 中的链接文件
+  diggate connect [flags]     保存宿主配置并启动 Collector
+  diggate login [flags]       保存 Collector Token 到配置
   diggate help
 
-Host projects can import: github.com/originaleric/diggate/gateway/client
+采集示例:
+  diggate collect "https://mp.weixin.qq.com/s/..."
+  diggate collect --file urls.txt --format md,html,json --out ./output
+  diggate collect inbox --watch
+
+完整文档: USAGE.md
+宿主 SDK: github.com/originaleric/diggate/client
 
 `)
 }
@@ -79,7 +108,7 @@ func runGateway(args []string) {
 		listen = ":8787"
 	}
 
-	rt, err := gateway.NewRuntime(cfg)
+	rt, err := runtime.NewRuntime(cfg)
 	if err != nil {
 		log.Fatalf("runtime: %v", err)
 	}
@@ -121,7 +150,7 @@ func runCollector(args []string) {
 		log.Fatal("collector: --server or Collector.ServerURL is required")
 	}
 
-	rt, err := gateway.NewCollectorRuntime(cfg)
+	rt, err := runtime.NewCollectorRuntime(cfg)
 	if err != nil {
 		log.Fatalf("runtime: %v", err)
 	}
@@ -160,7 +189,7 @@ func runMCP(args []string) {
 	if err != nil {
 		log.Fatalf("load config: %v", err)
 	}
-	rt, err := gateway.NewRuntime(cfg)
+	rt, err := runtime.NewRuntime(cfg)
 	if err != nil {
 		log.Fatalf("runtime: %v", err)
 	}
@@ -168,6 +197,124 @@ func runMCP(args []string) {
 	if err := mcpgw.ServeStdio(rt); err != nil {
 		log.Fatalf("mcp: %v", err)
 	}
+}
+
+func runCollectCommand(args []string) {
+	if len(args) > 0 && args[0] == "inbox" {
+		runCollectInbox(args[1:])
+		return
+	}
+	runCollect(args)
+}
+
+func runCollect(args []string) {
+	fs := flag.NewFlagSet("collect", flag.ExitOnError)
+	configPath := fs.String("config", "config/config.yaml", "path to config.yaml")
+	outDir := fs.String("out", "", "output directory (overrides Collect.OutputDir)")
+	format := fs.String("format", "", "export formats: md,html,json (comma-separated)")
+	urlFile := fs.String("file", "", "text file with one URL per line")
+	_ = fs.Parse(args)
+
+	cfg, err := loadConfig(*configPath)
+	if err != nil {
+		log.Fatalf("load config: %v", err)
+	}
+	if *outDir != "" {
+		cfg.Collect.OutputDir = *outDir
+	}
+
+	formats := parseFormats(*format, cfg.Collect.DefaultFormats)
+
+	svc, err := collect.NewService(cfg)
+	if err != nil {
+		log.Fatalf("collect service: %v", err)
+	}
+
+	ctx := context.Background()
+
+	if *urlFile != "" {
+		results, err := svc.CollectFile(ctx, *urlFile, formats, cfg.Collect.OutputDir)
+		logCollectResults(results)
+		if err != nil {
+			log.Fatalf("collect file: %v", err)
+		}
+		return
+	}
+
+	if len(fs.Args()) == 0 {
+		log.Fatal("collect: provide a URL, --file, or `diggate collect inbox`")
+	}
+	url := fs.Args()[0]
+	result, err := svc.CollectURL(ctx, url, formats, cfg.Collect.OutputDir)
+	if err != nil {
+		log.Fatalf("collect: %v", err)
+	}
+	logCollectResults([]collect.ExportResult{result})
+}
+
+func runCollectInbox(args []string) {
+	fs := flag.NewFlagSet("collect inbox", flag.ExitOnError)
+	configPath := fs.String("config", "config/config.yaml", "path to config.yaml")
+	outDir := fs.String("out", "", "output directory (overrides Collect.OutputDir)")
+	format := fs.String("format", "", "export formats: md,html,json (comma-separated)")
+	watch := fs.Bool("watch", false, "poll inbox until interrupted")
+	_ = fs.Parse(args)
+
+	cfg, err := loadConfig(*configPath)
+	if err != nil {
+		log.Fatalf("load config: %v", err)
+	}
+	if *outDir != "" {
+		cfg.Collect.OutputDir = *outDir
+	}
+	formats := parseFormats(*format, cfg.Collect.DefaultFormats)
+
+	svc, err := collect.NewService(cfg)
+	if err != nil {
+		log.Fatalf("collect service: %v", err)
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	if *watch {
+		log.Printf("watching inbox %s (Ctrl+C to stop)", cfg.Collect.InboxDir)
+		if err := svc.WatchInbox(ctx, formats, cfg.Collect.OutputDir); err != nil && err != context.Canceled {
+			log.Fatalf("collect inbox watch: %v", err)
+		}
+		return
+	}
+
+	results, err := svc.ProcessInbox(ctx, formats, cfg.Collect.OutputDir)
+	logCollectResults(results)
+	if err != nil {
+		log.Fatalf("collect inbox: %v", err)
+	}
+	if len(results) == 0 {
+		log.Printf("inbox empty: drop .url or .txt files into %s", cfg.Collect.InboxDir)
+	}
+}
+
+func logCollectResults(results []collect.ExportResult) {
+	for _, r := range results {
+		for _, w := range r.Written {
+			log.Printf("wrote %s", w)
+		}
+	}
+}
+
+func parseFormats(flagVal string, defaults []string) []string {
+	if strings.TrimSpace(flagVal) == "" {
+		return defaults
+	}
+	var out []string
+	for _, p := range strings.Split(flagVal, ",") {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 func runStdio(args []string) {
@@ -179,7 +326,7 @@ func runStdio(args []string) {
 	if err != nil {
 		log.Fatalf("load config: %v", err)
 	}
-	rt, err := gateway.NewRuntime(cfg)
+	rt, err := runtime.NewRuntime(cfg)
 	if err != nil {
 		log.Fatalf("runtime: %v", err)
 	}
@@ -188,6 +335,73 @@ func runStdio(args []string) {
 	if err := stdiogw.NewServer(rt).Run(ctx); err != nil && err != context.Canceled {
 		log.Fatalf("stdio: %v", err)
 	}
+}
+
+func runConnect(args []string) {
+	fs := flag.NewFlagSet("connect", flag.ExitOnError)
+	configPath := fs.String("config", "", "config path (default ~/.diggate/config.yaml)")
+	server := fs.String("server", "", "host base URL (required)")
+	token := fs.String("token", "", "collector auth token")
+	saveOnly := fs.Bool("save-only", false, "only save config, do not start collector")
+	_ = fs.Parse(args)
+
+	if *server == "" {
+		log.Fatal("connect: --server is required (e.g. https://your-host.example.com)")
+	}
+
+	path := *configPath
+	if path == "" {
+		path = config.DefaultConfigPath()
+	}
+	cfg, err := loadConfig(path)
+	if err != nil {
+		log.Fatalf("load config: %v", err)
+	}
+	cfg.Collector.ServerURL = *server
+	if *token != "" {
+		cfg.Collector.Token = *token
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		log.Fatalf("mkdir config: %v", err)
+	}
+	if err := config.Save(path, cfg); err != nil {
+		log.Fatalf("save config: %v", err)
+	}
+	log.Printf("saved collector settings to %s (server=%s)", path, cfg.Collector.ServerURL)
+	if *saveOnly {
+		return
+	}
+	runCollector([]string{"--config", path})
+}
+
+func runLogin(args []string) {
+	fs := flag.NewFlagSet("login", flag.ExitOnError)
+	configPath := fs.String("config", "", "config path (default ~/.diggate/config.yaml)")
+	token := fs.String("token", "", "collector auth token to save")
+	server := fs.String("server", "", "optional host base URL")
+	_ = fs.Parse(args)
+
+	path := *configPath
+	if path == "" {
+		path = config.DefaultConfigPath()
+	}
+	cfg, err := loadConfig(path)
+	if err != nil {
+		log.Fatalf("load config: %v", err)
+	}
+	if *token != "" {
+		cfg.Collector.Token = *token
+	}
+	if *server != "" {
+		cfg.Collector.ServerURL = *server
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		log.Fatalf("mkdir config: %v", err)
+	}
+	if err := config.Save(path, cfg); err != nil {
+		log.Fatalf("save config: %v", err)
+	}
+	log.Printf("updated %s — run: diggate connect --server <host-url>", path)
 }
 
 func loadConfig(path string) (*config.Config, error) {

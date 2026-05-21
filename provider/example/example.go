@@ -5,9 +5,9 @@ import (
 	"os"
 	"strings"
 
-	"github.com/originaleric/diggate/gateway/executor"
-	"github.com/originaleric/diggate/gateway/protocol"
-	"github.com/originaleric/diggate/gateway/registry"
+	"github.com/originaleric/diggate/runtime/executor"
+	"github.com/originaleric/diggate/protocol"
+	"github.com/originaleric/diggate/runtime/registry"
 	"github.com/originaleric/diggate/provider"
 )
 
