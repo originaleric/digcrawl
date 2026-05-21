@@ -8,9 +8,9 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-	"github.com/originaleric/diggate/runtime/version"
 	"github.com/originaleric/diggate/protocol"
 	"github.com/originaleric/diggate/runtime"
+	"github.com/originaleric/diggate/runtime/version"
 )
 
 // envelopeWriter serializes all outbound WebSocket text frames through one mutex.
@@ -24,14 +24,19 @@ type Client struct {
 	limiter *RateLimiter
 	log     *log.Logger
 
-	activeCalls atomic.Int32
+	activeCalls  atomic.Int32
+	pendingCalls atomic.Int32
 }
 
 func NewClient(opts Options, rt *runtime.Runtime) *Client {
+	cooldown := opts.RateLimitCooldown
+	if cooldown <= 0 {
+		cooldown = time.Second
+	}
 	return &Client{
 		opts:    opts,
 		rt:      rt,
-		limiter: NewRateLimiter(time.Second),
+		limiter: NewRateLimiter(cooldown),
 		log:     log.Default(),
 	}
 }
@@ -94,13 +99,18 @@ func (c *Client) connectOnce(ctx context.Context) error {
 		return err
 	}
 
-	sem := make(chan struct{}, c.opts.MaxConcurrentCalls)
+	queueSize := c.opts.CallQueueSize
+	if queueSize <= 0 {
+		queueSize = c.opts.MaxConcurrentCalls
+	}
+	callQueue := make(chan protocol.ToolCall, queueSize)
 	var wg sync.WaitGroup
+	c.startWorkers(sessionCtx, writeEnv, callQueue, &wg)
 	defer wg.Wait()
 
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- c.readLoop(sessionCtx, conn, writeEnv, sem, &wg)
+		errCh <- c.readLoop(sessionCtx, conn, writeEnv, callQueue)
 	}()
 
 	if c.opts.HeartbeatInterval > 0 {
@@ -196,7 +206,29 @@ func (c *Client) pullLoop(ctx context.Context, writeEnv envelopeWriter) {
 	}
 }
 
-func (c *Client) readLoop(ctx context.Context, conn *websocket.Conn, writeEnv envelopeWriter, sem chan struct{}, wg *sync.WaitGroup) error {
+func (c *Client) startWorkers(ctx context.Context, writeEnv envelopeWriter, callQueue <-chan protocol.ToolCall, wg *sync.WaitGroup) {
+	workers := c.opts.MaxConcurrentCalls
+	if workers <= 0 {
+		workers = 1
+	}
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case call := <-callQueue:
+					c.executeAndReply(ctx, writeEnv, call)
+					c.releaseQueueSlot()
+				}
+			}
+		}()
+	}
+}
+
+func (c *Client) readLoop(ctx context.Context, conn *websocket.Conn, writeEnv envelopeWriter, callQueue chan<- protocol.ToolCall) error {
 	for {
 		select {
 		case <-ctx.Done():
@@ -212,13 +244,13 @@ func (c *Client) readLoop(ctx context.Context, conn *websocket.Conn, writeEnv en
 			c.log.Printf("[collector] invalid envelope: %v", err)
 			continue
 		}
-		if err := c.dispatch(ctx, writeEnv, env, sem, wg); err != nil {
+		if err := c.dispatch(ctx, writeEnv, env, callQueue); err != nil {
 			return err
 		}
 	}
 }
 
-func (c *Client) dispatch(ctx context.Context, writeEnv envelopeWriter, env protocol.Envelope, sem chan struct{}, wg *sync.WaitGroup) error {
+func (c *Client) dispatch(ctx context.Context, writeEnv envelopeWriter, env protocol.Envelope, callQueue chan<- protocol.ToolCall) error {
 	switch env.Type {
 	case protocol.TypePing:
 		return writeEnv(protocol.Envelope{Type: protocol.TypePong})
@@ -228,11 +260,11 @@ func (c *Client) dispatch(ctx context.Context, writeEnv envelopeWriter, env prot
 		if env.ToolCall == nil {
 			return nil
 		}
-		c.scheduleCall(ctx, writeEnv, *env.ToolCall, sem, wg)
+		c.scheduleCall(ctx, writeEnv, *env.ToolCall, callQueue)
 		return nil
 	case protocol.TypePullTasksAck:
 		for i := range env.Calls {
-			c.scheduleCall(ctx, writeEnv, env.Calls[i], sem, wg)
+			c.scheduleCall(ctx, writeEnv, env.Calls[i], callQueue)
 		}
 		return nil
 	case protocol.TypeWireError:
@@ -245,29 +277,58 @@ func (c *Client) dispatch(ctx context.Context, writeEnv envelopeWriter, env prot
 	}
 }
 
-func (c *Client) scheduleCall(ctx context.Context, writeEnv envelopeWriter, call protocol.ToolCall, sem chan struct{}, wg *sync.WaitGroup) {
-	select {
-	case sem <- struct{}{}:
-	default:
-		c.log.Printf("[collector] dropping call %s: max concurrent reached", call.ID)
-		res := protocol.ToolResult{
-			Type:   protocol.TypeToolResult,
-			ID:     call.ID,
-			Status: "error",
-			Error: &protocol.ToolError{
-				Code:    "RATE_LIMITED",
-				Message: "collector at max concurrent calls",
-			},
-		}
-		_ = writeEnv(protocol.NewToolResultEnvelope(res))
+func (c *Client) scheduleCall(ctx context.Context, writeEnv envelopeWriter, call protocol.ToolCall, callQueue chan<- protocol.ToolCall) {
+	if !c.reserveQueueSlot() {
+		c.log.Printf("[collector] queue full for call %s", call.ID)
+		c.replyRateLimited(writeEnv, call.ID, "collector call queue full")
 		return
 	}
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		defer func() { <-sem }()
-		c.executeAndReply(ctx, writeEnv, call)
-	}()
+	select {
+	case callQueue <- call:
+	case <-ctx.Done():
+		c.releaseQueueSlot()
+		c.replyRateLimited(writeEnv, call.ID, "collector session closed")
+	default:
+		c.releaseQueueSlot()
+		c.log.Printf("[collector] queue full for call %s", call.ID)
+		c.replyRateLimited(writeEnv, call.ID, "collector call queue full")
+	}
+}
+
+func (c *Client) reserveQueueSlot() bool {
+	max := int32(c.opts.CallQueueSize)
+	if max <= 0 {
+		return true
+	}
+	for {
+		cur := c.pendingCalls.Load()
+		if cur >= max {
+			return false
+		}
+		if c.pendingCalls.CompareAndSwap(cur, cur+1) {
+			return true
+		}
+	}
+}
+
+func (c *Client) releaseQueueSlot() {
+	if c.opts.CallQueueSize <= 0 {
+		return
+	}
+	c.pendingCalls.Add(-1)
+}
+
+func (c *Client) replyRateLimited(writeEnv envelopeWriter, callID, message string) {
+	res := protocol.ToolResult{
+		Type:   protocol.TypeToolResult,
+		ID:     callID,
+		Status: "error",
+		Error: &protocol.ToolError{
+			Code:    "RATE_LIMITED",
+			Message: message,
+		},
+	}
+	_ = writeEnv(protocol.NewToolResultEnvelope(res))
 }
 
 func (c *Client) executeAndReply(ctx context.Context, writeEnv envelopeWriter, call protocol.ToolCall) {
@@ -293,7 +354,22 @@ func (c *Client) executeAndReply(ctx context.Context, writeEnv envelopeWriter, c
 	defer c.activeCalls.Add(-1)
 	defer c.limiter.Touch(key)
 
-	result := c.rt.Execute(ctx, &call)
+	maxAttempts := c.opts.RetryMaxAttempts
+	if maxAttempts <= 0 {
+		maxAttempts = 1
+	}
+	var result *protocol.ToolResult
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		if attempt > 0 {
+			retryDelay(c.opts, attempt)
+			c.log.Printf("[collector] retry call %s attempt=%d/%d", call.ID, attempt+1, maxAttempts)
+		}
+		res := c.rt.Execute(ctx, &call)
+		result = res
+		if res.Status == "success" || !shouldRetryToolResult(res) || attempt == maxAttempts-1 {
+			break
+		}
+	}
 	if err := writeEnv(protocol.NewToolResultEnvelope(*result)); err != nil {
 		c.log.Printf("[collector] failed to send result for %s: %v", call.ID, err)
 	}

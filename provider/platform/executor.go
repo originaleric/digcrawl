@@ -4,12 +4,12 @@ import (
 	"context"
 	"errors"
 
+	iplatform "github.com/originaleric/diggate/internal/platform"
+	"github.com/originaleric/diggate/protocol"
 	"github.com/originaleric/diggate/runtime/artifact"
 	"github.com/originaleric/diggate/runtime/executor"
 	"github.com/originaleric/diggate/runtime/policy"
-	"github.com/originaleric/diggate/protocol"
 	"github.com/originaleric/diggate/runtime/registry"
-	iplatform "github.com/originaleric/diggate/internal/platform"
 )
 
 type platformReadInput struct {

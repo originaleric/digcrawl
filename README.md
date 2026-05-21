@@ -32,6 +32,7 @@ curl -s http://127.0.0.1:8787/manifest | jq .
 
 ```bash
 ./diggate collect "https://mp.weixin.qq.com/s/..."
+./diggate collect "https://www.toutiao.com/article/..."
 ```
 
 也可以使用轻量采集入口：
@@ -50,7 +51,7 @@ curl -s http://127.0.0.1:8787/manifest | jq .
 | **Collector** | 本机主动连接宿主，执行下发的工具调用 |
 | **Host Endpoint** | 宿主侧可复用 `transport/host`，支持 Collector push / pull |
 | **MCP / stdio** | 对接 Cursor、Claude Desktop 或管道式宿主 |
-| **Collect** | 无宿主落盘：公众号 / 小红书 / 抖音 / X / 任意 `http(s)` 网页 → Markdown / HTML / JSON |
+| **Collect** | 无宿主落盘：公众号 / 小红书 / 抖音 / 今日头条 / X / 任意 `http(s)` 网页 → Markdown / HTML / JSON |
 | **Provider 扩展** | 平台、浏览器、示例与自定义 Provider |
 | **安全边界** | 默认本机监听、工具白名单、高风险工具审批、域名策略、审计与 Artifact |
 
@@ -69,6 +70,8 @@ curl -s http://127.0.0.1:8787/manifest | jq .
 | `diggate dev-host` | 本地参考宿主（仅开发） |
 | `diggate collect` | 采集 URL 并导出 |
 | `diggate collect inbox` | 收件箱批处理 / `--watch` 轮询 |
+| `diggate browser login` | 打开有头浏览器完成平台登录并保存 Cookie |
+| `diggate browser check` | 检查平台会话，可选试读 URL |
 | `digcollect` | 轻量本地采集入口，等价于 `diggate collect` |
 
 参数、配置项、API 与接入方式见 **[USAGE.md](USAGE.md)**。
@@ -92,13 +95,24 @@ internal/browser/   本地 go-rod 浏览器
 
 ## 内置工具（摘要）
 
-- **平台**：`wechat.article.read`、`xiaohongshu.note.read`、`douyin.video.read`、`x.post.read`
+- **平台**：`wechat.article.read`、`xiaohongshu.note.read`、`douyin.video.read`、`toutiao.article.read`、`x.post.read`
 - **浏览器**：`browser.browse`、`browser.snapshot`、`browser.action`
 - **示例**：`gateway.ping`、`file.read`
 
 完整列表与请求字段见 `GET /manifest` 或 [USAGE.md §9](USAGE.md#9-内置工具清单)。
 
 默认配置只开放 `gateway.ping`、平台读取、`browser.browse`、`browser.snapshot` 等相对低风险工具。`browser.action`、`file.read` 等标记 `requires_user_approval` 的工具需要显式加入白名单，并在 `ToolCall` 中携带 `"approved": true`。
+
+平台读取现在采用 API 优先 + Browser 兜底的 strategy chain：小红书、抖音、头条会先尝试页面运行时 `fetch(credentials:"include")`，失败后回落到浏览器 hydration/meta/DOM 提取；登录、验证码、限流和内容不可见会返回结构化错误。需要登录态时可运行：
+
+```bash
+./diggate browser login --platform xiaohongshu
+./diggate browser login --platform douyin
+./diggate browser login --platform toutiao
+
+./diggate browser check --platform toutiao \
+  --url "https://www.toutiao.com/article/..." --trial
+```
 
 ---
 

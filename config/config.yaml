@@ -9,6 +9,7 @@ Gateway:
     - wechat.article.read
     - xiaohongshu.note.read
     - douyin.video.read
+    - toutiao.article.read
     - x.post.read
   AllowedReadPaths: []
   AllowedDomains: []
@@ -27,6 +28,11 @@ Collector:
   PullBatchSize: 1
   ReconnectDelaySec: 5
   MaxConcurrentCalls: 1
+  RateLimitCooldownMs: 1000
+  CallQueueSize: 32
+  CallQueueWaitMs: 30000
+  RetryMaxAttempts: 2
+  RetryDelayMs: 1500
   AllowedTools:
     - gateway.ping
     - browser.browse
@@ -34,6 +40,7 @@ Collector:
     - wechat.article.read
     - xiaohongshu.note.read
     - douyin.video.read
+    - toutiao.article.read
     - x.post.read
 
 Collect:
@@ -50,6 +57,10 @@ Collect:
   MediaTimeoutSec: 30
   InboxPollIntervalSec: 5
   RateLimitMs: 1500
+  PlatformRateLimits:
+    xiaohongshu: 2000
+    douyin: 2500
+    toutiao: 2000
 
 LocalBrowser:
   Enabled: true
@@ -62,17 +73,32 @@ LocalBrowser:
     - weixin.qq.com
     - xiaohongshu.com
     - www.xiaohongshu.com
+    - edith.xiaohongshu.com
     - xhslink.com
     - douyin.com
     - www.douyin.com
     - iesdouyin.com
     - v.douyin.com
+    - toutiao.com
+    - www.toutiao.com
+    - m.toutiao.com
     - x.com
     - twitter.com
     - www.twitter.com
   ChromePath: ""
   Headless: true
   CookieStoreDir: "storage/diggate/browser_cookies"
+  CDPMode: false
+  CDPPort: 9222
+  CDPConnectExisting: false
+  UserDataDir: ""
+  ProxyURL: ""
+
+Platform:
+  BrowseRetryMaxAttempts: 2
+  BrowseRetryDelayMs: 800
+  ReadMetricsEnabled: true
+  HealthProbes: {}
 
 Providers:
   ExampleEnabled: true

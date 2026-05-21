@@ -56,6 +56,8 @@ func run(argv []string) {
 		runConnect(argv[2:])
 	case "login":
 		runLogin(argv[2:])
+	case "browser":
+		runBrowser(argv[2:])
 	case "help", "-h", "--help":
 		printUsage()
 	default:
@@ -81,6 +83,7 @@ func printUsage() {
   diggate collect migrate-index  从 index.json 导入 SQLite
   diggate connect [flags]     保存宿主配置并启动 Collector
   diggate login [flags]       保存 Collector Token 到配置
+  diggate browser check --platform xiaohongshu|douyin|toutiao [--url URL] [--trial]
   diggate help
 
 采集示例:

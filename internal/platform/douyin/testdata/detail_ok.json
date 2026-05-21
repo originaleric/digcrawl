@@ -1,0 +1,25 @@
+{
+  "aweme_detail": {
+    "desc": "测试视频描述",
+    "author": {
+      "sec_uid": "sec123",
+      "nickname": "抖音作者"
+    },
+    "statistics": {
+      "digg_count": 1000,
+      "comment_count": 50,
+      "share_count": 10
+    },
+    "video": {
+      "cover": {
+        "url_list": ["https://example.com/cover.jpg"]
+      },
+      "play_addr": {
+        "url_list": ["https://example.com/video.mp4"]
+      }
+    },
+    "share_info": {
+      "share_title": "测试视频标题"
+    }
+  }
+}

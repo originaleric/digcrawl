@@ -1,9 +1,9 @@
 package platformprov
 
 import (
+	"github.com/originaleric/diggate/internal/platform/wechat"
 	"github.com/originaleric/diggate/runtime/artifact"
 	"github.com/originaleric/diggate/runtime/registry"
-	"github.com/originaleric/diggate/internal/platform/wechat"
 )
 
 var wechatDefaultDomains = []string{"mp.weixin.qq.com", "weixin.qq.com"}

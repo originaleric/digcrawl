@@ -30,6 +30,7 @@ func (p *Provider) Register(_ context.Context, reg *registry.Registry) error {
 	reg.Register(XiaohongshuNoteReadEntry(domains, store))
 	reg.Register(DouyinVideoReadEntry(domains, store))
 	reg.Register(XPostReadEntry(domains, store))
+	reg.Register(ToutiaoArticleReadEntry(domains, store))
 	return nil
 }
 

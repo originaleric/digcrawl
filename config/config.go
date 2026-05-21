@@ -15,23 +15,25 @@ type Config struct {
 	Collector    CollectorConfig    `yaml:"Collector" json:"Collector"`
 	Collect      CollectConfig      `yaml:"Collect" json:"Collect"`
 	LocalBrowser LocalBrowserConfig `yaml:"LocalBrowser" json:"LocalBrowser"`
+	Platform     PlatformConfig     `yaml:"Platform" json:"Platform"`
 	Providers    ProvidersConfig    `yaml:"Providers" json:"Providers"`
 }
 
 // CollectConfig local content collect and export settings.
 type CollectConfig struct {
-	OutputDir         string   `yaml:"OutputDir" json:"OutputDir,omitempty"`
-	InboxDir          string   `yaml:"InboxDir" json:"InboxDir,omitempty"`
-	DefaultFormats    []string `yaml:"DefaultFormats" json:"DefaultFormats,omitempty"`
-	IncludeMedia      *bool    `yaml:"IncludeMedia" json:"IncludeMedia,omitempty"`
-	DownloadMedia     *bool    `yaml:"DownloadMedia" json:"DownloadMedia,omitempty"`
-	PersistMode       string   `yaml:"PersistMode" json:"PersistMode,omitempty"` // files | index | sqlite | both
-	DBPath            string   `yaml:"DBPath" json:"DBPath,omitempty"`
-	IndexEnabled      *bool    `yaml:"IndexEnabled" json:"IndexEnabled,omitempty"`
-	MaxMediaBytes     int64    `yaml:"MaxMediaBytes" json:"MaxMediaBytes,omitempty"`
-	MediaTimeoutSec   int      `yaml:"MediaTimeoutSec" json:"MediaTimeoutSec,omitempty"`
-	InboxPollInterval int      `yaml:"InboxPollIntervalSec" json:"InboxPollIntervalSec,omitempty"`
-	RateLimitMs       int      `yaml:"RateLimitMs" json:"RateLimitMs,omitempty"`
+	OutputDir          string         `yaml:"OutputDir" json:"OutputDir,omitempty"`
+	InboxDir           string         `yaml:"InboxDir" json:"InboxDir,omitempty"`
+	DefaultFormats     []string       `yaml:"DefaultFormats" json:"DefaultFormats,omitempty"`
+	IncludeMedia       *bool          `yaml:"IncludeMedia" json:"IncludeMedia,omitempty"`
+	DownloadMedia      *bool          `yaml:"DownloadMedia" json:"DownloadMedia,omitempty"`
+	PersistMode        string         `yaml:"PersistMode" json:"PersistMode,omitempty"` // files | index | sqlite | both
+	DBPath             string         `yaml:"DBPath" json:"DBPath,omitempty"`
+	IndexEnabled       *bool          `yaml:"IndexEnabled" json:"IndexEnabled,omitempty"`
+	MaxMediaBytes      int64          `yaml:"MaxMediaBytes" json:"MaxMediaBytes,omitempty"`
+	MediaTimeoutSec    int            `yaml:"MediaTimeoutSec" json:"MediaTimeoutSec,omitempty"`
+	InboxPollInterval  int            `yaml:"InboxPollIntervalSec" json:"InboxPollIntervalSec,omitempty"`
+	RateLimitMs        int            `yaml:"RateLimitMs" json:"RateLimitMs,omitempty"`
+	PlatformRateLimits map[string]int `yaml:"PlatformRateLimits" json:"PlatformRateLimits,omitempty"`
 }
 
 // PersistModeOrDefault returns files | index | sqlite | both (default index).
@@ -87,6 +89,19 @@ type LocalBrowserConfig struct {
 	ChromePath             string   `yaml:"ChromePath" json:"ChromePath,omitempty"`
 	Headless               *bool    `yaml:"Headless" json:"Headless,omitempty"`
 	CookieStoreDir         string   `yaml:"CookieStoreDir" json:"CookieStoreDir,omitempty"`
+	CDPMode                *bool    `yaml:"CDPMode" json:"CDPMode,omitempty"`
+	CDPPort                int      `yaml:"CDPPort" json:"CDPPort,omitempty"`
+	CDPConnectExisting     *bool    `yaml:"CDPConnectExisting" json:"CDPConnectExisting,omitempty"`
+	UserDataDir            string   `yaml:"UserDataDir" json:"UserDataDir,omitempty"`
+	ProxyURL               string   `yaml:"ProxyURL" json:"ProxyURL,omitempty"`
+}
+
+// PlatformConfig platform read/retry/health settings.
+type PlatformConfig struct {
+	BrowseRetryMaxAttempts int               `yaml:"BrowseRetryMaxAttempts" json:"BrowseRetryMaxAttempts,omitempty"`
+	BrowseRetryDelayMs     int               `yaml:"BrowseRetryDelayMs" json:"BrowseRetryDelayMs,omitempty"`
+	ReadMetricsEnabled     *bool             `yaml:"ReadMetricsEnabled" json:"ReadMetricsEnabled,omitempty"`
+	HealthProbes           map[string]string `yaml:"HealthProbes" json:"HealthProbes,omitempty"`
 }
 
 // GatewayConfig HTTP Tool Gateway settings.
@@ -115,6 +130,11 @@ type CollectorConfig struct {
 	PullBatchSize        int      `yaml:"PullBatchSize" json:"PullBatchSize,omitempty"`
 	ReconnectDelaySec    int      `yaml:"ReconnectDelaySec" json:"ReconnectDelaySec,omitempty"`
 	MaxConcurrentCalls   int      `yaml:"MaxConcurrentCalls" json:"MaxConcurrentCalls,omitempty"`
+	RateLimitCooldownMs  int      `yaml:"RateLimitCooldownMs" json:"RateLimitCooldownMs,omitempty"`
+	CallQueueSize        int      `yaml:"CallQueueSize" json:"CallQueueSize,omitempty"`
+	CallQueueWaitMs      int      `yaml:"CallQueueWaitMs" json:"CallQueueWaitMs,omitempty"`
+	RetryMaxAttempts     int      `yaml:"RetryMaxAttempts" json:"RetryMaxAttempts,omitempty"`
+	RetryDelayMs         int      `yaml:"RetryDelayMs" json:"RetryDelayMs,omitempty"`
 	AllowedTools         []string `yaml:"AllowedTools" json:"AllowedTools,omitempty"`
 }
 
@@ -145,6 +165,7 @@ func init() {
 					"wechat.article.read",
 					"xiaohongshu.note.read",
 					"douyin.video.read",
+					"toutiao.article.read",
 					"x.post.read",
 				},
 				ArtifactDir:        "storage/diggate/artifacts",
@@ -159,6 +180,11 @@ func init() {
 				ReconnectDelaySec:    5,
 				PullBatchSize:        1,
 				MaxConcurrentCalls:   1,
+				RateLimitCooldownMs:  1000,
+				CallQueueSize:        32,
+				CallQueueWaitMs:      30000,
+				RetryMaxAttempts:     2,
+				RetryDelayMs:         1500,
 				AllowedTools: []string{
 					"gateway.ping",
 					"browser.browse",
@@ -166,6 +192,7 @@ func init() {
 					"wechat.article.read",
 					"xiaohongshu.note.read",
 					"douyin.video.read",
+					"toutiao.article.read",
 					"x.post.read",
 				},
 			},
@@ -182,6 +209,11 @@ func init() {
 				MediaTimeoutSec:   30,
 				InboxPollInterval: 5,
 				RateLimitMs:       1500,
+				PlatformRateLimits: map[string]int{
+					"xiaohongshu": 2000,
+					"douyin":      2500,
+					"toutiao":     2000,
+				},
 			},
 			LocalBrowser: LocalBrowserConfig{
 				Enabled:                &enabled,
@@ -191,12 +223,19 @@ func init() {
 				WaitSelectorTimeoutSec: 25,
 				AllowedDomains: []string{
 					"mp.weixin.qq.com", "weixin.qq.com",
-					"xiaohongshu.com", "www.xiaohongshu.com", "xhslink.com",
+					"xiaohongshu.com", "www.xiaohongshu.com", "edith.xiaohongshu.com", "xhslink.com",
 					"douyin.com", "www.douyin.com", "iesdouyin.com", "v.douyin.com",
+					"toutiao.com", "www.toutiao.com", "m.toutiao.com",
 					"x.com", "twitter.com", "www.twitter.com",
 				},
 				Headless:       &enabled,
 				CookieStoreDir: "storage/diggate/browser_cookies",
+			},
+			Platform: PlatformConfig{
+				BrowseRetryMaxAttempts: 2,
+				BrowseRetryDelayMs:     800,
+				ReadMetricsEnabled:     &enabled,
+				HealthProbes:           map[string]string{},
 			},
 			Providers: ProvidersConfig{
 				ExampleEnabled:  &enabled,
@@ -261,6 +300,21 @@ func mergeDefaults(cfg *Config) {
 	if cfg.Collector.MaxConcurrentCalls == 0 {
 		cfg.Collector.MaxConcurrentCalls = defaultCfg.Collector.MaxConcurrentCalls
 	}
+	if cfg.Collector.RateLimitCooldownMs == 0 {
+		cfg.Collector.RateLimitCooldownMs = defaultCfg.Collector.RateLimitCooldownMs
+	}
+	if cfg.Collector.CallQueueSize == 0 {
+		cfg.Collector.CallQueueSize = defaultCfg.Collector.CallQueueSize
+	}
+	if cfg.Collector.CallQueueWaitMs == 0 {
+		cfg.Collector.CallQueueWaitMs = defaultCfg.Collector.CallQueueWaitMs
+	}
+	if cfg.Collector.RetryMaxAttempts == 0 {
+		cfg.Collector.RetryMaxAttempts = defaultCfg.Collector.RetryMaxAttempts
+	}
+	if cfg.Collector.RetryDelayMs == 0 {
+		cfg.Collector.RetryDelayMs = defaultCfg.Collector.RetryDelayMs
+	}
 	if len(cfg.Collector.AllowedTools) == 0 {
 		cfg.Collector.AllowedTools = defaultCfg.Collector.AllowedTools
 	}
@@ -309,6 +363,9 @@ func mergeDefaults(cfg *Config) {
 	if cfg.Collect.DBPath == "" {
 		cfg.Collect.DBPath = defaultCfg.Collect.DBPath
 	}
+	if cfg.Collect.PlatformRateLimits == nil {
+		cfg.Collect.PlatformRateLimits = defaultCfg.Collect.PlatformRateLimits
+	}
 	if cfg.LocalBrowser.MaxConcurrency == 0 {
 		cfg.LocalBrowser.MaxConcurrency = defaultCfg.LocalBrowser.MaxConcurrency
 	}
@@ -330,8 +387,29 @@ func mergeDefaults(cfg *Config) {
 	if cfg.LocalBrowser.Headless == nil {
 		cfg.LocalBrowser.Headless = defaultCfg.LocalBrowser.Headless
 	}
+	if cfg.LocalBrowser.CDPMode == nil {
+		cfg.LocalBrowser.CDPMode = defaultCfg.LocalBrowser.CDPMode
+	}
+	if cfg.LocalBrowser.CDPPort == 0 {
+		cfg.LocalBrowser.CDPPort = defaultCfg.LocalBrowser.CDPPort
+	}
+	if cfg.LocalBrowser.CDPConnectExisting == nil {
+		cfg.LocalBrowser.CDPConnectExisting = defaultCfg.LocalBrowser.CDPConnectExisting
+	}
 	if len(cfg.LocalBrowser.AllowedDomains) == 0 {
 		cfg.LocalBrowser.AllowedDomains = defaultCfg.LocalBrowser.AllowedDomains
+	}
+	if cfg.Platform.BrowseRetryMaxAttempts == 0 {
+		cfg.Platform.BrowseRetryMaxAttempts = defaultCfg.Platform.BrowseRetryMaxAttempts
+	}
+	if cfg.Platform.BrowseRetryDelayMs == 0 {
+		cfg.Platform.BrowseRetryDelayMs = defaultCfg.Platform.BrowseRetryDelayMs
+	}
+	if cfg.Platform.ReadMetricsEnabled == nil {
+		cfg.Platform.ReadMetricsEnabled = defaultCfg.Platform.ReadMetricsEnabled
+	}
+	if cfg.Platform.HealthProbes == nil {
+		cfg.Platform.HealthProbes = defaultCfg.Platform.HealthProbes
 	}
 }
 

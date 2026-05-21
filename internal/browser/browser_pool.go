@@ -3,6 +3,9 @@ package browser
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -32,7 +35,7 @@ type browserManager struct {
 	stopOnce   sync.Once
 	cleanupRun sync.Once
 	// 新增：标签页管理
-	tabManager *TabManager
+	tabManager  *TabManager
 	tabExecutor *TabExecutor
 }
 
@@ -174,18 +177,9 @@ func (m *browserManager) ensureBrowser(ctx context.Context) (*rod.Browser, error
 		m.browser = nil
 	}
 
-	l := launcher.New().
-		Context(ctx).
-		NoSandbox(true).
-		Headless(*m.cfg.Headless).
-		Set(flags.Flag("disable-gpu"))
-	if m.cfg.ChromePath != "" {
-		l = l.Bin(m.cfg.ChromePath)
-	}
-
-	controlURL, err := l.Launch()
+	controlURL, err := m.launchControlURL(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("启动 Chromium 失败: %w", err)
+		return nil, err
 	}
 
 	browser := rod.New().
@@ -198,6 +192,65 @@ func (m *browserManager) ensureBrowser(ctx context.Context) (*rod.Browser, error
 
 	m.browser = browser
 	return m.browser, nil
+}
+
+func (m *browserManager) launchControlURL(ctx context.Context) (string, error) {
+	if m.cfg.CDPConnectExisting != nil && *m.cfg.CDPConnectExisting {
+		port := m.cfg.CDPPort
+		if port <= 0 {
+			port = 9222
+		}
+		u := fmt.Sprintf("http://127.0.0.1:%d", port)
+		ws, err := launcher.ResolveURL(u)
+		if err != nil {
+			return "", fmt.Errorf("连接已有 CDP 浏览器失败: %w", err)
+		}
+		return ws, nil
+	}
+
+	l := launcher.New().
+		Context(ctx).
+		NoSandbox(true).
+		Headless(*m.cfg.Headless).
+		Set(flags.Flag("disable-gpu"))
+	if m.cfg.ChromePath != "" {
+		l = l.Bin(m.cfg.ChromePath)
+	}
+	if dir := strings.TrimSpace(m.cfg.UserDataDir); dir != "" {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return "", fmt.Errorf("创建 UserDataDir 失败: %w", err)
+		}
+		l = l.UserDataDir(dir)
+	}
+	if m.cfg.CDPMode != nil && *m.cfg.CDPMode {
+		port := m.cfg.CDPPort
+		if port <= 0 {
+			port = 9222
+		}
+		l = l.RemoteDebuggingPort(port)
+	}
+	if proxy := strings.TrimSpace(m.cfg.ProxyURL); proxy != "" {
+		l = l.Proxy(proxy)
+	}
+
+	controlURL, err := l.Launch()
+	if err != nil {
+		return "", fmt.Errorf("启动 Chromium 失败: %w", err)
+	}
+	return controlURL, nil
+}
+
+// ProfileDirForPlatform returns persistent profile path for a platform login session.
+func ProfileDirForPlatform(baseDir, platform string) string {
+	baseDir = strings.TrimSpace(baseDir)
+	if baseDir == "" {
+		baseDir = "storage/diggate/browser_profiles"
+	}
+	platform = strings.TrimSpace(platform)
+	if platform == "" {
+		platform = "default"
+	}
+	return filepath.Join(baseDir, platform)
 }
 
 func (m *browserManager) resetBrowser() error {
@@ -243,4 +296,3 @@ func (m *browserManager) cleanupZombieSessions() {
 		}
 	}
 }
-

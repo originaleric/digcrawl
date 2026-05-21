@@ -1,9 +1,9 @@
 package platformprov
 
 import (
+	xplatform "github.com/originaleric/diggate/internal/platform/x"
 	"github.com/originaleric/diggate/runtime/artifact"
 	"github.com/originaleric/diggate/runtime/registry"
-	xplatform "github.com/originaleric/diggate/internal/platform/x"
 )
 
 var xDefaultDomains = []string{"x.com", "twitter.com"}

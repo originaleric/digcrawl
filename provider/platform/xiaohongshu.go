@@ -1,9 +1,9 @@
 package platformprov
 
 import (
+	"github.com/originaleric/diggate/internal/platform/xiaohongshu"
 	"github.com/originaleric/diggate/runtime/artifact"
 	"github.com/originaleric/diggate/runtime/registry"
-	"github.com/originaleric/diggate/internal/platform/xiaohongshu"
 )
 
 var xiaohongshuDefaultDomains = []string{"xiaohongshu.com", "www.xiaohongshu.com", "xhslink.com"}

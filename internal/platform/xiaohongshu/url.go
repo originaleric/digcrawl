@@ -34,7 +34,7 @@ func NormalizeURL(ctx context.Context, rawURL string) (*platform.NormalizedURL, 
 	host := strings.ToLower(u.Hostname())
 
 	if platformHost(host, xhslinkHosts) {
-		resolved, err := platform.ResolveHTTPFollow(ctx, rawURL, xhsHosts)
+		resolved, err := platform.ResolveWithBrowserFallback(ctx, rawURL, xhsHosts)
 		if err != nil {
 			return nil, fmt.Errorf("xhslink 解析失败: %w", err)
 		}
@@ -51,13 +51,23 @@ func NormalizeURL(ctx context.Context, rawURL string) (*platform.NormalizedURL, 
 		return nil, fmt.Errorf("非小红书域名: %s", host)
 	}
 
+	out.QueryParams = platform.ExtractQueryParams(u.Query(), "xsec_token", "xsec_source")
+	if out.QueryParams == nil || out.QueryParams["xsec_token"] == "" {
+		out.RiskFlags = append(out.RiskFlags, "xsec_token_missing")
+	}
+
 	id := extractNoteID(u.Path)
 	if id == "" {
 		out.RiskFlags = append(out.RiskFlags, "note_id_unknown")
 		out.CanonicalURL = out.ResolvedURL
+		out.BrowseURL = out.ResolvedURL
 	} else {
 		out.PlatformID = id
 		out.CanonicalURL = fmt.Sprintf("https://www.xiaohongshu.com/explore/%s", id)
+		out.BrowseURL = platform.MergeQueryParams(out.CanonicalURL, out.QueryParams)
+		if out.BrowseURL == out.CanonicalURL && strings.TrimSpace(u.RawQuery) != "" {
+			out.BrowseURL = out.ResolvedURL
+		}
 	}
 	out.ContentKind = detectContentKind(u.Path, "")
 	return out, nil

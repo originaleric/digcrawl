@@ -3,6 +3,7 @@ package collect
 import (
 	"context"
 	"fmt"
+	"math/rand"
 	"strings"
 	"time"
 
@@ -51,7 +52,7 @@ func (s *Service) exportOpts(outDir string, formats []string) ExportOptions {
 		DownloadMedia:   download,
 		MaxMediaBytes:   s.cfg.Collect.MaxMediaBytes,
 		MediaTimeoutSec: s.cfg.Collect.MediaTimeoutSec,
-		ArtifactStore: s.artifacts,
+		ArtifactStore:   s.artifacts,
 	}
 }
 
@@ -62,11 +63,26 @@ func (s *Service) outputRoot(outDir string) string {
 	return outDir
 }
 
-func (s *Service) throttle() {
-	if s.cfg.Collect.RateLimitMs <= 0 {
+func (s *Service) throttle(platform string) {
+	ms := s.cfg.Collect.RateLimitMs
+	if s.cfg.Collect.PlatformRateLimits != nil {
+		if v, ok := s.cfg.Collect.PlatformRateLimits[platform]; ok && v > 0 {
+			ms = v
+		}
+	}
+	if ms <= 0 {
 		return
 	}
-	time.Sleep(time.Duration(s.cfg.Collect.RateLimitMs) * time.Millisecond)
+	jitter := ms / 5
+	if jitter < 1 {
+		jitter = 1
+	}
+	delta := rand.Intn(jitter*2+1) - jitter
+	sleepMs := ms + delta
+	if sleepMs < 0 {
+		sleepMs = ms
+	}
+	time.Sleep(time.Duration(sleepMs) * time.Millisecond)
 }
 
 // CollectURL fetches one URL and exports to disk.
@@ -129,7 +145,12 @@ func (s *Service) CollectFile(ctx context.Context, path string, formats []string
 	var firstErr error
 	for i, line := range lines {
 		if i > 0 {
-			s.throttle()
+			match, err := Detect(line)
+			if err == nil {
+				s.throttle(match.Platform)
+			} else {
+				s.throttle("")
+			}
 		}
 		r, err := s.CollectURL(ctx, line, formats, outDir)
 		if err != nil {

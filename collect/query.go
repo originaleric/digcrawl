@@ -111,6 +111,8 @@ func platformToolName(platform string) string {
 		return "xiaohongshu.note.read"
 	case "douyin":
 		return "douyin.video.read"
+	case "toutiao":
+		return "toutiao.article.read"
 	case "x":
 		return "x.post.read"
 	default:

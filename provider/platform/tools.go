@@ -6,4 +6,5 @@ const (
 	ToolXiaohongshuNoteRead = "xiaohongshu.note.read"
 	ToolDouyinVideoRead     = "douyin.video.read"
 	ToolXPostRead           = "x.post.read"
+	ToolToutiaoArticleRead  = "toutiao.article.read"
 )

@@ -1,0 +1,24 @@
+{
+  "items": [
+    {
+      "note_card": {
+        "title": "测试笔记标题",
+        "desc": "测试笔记正文",
+        "type": "normal",
+        "user": {
+          "user_id": "user123",
+          "nickname": "测试作者"
+        },
+        "interact_info": {
+          "liked_count": 100,
+          "comment_count": 20,
+          "collected_count": 30
+        },
+        "image_list": [
+          { "url_default": "https://example.com/img1.jpg" }
+        ],
+        "tag_list": [{ "name": "生活" }]
+      }
+    }
+  ]
+}
