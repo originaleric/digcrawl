@@ -14,7 +14,7 @@ import (
 	"github.com/go-rod/rod/lib/launcher"
 	"github.com/go-rod/rod/lib/launcher/flags"
 	"github.com/go-rod/stealth"
-	"github.com/originaleric/diggate/config"
+	"github.com/originaleric/digcrawl/config"
 )
 
 type browserSession struct {
@@ -244,7 +244,7 @@ func (m *browserManager) launchControlURL(ctx context.Context) (string, error) {
 func ProfileDirForPlatform(baseDir, platform string) string {
 	baseDir = strings.TrimSpace(baseDir)
 	if baseDir == "" {
-		baseDir = "storage/diggate/browser_profiles"
+		baseDir = "storage/digcrawl/browser_profiles"
 	}
 	platform = strings.TrimSpace(platform)
 	if platform == "" {

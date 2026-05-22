@@ -13,15 +13,15 @@ import (
 
 	"strings"
 
-	"github.com/originaleric/diggate/collect"
-	"github.com/originaleric/diggate/collect/store"
-	"github.com/originaleric/diggate/config"
-	"github.com/originaleric/diggate/runtime"
-	"github.com/originaleric/diggate/transport/collector"
-	"github.com/originaleric/diggate/transport/devhost"
-	httpgw "github.com/originaleric/diggate/transport/http"
-	mcpgw "github.com/originaleric/diggate/transport/mcp"
-	stdiogw "github.com/originaleric/diggate/transport/stdio"
+	"github.com/originaleric/digcrawl/collect"
+	"github.com/originaleric/digcrawl/collect/store"
+	"github.com/originaleric/digcrawl/config"
+	"github.com/originaleric/digcrawl/runtime"
+	"github.com/originaleric/digcrawl/transport/collector"
+	"github.com/originaleric/digcrawl/transport/devhost"
+	httpgw "github.com/originaleric/digcrawl/transport/http"
+	mcpgw "github.com/originaleric/digcrawl/transport/mcp"
+	stdiogw "github.com/originaleric/digcrawl/transport/stdio"
 )
 
 func main() {
@@ -68,31 +68,31 @@ func run(argv []string) {
 }
 
 func printUsage() {
-	fmt.Fprintf(os.Stderr, `DigGate — 面向任意 Agent 的本地工具网关
+	fmt.Fprintf(os.Stderr, `DigCrawl — 面向任意 Agent 的本地工具网关
 
 用法:
-  diggate gateway [flags]     HTTP 工具网关
-  diggate collector [flags]   WebSocket 反向连接 Collector
-  diggate mcp [flags]         MCP 服务（stdio，供 IDE 使用）
-  diggate stdio [flags]       stdin/stdout 逐行 JSON 协议
-  diggate dev-host [flags]    本地参考宿主（仅开发）
-  diggate collect <url>       采集 URL 并导出 Markdown/HTML/JSON
-  diggate collect inbox       处理 collect-inbox/ 中的链接文件
-  diggate collect list        列出 SQLite 采集记录（需 PersistMode=sqlite/both）
-  diggate collect show <id>   查看单条采集详情（id 或 URL）
-  diggate collect migrate-index  从 index.json 导入 SQLite
-  diggate connect [flags]     保存宿主配置并启动 Collector
-  diggate login [flags]       保存 Collector Token 到配置
-  diggate browser check --platform xiaohongshu|douyin|toutiao [--url URL] [--trial]
-  diggate help
+  digcrawl gateway [flags]     HTTP 工具网关
+  digcrawl collector [flags]   WebSocket 反向连接 Collector
+  digcrawl mcp [flags]         MCP 服务（stdio，供 IDE 使用）
+  digcrawl stdio [flags]       stdin/stdout 逐行 JSON 协议
+  digcrawl dev-host [flags]    本地参考宿主（仅开发）
+  digcrawl collect <url>       采集 URL 并导出 Markdown/HTML/JSON
+  digcrawl collect inbox       处理 collect-inbox/ 中的链接文件
+  digcrawl collect list        列出 SQLite 采集记录（需 PersistMode=sqlite/both）
+  digcrawl collect show <id>   查看单条采集详情（id 或 URL）
+  digcrawl collect migrate-index  从 index.json 导入 SQLite
+  digcrawl connect [flags]     保存宿主配置并启动 Collector
+  digcrawl login [flags]       保存 Collector Token 到配置
+  digcrawl browser check --platform xiaohongshu|douyin|toutiao [--url URL] [--trial]
+  digcrawl help
 
 采集示例:
-  diggate collect "https://mp.weixin.qq.com/s/..."
-  diggate collect --file urls.txt --format md,html,json --out ./output
-  diggate collect inbox --watch
+  digcrawl collect "https://mp.weixin.qq.com/s/..."
+  digcrawl collect --file urls.txt --format md,html,json --out ./output
+  digcrawl collect inbox --watch
 
 完整文档: USAGE.md
-宿主 SDK: github.com/originaleric/diggate/client
+宿主 SDK: github.com/originaleric/digcrawl/client
 
 `)
 }
@@ -121,7 +121,7 @@ func runGateway(args []string) {
 		log.Fatalf("runtime: %v", err)
 	}
 	srv := httpgw.NewServer(rt, rt.ArtifactStore(), cfg.Gateway.AuthToken)
-	log.Printf("DigGate HTTP gateway listening on %s (instance=%s)", listen, cfg.Gateway.InstanceID)
+	log.Printf("DigCrawl HTTP gateway listening on %s (instance=%s)", listen, cfg.Gateway.InstanceID)
 	if err := srv.ListenAndServe(listen); err != nil {
 		log.Fatalf("gateway server: %v", err)
 	}
@@ -167,7 +167,7 @@ func runCollector(args []string) {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	log.Printf("DigGate collector connecting to %s instance=%s pull=%s",
+	log.Printf("DigCrawl collector connecting to %s instance=%s pull=%s",
 		opts.ServerURL, opts.InstanceID, opts.PullInterval)
 	if err := client.Run(ctx); err != nil && err != context.Canceled {
 		log.Fatalf("collector: %v", err)
@@ -178,11 +178,11 @@ func runDevHost(args []string) {
 	fs := flag.NewFlagSet("dev-host", flag.ExitOnError)
 	addr := fs.String("addr", ":8790", "listen address")
 	token := fs.String("token", "dev", "auth token for collectors")
-	wsPath := fs.String("ws-path", "/diggate/v1/collector/ws", "WebSocket path")
+	wsPath := fs.String("ws-path", "/digcrawl/v1/collector/ws", "WebSocket path")
 	_ = fs.Parse(args)
 
 	srv := devhost.NewServer(*token, *wsPath)
-	log.Printf("DigGate dev-host (reference only — implement production host in your project)")
+	log.Printf("DigCrawl dev-host (reference only — implement production host in your project)")
 	if err := srv.ListenAndServe(*addr); err != nil {
 		log.Fatalf("dev-host: %v", err)
 	}
@@ -201,7 +201,7 @@ func runMCP(args []string) {
 	if err != nil {
 		log.Fatalf("runtime: %v", err)
 	}
-	log.Printf("DigGate MCP server on stdio (instance=%s)", cfg.Gateway.InstanceID)
+	log.Printf("DigCrawl MCP server on stdio (instance=%s)", cfg.Gateway.InstanceID)
 	if err := mcpgw.ServeStdio(rt); err != nil {
 		log.Fatalf("mcp: %v", err)
 	}
@@ -262,7 +262,7 @@ func runCollect(args []string) {
 	}
 
 	if len(fs.Args()) == 0 {
-		log.Fatal("collect: provide a URL, --file, or `diggate collect inbox`")
+		log.Fatal("collect: provide a URL, --file, or `digcrawl collect inbox`")
 	}
 	url := fs.Args()[0]
 	result, err := svc.CollectURL(ctx, url, formats, cfg.Collect.OutputDir)
@@ -436,7 +436,7 @@ func runStdio(args []string) {
 
 func runConnect(args []string) {
 	fs := flag.NewFlagSet("connect", flag.ExitOnError)
-	configPath := fs.String("config", "", "config path (default ~/.diggate/config.yaml)")
+	configPath := fs.String("config", "", "config path (default ~/.digcrawl/config.yaml)")
 	server := fs.String("server", "", "host base URL (required)")
 	token := fs.String("token", "", "collector auth token")
 	saveOnly := fs.Bool("save-only", false, "only save config, do not start collector")
@@ -473,7 +473,7 @@ func runConnect(args []string) {
 
 func runLogin(args []string) {
 	fs := flag.NewFlagSet("login", flag.ExitOnError)
-	configPath := fs.String("config", "", "config path (default ~/.diggate/config.yaml)")
+	configPath := fs.String("config", "", "config path (default ~/.digcrawl/config.yaml)")
 	token := fs.String("token", "", "collector auth token to save")
 	server := fs.String("server", "", "optional host base URL")
 	_ = fs.Parse(args)
@@ -498,7 +498,7 @@ func runLogin(args []string) {
 	if err := config.Save(path, cfg); err != nil {
 		log.Fatalf("save config: %v", err)
 	}
-	log.Printf("updated %s — run: diggate connect --server <host-url>", path)
+	log.Printf("updated %s — run: digcrawl connect --server <host-url>", path)
 }
 
 func loadConfig(path string) (*config.Config, error) {

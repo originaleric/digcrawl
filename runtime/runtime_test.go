@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/originaleric/diggate/protocol"
-	"github.com/originaleric/diggate/runtime/registry"
+	"github.com/originaleric/digcrawl/protocol"
+	"github.com/originaleric/digcrawl/runtime/registry"
 )
 
 func TestExecuteUnknownTool(t *testing.T) {

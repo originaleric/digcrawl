@@ -11,7 +11,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
-	"github.com/originaleric/diggate/protocol"
+	"github.com/originaleric/digcrawl/protocol"
 )
 
 // Server is a reusable host-side Collector WebSocket endpoint.
@@ -41,7 +41,7 @@ type Session struct {
 // NewServer creates a host-side collector server.
 func NewServer(token, wsPath string) *Server {
 	if wsPath == "" {
-		wsPath = "/diggate/v1/collector/ws"
+		wsPath = "/digcrawl/v1/collector/ws"
 	}
 	return &Server{Token: token, WSPath: wsPath, Log: log.Default(), sessions: map[string]*Session{}}
 }
@@ -193,7 +193,7 @@ func (s *Server) authenticated(r *http.Request) bool {
 	if strings.HasPrefix(auth, "Bearer ") && strings.TrimSpace(strings.TrimPrefix(auth, "Bearer ")) == s.Token {
 		return true
 	}
-	return r.Header.Get("X-DigGate-Token") == s.Token
+	return r.Header.Get("X-DigCrawl-Token") == s.Token
 }
 
 func normalizeCall(call *protocol.ToolCall) {

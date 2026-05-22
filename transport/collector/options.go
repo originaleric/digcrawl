@@ -4,7 +4,7 @@ import (
 	"strings"
 	"time"
 
-	diggatecfg "github.com/originaleric/diggate/config"
+	digcrawlcfg "github.com/originaleric/digcrawl/config"
 )
 
 // Options configures the Collector client.
@@ -26,7 +26,7 @@ type Options struct {
 }
 
 // OptionsFromConfig builds collector options from app config.
-func OptionsFromConfig(cfg *diggatecfg.Config) Options {
+func OptionsFromConfig(cfg *digcrawlcfg.Config) Options {
 	c := cfg.Collector
 	heartbeat := time.Duration(c.HeartbeatIntervalSec) * time.Second
 	if heartbeat <= 0 {
@@ -70,11 +70,11 @@ func OptionsFromConfig(cfg *diggatecfg.Config) Options {
 		instanceID = cfg.Gateway.InstanceID
 	}
 	if instanceID == "" {
-		instanceID = "diggate-collector"
+		instanceID = "digcrawl-collector"
 	}
 	wsPath := strings.TrimSpace(c.WSPath)
 	if wsPath == "" {
-		wsPath = "/diggate/v1/collector/ws"
+		wsPath = "/digcrawl/v1/collector/ws"
 	}
 	return Options{
 		ServerURL:          strings.TrimSpace(c.ServerURL),

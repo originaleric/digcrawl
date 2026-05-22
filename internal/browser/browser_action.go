@@ -10,7 +10,7 @@ import (
 	"github.com/go-rod/rod"
 	"github.com/go-rod/rod/lib/input"
 	"github.com/go-rod/rod/lib/proto"
-	"github.com/originaleric/diggate/config"
+	"github.com/originaleric/digcrawl/config"
 )
 
 // BrowserActionRequest 浏览器操作请求
@@ -269,7 +269,7 @@ func executePress(page *rod.Page, req *BrowserActionRequest) error {
 
 	// 将按键名称转换为 input.Key
 	keyLower := strings.ToLower(req.Key)
-	
+
 	// 检查是否是特殊按键
 	switch keyLower {
 	case "enter":
@@ -324,4 +324,3 @@ func humanType(el *rod.Element, text string) error {
 	}
 	return nil
 }
-

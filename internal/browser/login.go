@@ -13,7 +13,7 @@ import (
 	"github.com/go-rod/rod/lib/launcher"
 	"github.com/go-rod/rod/lib/launcher/flags"
 	"github.com/go-rod/stealth"
-	"github.com/originaleric/diggate/config"
+	"github.com/originaleric/digcrawl/config"
 )
 
 // LoginSpec 平台登录页与 Cookie 域配置。
@@ -156,7 +156,7 @@ func CheckSession(ctx context.Context, platform string, cfg config.LocalBrowserC
 	}
 	if resp.Metadata != nil {
 		if code := strings.TrimSpace(fmt.Sprint(resp.Metadata["error_code"])); code == "LOGIN_REQUIRED" {
-			return fmt.Errorf("%s 会话未登录，请运行 diggate browser login --platform %s", spec.Platform, spec.Platform)
+			return fmt.Errorf("%s 会话未登录，请运行 digcrawl browser login --platform %s", spec.Platform, spec.Platform)
 		}
 	}
 	fmt.Printf("%s 会话检查通过: %s\n", spec.Platform, resp.URL)

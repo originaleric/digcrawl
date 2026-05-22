@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/originaleric/diggate/config"
+	"github.com/originaleric/digcrawl/config"
 )
 
 // BrowserSnapshotRequest 浏览器快照请求
@@ -20,9 +20,9 @@ type BrowserSnapshotRequest struct {
 
 // BrowserSnapshotResponse 浏览器快照响应
 type BrowserSnapshotResponse struct {
-	URL      string   `json:"url" jsonschema:"description=最终访问的 URL"`
-	Title    string   `json:"title" jsonschema:"description=页面标题"`
-	Elements []AXNode `json:"elements" jsonschema:"description=可交互元素列表"`
+	URL      string           `json:"url" jsonschema:"description=最终访问的 URL"`
+	Title    string           `json:"title" jsonschema:"description=页面标题"`
+	Elements []AXNode         `json:"elements" jsonschema:"description=可交互元素列表"`
 	Refs     map[string]int64 `json:"refs,omitempty" jsonschema:"description=引用ID到NodeID的映射（内部使用）"`
 }
 
@@ -120,4 +120,3 @@ func BrowserSnapshot(ctx context.Context, req *BrowserSnapshotRequest) (*Browser
 		Refs:     refs,
 	}, nil
 }
-

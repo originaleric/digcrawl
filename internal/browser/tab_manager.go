@@ -22,12 +22,12 @@ type TabSession struct {
 
 // TabManager 管理标签页的生命周期
 type TabManager struct {
-	mu        sync.RWMutex
-	tabs      map[string]*TabSession
-	browser   *rod.Browser
-	executor  *TabExecutor
-	maxTabs   int
-	tabTTL    time.Duration
+	mu       sync.RWMutex
+	tabs     map[string]*TabSession
+	browser  *rod.Browser
+	executor *TabExecutor
+	maxTabs  int
+	tabTTL   time.Duration
 }
 
 // NewTabManager 创建新的标签页管理器
@@ -222,9 +222,9 @@ func (tm *TabManager) ExecuteOnTab(ctx context.Context, tabID string, task func(
 
 // Stats 返回标签页统计信息
 type TabManagerStats struct {
-	TotalTabs   int           `json:"totalTabs"`
-	MaxTabs     int           `json:"maxTabs"`
-	TabTTL      time.Duration `json:"tabTTL"`
+	TotalTabs     int           `json:"totalTabs"`
+	MaxTabs       int           `json:"maxTabs"`
+	TabTTL        time.Duration `json:"tabTTL"`
 	ExecutorStats ExecutorStats `json:"executorStats,omitempty"`
 }
 

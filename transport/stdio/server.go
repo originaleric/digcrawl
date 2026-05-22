@@ -8,8 +8,8 @@ import (
 	"io"
 	"os"
 
-	"github.com/originaleric/diggate/protocol"
-	"github.com/originaleric/diggate/runtime"
+	"github.com/originaleric/digcrawl/protocol"
+	"github.com/originaleric/digcrawl/runtime"
 )
 
 // Server handles newline-delimited JSON gateway protocol on stdin/stdout.

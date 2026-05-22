@@ -10,8 +10,8 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/originaleric/diggate/internal/browser"
-	"github.com/originaleric/diggate/internal/platform/healthcheck"
+	"github.com/originaleric/digcrawl/internal/browser"
+	"github.com/originaleric/digcrawl/internal/platform/healthcheck"
 )
 
 func runBrowser(args []string) {
@@ -32,8 +32,8 @@ func runBrowser(args []string) {
 
 func printBrowserUsage() {
 	fmt.Fprintf(os.Stderr, `浏览器会话命令:
-  diggate browser login --platform xiaohongshu|douyin|toutiao
-  diggate browser check --platform xiaohongshu|douyin|toutiao [--url URL] [--trial]
+  digcrawl browser login --platform xiaohongshu|douyin|toutiao
+  digcrawl browser check --platform xiaohongshu|douyin|toutiao [--url URL] [--trial]
 
 `)
 }

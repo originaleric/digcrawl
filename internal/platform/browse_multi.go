@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/originaleric/diggate/internal/browser"
+	"github.com/originaleric/digcrawl/internal/browser"
 )
 
 // BrowseAttempt 单次浏览器采集参数。

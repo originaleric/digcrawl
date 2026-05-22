@@ -4,7 +4,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/originaleric/diggate/protocol"
+	"github.com/originaleric/digcrawl/protocol"
 )
 
 // shouldRetryToolResult 判断 Collector 是否应对工具失败做有限重试。

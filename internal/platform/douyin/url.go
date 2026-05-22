@@ -7,16 +7,16 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/originaleric/diggate/internal/platform"
+	"github.com/originaleric/digcrawl/internal/platform"
 )
 
 var (
-	videoIDPattern   = regexp.MustCompile(`(?i)/video/(\d+)`)
-	noteIDPattern    = regexp.MustCompile(`(?i)/note/(\d+)`)
-	sharePattern     = regexp.MustCompile(`(?i)/share/video/(\d+)`)
-	pureNumericID    = regexp.MustCompile(`^\d{10,25}$`)
-	douyinHosts      = []string{"douyin.com", "www.douyin.com", "iesdouyin.com", "www.iesdouyin.com"}
-	shortHosts       = []string{"v.douyin.com"}
+	videoIDPattern = regexp.MustCompile(`(?i)/video/(\d+)`)
+	noteIDPattern  = regexp.MustCompile(`(?i)/note/(\d+)`)
+	sharePattern   = regexp.MustCompile(`(?i)/share/video/(\d+)`)
+	pureNumericID  = regexp.MustCompile(`^\d{10,25}$`)
+	douyinHosts    = []string{"douyin.com", "www.douyin.com", "iesdouyin.com", "www.iesdouyin.com"}
+	shortHosts     = []string{"v.douyin.com"}
 )
 
 // NormalizeURL 归一化抖音作品 URL（含短链 resolve、modal_id、纯数字 ID）。

@@ -9,9 +9,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/originaleric/diggate/runtime/artifact"
-	"github.com/originaleric/diggate/protocol"
-	"github.com/originaleric/diggate/runtime"
+	"github.com/originaleric/digcrawl/protocol"
+	"github.com/originaleric/digcrawl/runtime"
+	"github.com/originaleric/digcrawl/runtime/artifact"
 )
 
 // Server is the HTTP Tool Gateway for DigEino.
@@ -61,7 +61,7 @@ func (s *Server) authenticated(r *http.Request) bool {
 	if strings.HasPrefix(auth, "Bearer ") {
 		return strings.TrimSpace(strings.TrimPrefix(auth, "Bearer ")) == s.authToken
 	}
-	return r.Header.Get("X-DigGate-Token") == s.authToken
+	return r.Header.Get("X-DigCrawl-Token") == s.authToken
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {

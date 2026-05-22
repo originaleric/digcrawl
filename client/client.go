@@ -10,10 +10,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/originaleric/diggate/protocol"
+	"github.com/originaleric/digcrawl/protocol"
 )
 
-// Client 调用远端 DigGate HTTP 工具网关（供宿主项目使用）。
+// Client 调用远端 DigCrawl HTTP 工具网关（供宿主项目使用）。
 type Client struct {
 	BaseURL    string
 	Token      string
@@ -76,7 +76,7 @@ func (c *Client) Call(ctx context.Context, call protocol.ToolCall) (protocol.Too
 
 // FetchArtifact 请求 GET /artifacts/{id} 下载 Artifact 内容。
 func (c *Client) FetchArtifact(ctx context.Context, id string) ([]byte, string, error) {
-	id = strings.TrimPrefix(id, "diggate-artifact://")
+	id = strings.TrimPrefix(id, "digcrawl-artifact://")
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.BaseURL+"/artifacts/"+id, nil)
 	if err != nil {
 		return nil, "", err

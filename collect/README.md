@@ -1,13 +1,13 @@
 # Collect 模块
 
-DigGate 内置的**无宿主本地内容采集**：将链接保存为 Markdown / HTML / JSON，可选下载媒体到 `.assets/`，并按 `PersistMode` 维护 `index.json` 和/或 SQLite（`collect.db`）。
+DigCrawl 内置的**无宿主本地内容采集**：将链接保存为 Markdown / HTML / JSON，可选下载媒体到 `.assets/`，并按 `PersistMode` 维护 `index.json` 和/或 SQLite（`collect.db`）。
 
 用户向命令与配置说明见仓库根目录 **[USAGE.md §8](../USAGE.md#8-本地内容采集collect)**。
 
 ## 处理流程
 
 ```text
-diggate collect <url>
+digcrawl collect <url>
   → collect.Detect（平台 URL 或 http(s) 通用网页）
   → collect.Run → runtime.Execute
   → provider/platform 或 provider/browser
@@ -18,13 +18,13 @@ diggate collect <url>
 ## 命令示例
 
 ```bash
-diggate collect "https://mp.weixin.qq.com/s/..."
-diggate collect --file urls.txt --format md,html,json --out ./collect-output
-diggate collect inbox
-diggate collect inbox --watch
-diggate collect list                    # 需 PersistMode=sqlite|both
-diggate collect show <id|url>
-diggate collect migrate-index           # 从 index.json 导入 SQLite
+digcrawl collect "https://mp.weixin.qq.com/s/..."
+digcrawl collect --file urls.txt --format md,html,json --out ./collect-output
+digcrawl collect inbox
+digcrawl collect inbox --watch
+digcrawl collect list                    # 需 PersistMode=sqlite|both
+digcrawl collect show <id|url>
+digcrawl collect migrate-index           # 从 index.json 导入 SQLite
 ```
 
 ## 输出布局
@@ -39,7 +39,7 @@ collect-output/
       media.json
       001.jpg
 
-storage/diggate/
+storage/digcrawl/
   collect.db                 # PersistMode=sqlite|both
 
 collect-inbox/
@@ -55,7 +55,7 @@ collect-inbox/
 | 字段 | 说明 |
 |------|------|
 | `PersistMode` | `files` / `index`（默认）/ `sqlite` / `both` |
-| `DBPath` | SQLite 路径，默认 `storage/diggate/collect.db` |
+| `DBPath` | SQLite 路径，默认 `storage/digcrawl/collect.db` |
 | `DownloadMedia` | 下载 `media[]` 到 `.assets/`（公众号需 `include_media`） |
 | `IndexEnabled` | `index`/`both` 模式下可显式关闭 index.json |
 

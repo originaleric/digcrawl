@@ -16,5 +16,5 @@ jobs:
           go-version: "1.24.x"
           cache: true
       - run: go test ./...
-      - run: go build ./cmd/diggate
+      - run: go build ./cmd/digcrawl
       - run: go build ./cmd/digcollect

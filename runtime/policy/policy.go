@@ -5,7 +5,7 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/originaleric/diggate/protocol"
+	"github.com/originaleric/digcrawl/protocol"
 )
 
 // Error codes aligned with gateway protocol.

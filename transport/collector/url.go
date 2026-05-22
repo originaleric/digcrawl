@@ -27,7 +27,7 @@ func buildWSURL(serverURL, wsPath, token string) (string, http.Header, error) {
 	}
 	path := strings.TrimSpace(wsPath)
 	if path == "" {
-		path = "/diggate/v1/collector/ws"
+		path = "/digcrawl/v1/collector/ws"
 	}
 	if !strings.HasPrefix(path, "/") {
 		path = "/" + path

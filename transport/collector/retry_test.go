@@ -3,7 +3,7 @@ package collector
 import (
 	"testing"
 
-	"github.com/originaleric/diggate/protocol"
+	"github.com/originaleric/digcrawl/protocol"
 )
 
 func TestShouldRetryToolResult(t *testing.T) {

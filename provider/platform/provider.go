@@ -3,11 +3,11 @@ package platformprov
 import (
 	"context"
 
-	"github.com/originaleric/diggate/config"
-	"github.com/originaleric/diggate/protocol"
-	"github.com/originaleric/diggate/provider"
-	"github.com/originaleric/diggate/runtime/artifact"
-	"github.com/originaleric/diggate/runtime/registry"
+	"github.com/originaleric/digcrawl/config"
+	"github.com/originaleric/digcrawl/protocol"
+	"github.com/originaleric/digcrawl/provider"
+	"github.com/originaleric/digcrawl/runtime/artifact"
+	"github.com/originaleric/digcrawl/runtime/registry"
 )
 
 const Name = "platform"

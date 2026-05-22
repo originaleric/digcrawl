@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/originaleric/diggate/internal/platform"
+	"github.com/originaleric/digcrawl/internal/platform"
 )
 
 // MapAPIResponse 将头条 API JSON 映射为 Content。

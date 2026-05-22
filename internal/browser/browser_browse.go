@@ -15,7 +15,7 @@ import (
 	htmlmd "github.com/JohannesKaufmann/html-to-markdown"
 	"github.com/go-rod/rod"
 	"github.com/go-rod/rod/lib/proto"
-	"github.com/originaleric/diggate/config"
+	"github.com/originaleric/digcrawl/config"
 )
 
 var cookieDomainPattern = regexp.MustCompile(`^[a-zA-Z0-9.-]+$`)
@@ -35,13 +35,13 @@ type BrowserBrowseRequest struct {
 
 // BrowserBrowseResponse 本地浏览器抓取响应
 type BrowserBrowseResponse struct {
-	URL            string   `json:"url" jsonschema:"description=最终抓取的 URL"`
-	Title          string   `json:"title" jsonschema:"description=页面标题"`
-	TabID          string   `json:"tab_id,omitempty" jsonschema:"description=标签页ID（可用于后续操作复用）"`
-	Text           string   `json:"text,omitempty" jsonschema:"description=提取的正文纯文本"`
-	Markdown       string   `json:"markdown,omitempty" jsonschema:"description=转换后的正文 Markdown"`
-	ScreenshotBase string   `json:"screenshot_base64,omitempty" jsonschema:"description=页面截图 base64（action=screenshot 时返回）"`
-	Elements       []AXNode `json:"elements,omitempty" jsonschema:"description=可交互元素列表（mode=snapshot时返回）"`
+	URL            string         `json:"url" jsonschema:"description=最终抓取的 URL"`
+	Title          string         `json:"title" jsonschema:"description=页面标题"`
+	TabID          string         `json:"tab_id,omitempty" jsonschema:"description=标签页ID（可用于后续操作复用）"`
+	Text           string         `json:"text,omitempty" jsonschema:"description=提取的正文纯文本"`
+	Markdown       string         `json:"markdown,omitempty" jsonschema:"description=转换后的正文 Markdown"`
+	ScreenshotBase string         `json:"screenshot_base64,omitempty" jsonschema:"description=页面截图 base64（action=screenshot 时返回）"`
+	Elements       []AXNode       `json:"elements,omitempty" jsonschema:"description=可交互元素列表（mode=snapshot时返回）"`
 	Summary        string         `json:"summary,omitempty" jsonschema:"description=页面摘要（mode=summary时返回）"`
 	Metadata       map[string]any `json:"metadata,omitempty" jsonschema:"description=MetadataScript 提取的结构化字段"`
 }
@@ -145,7 +145,7 @@ func BrowserBrowse(ctx context.Context, req *BrowserBrowseRequest) (*BrowserBrow
 			// full 模式：完整内容提取
 			var htmlContent, textContent string
 			var err error
-			
+
 			if req.ContentSelector != "" {
 				// 使用指定的选择器提取内容
 				htmlContent, textContent, err = extractContentBySelector(page, req.ContentSelector, cfg.WaitSelectorTimeoutSec)
@@ -153,7 +153,7 @@ func BrowserBrowse(ctx context.Context, req *BrowserBrowseRequest) (*BrowserBrow
 				// 使用默认的正文提取逻辑
 				htmlContent, textContent, err = extractMainContent(page, cfg.WaitSelectorTimeoutSec)
 			}
-			
+
 			if err != nil {
 				return nil, err
 			}
@@ -392,13 +392,13 @@ func extractContentBySelector(page *rod.Page, selector string, waitSelectorTimeo
 // extractSummary 提取页面摘要（简化版本，提取标题和关键信息）
 func extractSummary(page *rod.Page, waitSelectorTimeoutSec int) (string, error) {
 	var summary strings.Builder
-	
+
 	// 提取标题
 	title, err := pageTitle(page)
 	if err == nil && title != "" {
 		summary.WriteString(fmt.Sprintf("标题: %s\n\n", title))
 	}
-	
+
 	// 提取 meta description
 	metaDesc, _ := page.Eval(`document.querySelector('meta[name="description"]')?.content || ''`)
 	if metaDesc != nil {
@@ -410,7 +410,7 @@ func extractSummary(page *rod.Page, waitSelectorTimeoutSec int) (string, error) 
 			}
 		}
 	}
-	
+
 	// 提取前几个段落或列表项
 	selectors := []string{"p", "li", "h1", "h2", "h3"}
 	for _, selector := range selectors {
@@ -433,11 +433,10 @@ func extractSummary(page *rod.Page, waitSelectorTimeoutSec int) (string, error) 
 			break
 		}
 	}
-	
+
 	result := summary.String()
 	if result == "" {
 		return "", fmt.Errorf("未能提取页面摘要")
 	}
 	return result, nil
 }
-

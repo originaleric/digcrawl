@@ -7,7 +7,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/originaleric/diggate/internal/platform"
+	"github.com/originaleric/digcrawl/internal/platform"
 )
 
 var (

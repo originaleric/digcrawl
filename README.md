@@ -1,8 +1,8 @@
-# DigGate
+# DigCrawl
 
 **面向任意 Agent 的本地工具网关。**
 
-DigGate 在用户本机安全暴露浏览器、本地文件、私有 API 与企业内网能力，供云端 Agent 宿主、IDE（MCP）或自定义编排器调用。它与 [DigEino](https://github.com/originaleric/digeino) / Eino 解耦：Collector、Gateway、MCP、stdio、本地浏览器和平台采集能力均由 DigGate 独立承载；DigEino 如需本地能力，可作为宿主或客户端调用 DigGate。
+DigCrawl 在用户本机安全暴露浏览器、本地文件、私有 API 与企业内网能力，供云端 Agent 宿主、IDE（MCP）或自定义编排器调用。它与 [DigEino](https://github.com/originaleric/digeino) / Eino 解耦：Collector、Gateway、MCP、stdio、本地浏览器和平台采集能力均由 DigCrawl 独立承载；DigEino 如需本地能力，可作为宿主或客户端调用 DigCrawl。
 
 📖 **完整使用说明：[USAGE.md](USAGE.md)**
 
@@ -12,11 +12,11 @@ DigGate 在用户本机安全暴露浏览器、本地文件、私有 API 与企�
 
 ```bash
 go test ./...
-go build -o diggate ./cmd/diggate
+go build -o digcrawl ./cmd/digcrawl
 go build -o digcollect ./cmd/digcollect
 
 # 启动 HTTP 网关（默认 127.0.0.1:8787）
-./diggate gateway --config config/config.yaml
+./digcrawl gateway --config config/config.yaml
 
 # 查看工具清单
 curl -s http://127.0.0.1:8787/manifest | jq .
@@ -25,14 +25,14 @@ curl -s http://127.0.0.1:8787/manifest | jq .
 连接你的业务宿主（本机 Collector 反向 WebSocket）：
 
 ```bash
-./diggate connect --server https://your-host.example.com --token <token>
+./digcrawl connect --server https://your-host.example.com --token <token>
 ```
 
 本地采集一篇文章：
 
 ```bash
-./diggate collect "https://mp.weixin.qq.com/s/..."
-./diggate collect "https://www.toutiao.com/article/..."
+./digcrawl collect "https://mp.weixin.qq.com/s/..."
+./digcrawl collect "https://www.toutiao.com/article/..."
 ```
 
 也可以使用轻量采集入口：
@@ -61,18 +61,18 @@ curl -s http://127.0.0.1:8787/manifest | jq .
 
 | 命令 | 说明 |
 |------|------|
-| `diggate gateway` | HTTP 工具网关 |
-| `diggate collector` | WebSocket 反向连接 Collector |
-| `diggate connect` | 保存宿主配置并启动 Collector |
-| `diggate login` | 保存 Collector Token |
-| `diggate mcp` | MCP stdio（IDE） |
-| `diggate stdio` | 逐行 JSON 协议 |
-| `diggate dev-host` | 本地参考宿主（仅开发） |
-| `diggate collect` | 采集 URL 并导出 |
-| `diggate collect inbox` | 收件箱批处理 / `--watch` 轮询 |
-| `diggate browser login` | 打开有头浏览器完成平台登录并保存 Cookie |
-| `diggate browser check` | 检查平台会话，可选试读 URL |
-| `digcollect` | 轻量本地采集入口，等价于 `diggate collect` |
+| `digcrawl gateway` | HTTP 工具网关 |
+| `digcrawl collector` | WebSocket 反向连接 Collector |
+| `digcrawl connect` | 保存宿主配置并启动 Collector |
+| `digcrawl login` | 保存 Collector Token |
+| `digcrawl mcp` | MCP stdio（IDE） |
+| `digcrawl stdio` | 逐行 JSON 协议 |
+| `digcrawl dev-host` | 本地参考宿主（仅开发） |
+| `digcrawl collect` | 采集 URL 并导出 |
+| `digcrawl collect inbox` | 收件箱批处理 / `--watch` 轮询 |
+| `digcrawl browser login` | 打开有头浏览器完成平台登录并保存 Cookie |
+| `digcrawl browser check` | 检查平台会话，可选试读 URL |
+| `digcollect` | 轻量本地采集入口，等价于 `digcrawl collect` |
 
 参数、配置项、API 与接入方式见 **[USAGE.md](USAGE.md)**。
 
@@ -106,11 +106,11 @@ internal/browser/   本地 go-rod 浏览器
 平台读取现在采用 API 优先 + Browser 兜底的 strategy chain：小红书、抖音、头条会先尝试页面运行时 `fetch(credentials:"include")`，失败后回落到浏览器 hydration/meta/DOM 提取；登录、验证码、限流和内容不可见会返回结构化错误。需要登录态时可运行：
 
 ```bash
-./diggate browser login --platform xiaohongshu
-./diggate browser login --platform douyin
-./diggate browser login --platform toutiao
+./digcrawl browser login --platform xiaohongshu
+./digcrawl browser login --platform douyin
+./digcrawl browser login --platform toutiao
 
-./diggate browser check --platform toutiao \
+./digcrawl browser check --platform toutiao \
   --url "https://www.toutiao.com/article/..." --trial
 ```
 
@@ -125,13 +125,13 @@ internal/browser/   本地 go-rod 浏览器
 | [collect/README.md](collect/README.md) | Collect 流程与输出目录 |
 | [protocol/README.md](protocol/README.md) · [runtime/README.md](runtime/README.md) · [transport/README.md](transport/README.md) | 各层中文说明 |
 | [config/config.yaml](config/config.yaml) | 配置示例 |
-| [.github/workflows/ci.yml](.github/workflows/ci.yml) | CI：测试并构建 `diggate` / `digcollect` |
+| [.github/workflows/ci.yml](.github/workflows/ci.yml) | CI：测试并构建 `digcrawl` / `digcollect` |
 
 ---
 
 ## 相关项目
 
-- [digeino](https://github.com/originaleric/digeino) — Eino / DigFlow 工具与 Agent 能力库，可作为宿主或客户端调用 DigGate
+- [digeino](https://github.com/originaleric/digeino) — Eino / DigFlow 工具与 Agent 能力库，可作为宿主或客户端调用 DigCrawl
 
 ## 许可证
 

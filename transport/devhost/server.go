@@ -11,7 +11,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
-	"github.com/originaleric/diggate/protocol"
+	"github.com/originaleric/digcrawl/protocol"
 )
 
 var upgrader = websocket.Upgrader{
@@ -36,7 +36,7 @@ type clientSession struct {
 // NewServer creates a dev reference host.
 func NewServer(token, wsPath string) *Server {
 	if wsPath == "" {
-		wsPath = "/diggate/v1/collector/ws"
+		wsPath = "/digcrawl/v1/collector/ws"
 	}
 	return &Server{
 		Token:   token,
@@ -164,9 +164,9 @@ func (s *Server) handleEnqueue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		InstanceID string             `json:"instance_id"`
-		Mode       string             `json:"mode"` // queue | push
-		Call       protocol.ToolCall  `json:"call"`
+		InstanceID string            `json:"instance_id"`
+		Mode       string            `json:"mode"` // queue | push
+		Call       protocol.ToolCall `json:"call"`
 	}
 	if err := json.Unmarshal(body, &req); err != nil {
 		http.Error(w, "invalid json", http.StatusBadRequest)
@@ -234,7 +234,7 @@ func (s *Server) authenticated(r *http.Request) bool {
 	if strings.HasPrefix(auth, "Bearer ") && strings.TrimPrefix(auth, "Bearer ") == s.Token {
 		return true
 	}
-	return r.Header.Get("X-DigGate-Token") == s.Token
+	return r.Header.Get("X-DigCrawl-Token") == s.Token
 }
 
 func writeEnvelope(conn *websocket.Conn, env protocol.Envelope) error {

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 手动冒烟：平台 read 工具（需本地 diggate 运行 + 可选 cookie）
+# 手动冒烟：平台 read 工具（需本地 digcrawl 运行 + 可选 cookie）
 # 用法:
 #   GATEWAY_URL=http://127.0.0.1:8787 ./scripts/smoke_platform_read.sh
 # 环境变量 URL_* 可覆盖默认测试链接

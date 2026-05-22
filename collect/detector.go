@@ -5,8 +5,8 @@ import (
 	"net/url"
 	"strings"
 
-	browserprov "github.com/originaleric/diggate/provider/browser"
-	platformprov "github.com/originaleric/diggate/provider/platform"
+	browserprov "github.com/originaleric/digcrawl/provider/browser"
+	platformprov "github.com/originaleric/digcrawl/provider/platform"
 )
 
 // Match maps a URL to a platform label and gateway tool name.

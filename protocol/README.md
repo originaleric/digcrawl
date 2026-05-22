@@ -1,6 +1,6 @@
 # 协议层（protocol）
 
-DigGate 工具网关的**线协议与类型定义**，与传输形态（HTTP / WebSocket / MCP / stdio）无关。
+DigCrawl 工具网关的**线协议与类型定义**，与传输形态（HTTP / WebSocket / MCP / stdio）无关。
 
 ## 主要内容
 

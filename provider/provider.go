@@ -3,8 +3,8 @@ package provider
 import (
 	"context"
 
-	"github.com/originaleric/diggate/protocol"
-	"github.com/originaleric/diggate/runtime/registry"
+	"github.com/originaleric/digcrawl/protocol"
+	"github.com/originaleric/digcrawl/runtime/registry"
 )
 
 // Provider registers tool entries into a gateway registry.

@@ -7,12 +7,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/originaleric/diggate/protocol"
-	"github.com/originaleric/diggate/runtime/artifact"
-	"github.com/originaleric/diggate/runtime/audit"
-	"github.com/originaleric/diggate/runtime/policy"
-	"github.com/originaleric/diggate/runtime/registry"
-	"github.com/originaleric/diggate/runtime/version"
+	"github.com/originaleric/digcrawl/protocol"
+	"github.com/originaleric/digcrawl/runtime/artifact"
+	"github.com/originaleric/digcrawl/runtime/audit"
+	"github.com/originaleric/digcrawl/runtime/policy"
+	"github.com/originaleric/digcrawl/runtime/registry"
+	"github.com/originaleric/digcrawl/runtime/version"
 )
 
 // Options configures the gateway runtime.

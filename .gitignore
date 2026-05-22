@@ -1,6 +1,7 @@
 # Binaries
 /bin/
 /dist/
+/dig*
 *.exe
 *.dll
 *.so
@@ -9,7 +10,7 @@
 # Go
 /vendor/
 
-# DigGate runtime data
+# DigCrawl runtime data
 /storage/
 
 # Local planning notes

@@ -1,4 +1,4 @@
-module github.com/originaleric/diggate
+module github.com/originaleric/digcrawl
 
 go 1.24.0
 

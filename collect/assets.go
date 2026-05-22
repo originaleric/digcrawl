@@ -16,7 +16,7 @@ import (
 
 	"golang.org/x/net/html"
 
-	"github.com/originaleric/diggate/runtime/artifact"
+	"github.com/originaleric/digcrawl/runtime/artifact"
 )
 
 var markdownImageRe = regexp.MustCompile(`!\[[^\]]*\]\((https?://[^\s\)]+)\)`)

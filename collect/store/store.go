@@ -29,11 +29,11 @@ type FileRecord struct {
 
 // MediaRecord is one media asset for a collect.
 type MediaRecord struct {
-	MediaType      string
-	RemoteURL      string
-	LocalPath      string
-	DownloadError  string
-	SortOrder      int
+	MediaType     string
+	RemoteURL     string
+	LocalPath     string
+	DownloadError string
+	SortOrder     int
 }
 
 // CollectDetail is a collect with related files and media.

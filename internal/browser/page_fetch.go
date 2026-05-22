@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/go-rod/rod"
-	"github.com/originaleric/diggate/config"
+	"github.com/originaleric/digcrawl/config"
 )
 
 // PageFetchRequest 在已登录页面上下文中发起 fetch（自动携带 Cookie）。

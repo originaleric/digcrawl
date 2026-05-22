@@ -1,9 +1,9 @@
 package platformprov
 
 import (
-	"github.com/originaleric/diggate/internal/platform/douyin"
-	"github.com/originaleric/diggate/runtime/artifact"
-	"github.com/originaleric/diggate/runtime/registry"
+	"github.com/originaleric/digcrawl/internal/platform/douyin"
+	"github.com/originaleric/digcrawl/runtime/artifact"
+	"github.com/originaleric/digcrawl/runtime/registry"
 )
 
 var douyinDefaultDomains = []string{"douyin.com", "www.douyin.com", "iesdouyin.com", "v.douyin.com"}

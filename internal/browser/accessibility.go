@@ -109,7 +109,6 @@ func FetchAXTree(ctx context.Context, page *rod.Page) ([]AXNode, map[string]int6
 	return nodes, refs, nil
 }
 
-
 // BuildSnapshot 构建无障碍树快照
 // filter: "interactive" | "visible" | "all"
 // maxDepth: 最大深度，-1表示不限制

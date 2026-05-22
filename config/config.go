@@ -9,7 +9,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Config holds DigGate runtime settings.
+// Config holds DigCrawl runtime settings.
 type Config struct {
 	Gateway      GatewayConfig      `yaml:"Gateway" json:"Gateway"`
 	Collector    CollectorConfig    `yaml:"Collector" json:"Collector"`
@@ -75,7 +75,7 @@ func (c CollectConfig) DBPathOrDefault() string {
 	if strings.TrimSpace(c.DBPath) != "" {
 		return c.DBPath
 	}
-	return "storage/diggate/collect.db"
+	return "storage/digcrawl/collect.db"
 }
 
 // LocalBrowserConfig local browser used by platform tools and collect.
@@ -157,7 +157,7 @@ func init() {
 		defaultCfg = Config{
 			Gateway: GatewayConfig{
 				ListenAddr: "127.0.0.1:8787",
-				InstanceID: "diggate-local",
+				InstanceID: "digcrawl-local",
 				AllowedTools: []string{
 					"gateway.ping",
 					"browser.browse",
@@ -168,13 +168,13 @@ func init() {
 					"toutiao.article.read",
 					"x.post.read",
 				},
-				ArtifactDir:        "storage/diggate/artifacts",
+				ArtifactDir:        "storage/digcrawl/artifacts",
 				ArtifactTTLMinutes: 60,
 				ArtifactEnabled:    &enabled,
 				RequireApproval:    &enabled,
 			},
 			Collector: CollectorConfig{
-				WSPath:               "/diggate/v1/collector/ws",
+				WSPath:               "/digcrawl/v1/collector/ws",
 				HeartbeatIntervalSec: 30,
 				PullIntervalSec:      0,
 				ReconnectDelaySec:    5,
@@ -203,7 +203,7 @@ func init() {
 				IncludeMedia:      &enabled,
 				DownloadMedia:     &enabled,
 				PersistMode:       "index",
-				DBPath:            "storage/diggate/collect.db",
+				DBPath:            "storage/digcrawl/collect.db",
 				IndexEnabled:      &enabled,
 				MaxMediaBytes:     10 * 1024 * 1024,
 				MediaTimeoutSec:   30,
@@ -229,7 +229,7 @@ func init() {
 					"x.com", "twitter.com", "www.twitter.com",
 				},
 				Headless:       &enabled,
-				CookieStoreDir: "storage/diggate/browser_cookies",
+				CookieStoreDir: "storage/digcrawl/browser_cookies",
 			},
 			Platform: PlatformConfig{
 				BrowseRetryMaxAttempts: 2,
@@ -447,5 +447,5 @@ func DefaultConfigPath() string {
 	if err != nil {
 		return "config/config.yaml"
 	}
-	return filepath.Join(home, ".diggate", "config.yaml")
+	return filepath.Join(home, ".digcrawl", "config.yaml")
 }

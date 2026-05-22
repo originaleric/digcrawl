@@ -1,9 +1,9 @@
 package platformprov
 
 import (
-	"github.com/originaleric/diggate/internal/platform/toutiao"
-	"github.com/originaleric/diggate/runtime/artifact"
-	"github.com/originaleric/diggate/runtime/registry"
+	"github.com/originaleric/digcrawl/internal/platform/toutiao"
+	"github.com/originaleric/digcrawl/runtime/artifact"
+	"github.com/originaleric/digcrawl/runtime/registry"
 )
 
 var toutiaoDefaultDomains = []string{"toutiao.com", "www.toutiao.com", "m.toutiao.com"}

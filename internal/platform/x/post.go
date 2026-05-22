@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/originaleric/diggate/internal/platform"
+	"github.com/originaleric/digcrawl/internal/platform"
 )
 
 // ReadPost 读取 X/Twitter 帖子（仅首条 status，不展开 thread）。

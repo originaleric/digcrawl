@@ -5,10 +5,10 @@ import (
 	"os"
 	"strings"
 
-	"github.com/originaleric/diggate/runtime/executor"
-	"github.com/originaleric/diggate/protocol"
-	"github.com/originaleric/diggate/runtime/registry"
-	"github.com/originaleric/diggate/provider"
+	"github.com/originaleric/digcrawl/protocol"
+	"github.com/originaleric/digcrawl/provider"
+	"github.com/originaleric/digcrawl/runtime/executor"
+	"github.com/originaleric/digcrawl/runtime/registry"
 )
 
 const Name = "example"

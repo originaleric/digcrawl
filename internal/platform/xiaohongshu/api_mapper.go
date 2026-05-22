@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/originaleric/diggate/internal/platform"
+	"github.com/originaleric/digcrawl/internal/platform"
 )
 
 func mapNoteCard(in platform.ReadInput, norm *platform.NormalizedURL, card map[string]any) *platform.Content {

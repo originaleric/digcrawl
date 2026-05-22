@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/originaleric/diggate/runtime/artifact"
+	"github.com/originaleric/digcrawl/runtime/artifact"
 )
 
 // ExportOptions configures local file export.

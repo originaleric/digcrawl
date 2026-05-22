@@ -6,12 +6,12 @@
 
 | 包 | 说明 | 对应 CLI |
 |----|------|----------|
-| `http` | HTTP 工具网关：`/health`、`/manifest`、`/tools/call` | `diggate gateway` |
-| `collector` | WebSocket 反向连接，执行宿主下发的工具调用 | `diggate collector` |
+| `http` | HTTP 工具网关：`/health`、`/manifest`、`/tools/call` | `digcrawl gateway` |
+| `collector` | WebSocket 反向连接，执行宿主下发的工具调用 | `digcrawl collector` |
 | `host` | 可复用宿主侧 Collector WebSocket 端点，支持 push / pull 队列 | 宿主项目 import |
-| `mcp` | MCP stdio 服务（Cursor、Claude Desktop 等） | `diggate mcp` |
-| `stdio` | stdin/stdout 逐行 JSON 协议 | `diggate stdio` |
-| `devhost` | 基于 `host` 思路的最小参考宿主（仅本地开发调试） | `diggate dev-host` |
+| `mcp` | MCP stdio 服务（Cursor、Claude Desktop 等） | `digcrawl mcp` |
+| `stdio` | stdin/stdout 逐行 JSON 协议 | `digcrawl stdio` |
+| `devhost` | 基于 `host` 思路的最小参考宿主（仅本地开发调试） | `digcrawl dev-host` |
 
 ## 宿主 HTTP 客户端
 

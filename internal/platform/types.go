@@ -29,10 +29,10 @@ type MediaItem struct {
 
 // Engagement 互动数据。
 type Engagement struct {
-	Likes    int `json:"likes,omitempty"`
-	Comments int `json:"comments,omitempty"`
-	Shares   int `json:"shares,omitempty"`
-	Reposts  int `json:"reposts,omitempty"`
+	Likes     int `json:"likes,omitempty"`
+	Comments  int `json:"comments,omitempty"`
+	Shares    int `json:"shares,omitempty"`
+	Reposts   int `json:"reposts,omitempty"`
 	Bookmarks int `json:"bookmarks,omitempty"`
 }
 

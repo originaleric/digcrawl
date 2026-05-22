@@ -8,10 +8,10 @@ import (
 	"github.com/google/uuid"
 	"github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
-	"github.com/originaleric/diggate/runtime/version"
-	"github.com/originaleric/diggate/protocol"
-	"github.com/originaleric/diggate/runtime/registry"
-	"github.com/originaleric/diggate/runtime"
+	"github.com/originaleric/digcrawl/protocol"
+	"github.com/originaleric/digcrawl/runtime"
+	"github.com/originaleric/digcrawl/runtime/registry"
+	"github.com/originaleric/digcrawl/runtime/version"
 )
 
 // ServeStdio exposes DigEino tools as an MCP server over stdio (for IDE / Claude Desktop).

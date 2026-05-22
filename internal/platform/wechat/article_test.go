@@ -3,8 +3,8 @@ package wechat
 import (
 	"testing"
 
-	"github.com/originaleric/diggate/internal/browser"
-	"github.com/originaleric/diggate/internal/platform"
+	"github.com/originaleric/digcrawl/internal/browser"
+	"github.com/originaleric/digcrawl/internal/platform"
 )
 
 func TestNormalizeArticleIncludeMedia(t *testing.T) {

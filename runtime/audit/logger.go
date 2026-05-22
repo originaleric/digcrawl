@@ -4,7 +4,7 @@ import (
 	"log"
 	"strings"
 
-	"github.com/originaleric/diggate/protocol"
+	"github.com/originaleric/digcrawl/protocol"
 )
 
 // Logger writes redacted audit lines for gateway tool calls.

@@ -30,8 +30,8 @@ type Envelope struct {
 	Message   string `json:"message,omitempty"`
 
 	// InstanceStatus
-	Status       string `json:"status,omitempty"` // online | busy | draining
-	ActiveCalls  int    `json:"active_calls,omitempty"`
+	Status       string   `json:"status,omitempty"` // online | busy | draining
+	ActiveCalls  int      `json:"active_calls,omitempty"`
 	Capabilities []string `json:"capabilities,omitempty"`
 
 	// PullTasks
@@ -41,10 +41,10 @@ type Envelope struct {
 	Calls []ToolCall `json:"calls,omitempty"`
 
 	// 内嵌标准工具协议
-	Manifest  *ToolManifest `json:"manifest,omitempty"`
-	ToolCall  *ToolCall     `json:"tool_call,omitempty"`
-	ToolResult *ToolResult  `json:"tool_result,omitempty"`
-	Error     *ToolError    `json:"error,omitempty"`
+	Manifest   *ToolManifest `json:"manifest,omitempty"`
+	ToolCall   *ToolCall     `json:"tool_call,omitempty"`
+	ToolResult *ToolResult   `json:"tool_result,omitempty"`
+	Error      *ToolError    `json:"error,omitempty"`
 }
 
 // CollectorHello 建连握手（Collector → 宿主）。

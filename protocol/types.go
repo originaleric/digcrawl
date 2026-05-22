@@ -9,7 +9,7 @@ const (
 	TypeGetManifest  = "get_manifest"
 )
 
-// ToolManifest 工具清单，供宿主发现 DigGate 可用能力。
+// ToolManifest 工具清单，供宿主发现 DigCrawl 可用能力。
 type ToolManifest struct {
 	Type           string           `json:"type"`
 	Runtime        string           `json:"runtime"`

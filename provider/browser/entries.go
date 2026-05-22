@@ -3,12 +3,12 @@ package browser
 import (
 	"context"
 
-	"github.com/originaleric/diggate/internal/browser"
-	"github.com/originaleric/diggate/protocol"
-	"github.com/originaleric/diggate/runtime/artifact"
-	"github.com/originaleric/diggate/runtime/executor"
-	"github.com/originaleric/diggate/runtime/policy"
-	"github.com/originaleric/diggate/runtime/registry"
+	"github.com/originaleric/digcrawl/internal/browser"
+	"github.com/originaleric/digcrawl/protocol"
+	"github.com/originaleric/digcrawl/runtime/artifact"
+	"github.com/originaleric/digcrawl/runtime/executor"
+	"github.com/originaleric/digcrawl/runtime/policy"
+	"github.com/originaleric/digcrawl/runtime/registry"
 )
 
 type browseInput struct {

@@ -6,9 +6,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/originaleric/diggate/internal/browser"
-	"github.com/originaleric/diggate/internal/platform"
-	"github.com/originaleric/diggate/internal/platform/session"
+	"github.com/originaleric/digcrawl/internal/browser"
+	"github.com/originaleric/digcrawl/internal/platform"
+	"github.com/originaleric/digcrawl/internal/platform/session"
 )
 
 var articleAPIPaths = []string{

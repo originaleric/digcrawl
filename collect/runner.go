@@ -6,9 +6,9 @@ import (
 	"fmt"
 
 	"github.com/google/uuid"
-	browserprov "github.com/originaleric/diggate/provider/browser"
-	"github.com/originaleric/diggate/protocol"
-	"github.com/originaleric/diggate/runtime"
+	"github.com/originaleric/digcrawl/protocol"
+	browserprov "github.com/originaleric/digcrawl/provider/browser"
+	"github.com/originaleric/digcrawl/runtime"
 )
 
 // RunOptions configures a single collect execution.
@@ -79,8 +79,8 @@ func buildToolInput(match Match, opts RunOptions) (map[string]any, error) {
 		}, nil
 	}
 	return map[string]any{
-		"url":            opts.URL,
-		"format":         opts.Formats,
-		"include_media":  opts.IncludeMedia,
+		"url":           opts.URL,
+		"format":        opts.Formats,
+		"include_media": opts.IncludeMedia,
 	}, nil
 }

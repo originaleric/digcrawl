@@ -11,7 +11,7 @@ import (
 	"github.com/go-rod/rod"
 	"github.com/go-rod/rod/lib/launcher"
 	"github.com/go-rod/rod/lib/launcher/flags"
-	"github.com/originaleric/diggate/config"
+	"github.com/originaleric/digcrawl/config"
 )
 
 // BrowserInstance 表示一个浏览器实例
@@ -169,7 +169,7 @@ func (im *InstanceManager) StopInstance(instanceID string) error {
 	}
 
 	delete(im.instances, instanceID)
-	
+
 	// 关闭浏览器
 	if instance.Browser != nil {
 		_ = instance.Browser.Close()

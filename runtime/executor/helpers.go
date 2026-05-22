@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/originaleric/diggate/runtime/policy"
-	"github.com/originaleric/diggate/protocol"
+	"github.com/originaleric/digcrawl/protocol"
+	"github.com/originaleric/digcrawl/runtime/policy"
 )
 
 // DecodeInput unmarshals ToolCall input JSON into T.

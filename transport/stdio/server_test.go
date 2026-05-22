@@ -6,9 +6,9 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/originaleric/diggate/protocol"
-	"github.com/originaleric/diggate/runtime/registry"
-	"github.com/originaleric/diggate/runtime"
+	"github.com/originaleric/digcrawl/protocol"
+	"github.com/originaleric/digcrawl/runtime"
+	"github.com/originaleric/digcrawl/runtime/registry"
 )
 
 func TestStdioGetManifest(t *testing.T) {

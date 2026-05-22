@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/originaleric/diggate/internal/browser"
+	"github.com/originaleric/digcrawl/internal/browser"
 )
 
 // Browse 使用本地浏览器按平台规格采集页面。

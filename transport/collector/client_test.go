@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/originaleric/diggate/config"
+	"github.com/originaleric/digcrawl/config"
 )
 
 func TestReserveQueueSlot(t *testing.T) {

@@ -4,7 +4,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/originaleric/diggate/collect/store"
+	"github.com/originaleric/digcrawl/collect/store"
 )
 
 // UpsertInputFromExport builds a SQLite upsert payload from export output.

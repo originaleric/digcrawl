@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/originaleric/diggate/config"
-	"github.com/originaleric/diggate/internal/browser"
+	"github.com/originaleric/digcrawl/config"
+	"github.com/originaleric/digcrawl/internal/browser"
 )
 
 const defaultBrowserResolveTimeout = 45 * time.Second

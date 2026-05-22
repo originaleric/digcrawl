@@ -6,12 +6,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/originaleric/diggate/config"
-	"github.com/originaleric/diggate/internal/browser"
-	"github.com/originaleric/diggate/internal/platform"
-	"github.com/originaleric/diggate/internal/platform/douyin"
-	"github.com/originaleric/diggate/internal/platform/toutiao"
-	"github.com/originaleric/diggate/internal/platform/xiaohongshu"
+	"github.com/originaleric/digcrawl/config"
+	"github.com/originaleric/digcrawl/internal/browser"
+	"github.com/originaleric/digcrawl/internal/platform"
+	"github.com/originaleric/digcrawl/internal/platform/douyin"
+	"github.com/originaleric/digcrawl/internal/platform/toutiao"
+	"github.com/originaleric/digcrawl/internal/platform/xiaohongshu"
 )
 
 // Options 健康检查参数。

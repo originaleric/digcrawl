@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/originaleric/diggate/collect/store"
-	"github.com/originaleric/diggate/config"
+	"github.com/originaleric/digcrawl/collect/store"
+	"github.com/originaleric/digcrawl/config"
 )
 
 func TestPersistModeBranches(t *testing.T) {

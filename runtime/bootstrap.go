@@ -4,14 +4,14 @@ import (
 	"context"
 	"time"
 
-	"github.com/originaleric/diggate/config"
-	"github.com/originaleric/diggate/provider"
-	browserprov "github.com/originaleric/diggate/provider/browser"
-	exampleprov "github.com/originaleric/diggate/provider/example"
-	platformprov "github.com/originaleric/diggate/provider/platform"
-	stubprov "github.com/originaleric/diggate/provider/stub"
-	"github.com/originaleric/diggate/runtime/artifact"
-	"github.com/originaleric/diggate/runtime/registry"
+	"github.com/originaleric/digcrawl/config"
+	"github.com/originaleric/digcrawl/provider"
+	browserprov "github.com/originaleric/digcrawl/provider/browser"
+	exampleprov "github.com/originaleric/digcrawl/provider/example"
+	platformprov "github.com/originaleric/digcrawl/provider/platform"
+	stubprov "github.com/originaleric/digcrawl/provider/stub"
+	"github.com/originaleric/digcrawl/runtime/artifact"
+	"github.com/originaleric/digcrawl/runtime/registry"
 )
 
 // RegistryOptions configures tool registration.
@@ -86,7 +86,7 @@ func browserProviderEnabled(cfg *config.Config) bool {
 func NewArtifactStore(cfg *config.Config) (artifact.Store, error) {
 	dir := cfg.Gateway.ArtifactDir
 	if dir == "" {
-		dir = "storage/diggate/artifacts"
+		dir = "storage/digcrawl/artifacts"
 	}
 	ttl := time.Duration(cfg.Gateway.ArtifactTTLMinutes) * time.Minute
 	if ttl <= 0 {
@@ -111,7 +111,7 @@ func NewRuntime(cfg *config.Config) (*Runtime, error) {
 	gw := cfg.Gateway
 	instanceID := gw.InstanceID
 	if instanceID == "" {
-		instanceID = "diggate-local"
+		instanceID = "digcrawl-local"
 	}
 	var store artifact.Store
 	if gw.ArtifactEnabled == nil || *gw.ArtifactEnabled {
@@ -128,7 +128,7 @@ func NewRuntime(cfg *config.Config) (*Runtime, error) {
 
 // NewCollectRuntime creates a runtime for local content collect (platform tools).
 func NewCollectRuntime(cfg *config.Config) (*Runtime, error) {
-	instanceID := "diggate-collect"
+	instanceID := "digcrawl-collect"
 	var store artifact.Store
 	if cfg.Gateway.ArtifactEnabled == nil || *cfg.Gateway.ArtifactEnabled {
 		if s, err := NewArtifactStore(cfg); err == nil {
@@ -161,7 +161,7 @@ func NewCollectorRuntime(cfg *config.Config) (*Runtime, error) {
 		instanceID = cfg.Gateway.InstanceID
 	}
 	if instanceID == "" {
-		instanceID = "diggate-collector"
+		instanceID = "digcrawl-collector"
 	}
 	allowed := col.AllowedTools
 	if len(allowed) == 0 {

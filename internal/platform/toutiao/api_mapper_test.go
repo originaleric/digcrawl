@@ -6,7 +6,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/originaleric/diggate/internal/platform"
+	"github.com/originaleric/digcrawl/internal/platform"
 )
 
 func TestMapAPIResponse(t *testing.T) {

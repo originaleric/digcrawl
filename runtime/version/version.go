@@ -1,6 +1,6 @@
 package version
 
 const (
-	RuntimeName    = "diggate"
+	RuntimeName    = "digcrawl"
 	RuntimeVersion = "0.1.0"
 )

@@ -6,7 +6,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/originaleric/diggate/internal/platform"
+	"github.com/originaleric/digcrawl/internal/platform"
 )
 
 var statusPattern = regexp.MustCompile(`(?i)/([^/]+)/status/(\d+)`)

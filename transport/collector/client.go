@@ -8,9 +8,9 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-	"github.com/originaleric/diggate/protocol"
-	"github.com/originaleric/diggate/runtime"
-	"github.com/originaleric/diggate/runtime/version"
+	"github.com/originaleric/digcrawl/protocol"
+	"github.com/originaleric/digcrawl/runtime"
+	"github.com/originaleric/digcrawl/runtime/version"
 )
 
 // envelopeWriter serializes all outbound WebSocket text frames through one mutex.

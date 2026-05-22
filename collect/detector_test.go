@@ -3,8 +3,8 @@ package collect
 import (
 	"testing"
 
-	browserprov "github.com/originaleric/diggate/provider/browser"
-	platformprov "github.com/originaleric/diggate/provider/platform"
+	browserprov "github.com/originaleric/digcrawl/provider/browser"
+	platformprov "github.com/originaleric/digcrawl/provider/platform"
 )
 
 func TestDetectWechat(t *testing.T) {

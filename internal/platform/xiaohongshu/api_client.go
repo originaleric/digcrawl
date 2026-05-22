@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/originaleric/diggate/internal/browser"
-	"github.com/originaleric/diggate/internal/platform"
-	"github.com/originaleric/diggate/internal/platform/session"
+	"github.com/originaleric/digcrawl/internal/browser"
+	"github.com/originaleric/digcrawl/internal/platform"
+	"github.com/originaleric/digcrawl/internal/platform/session"
 )
 
 const feedAPIURL = "https://edith.xiaohongshu.com/api/sns/web/v1/feed"

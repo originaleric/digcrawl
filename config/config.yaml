@@ -1,6 +1,6 @@
 Gateway:
   ListenAddr: "127.0.0.1:8787"
-  InstanceID: "diggate-local"
+  InstanceID: "digcrawl-local"
   AuthToken: ""
   AllowedTools:
     - gateway.ping
@@ -14,13 +14,13 @@ Gateway:
   AllowedReadPaths: []
   AllowedDomains: []
   ArtifactEnabled: true
-  ArtifactDir: "storage/diggate/artifacts"
+  ArtifactDir: "storage/digcrawl/artifacts"
   ArtifactTTLMinutes: 60
   RequireApproval: true
 
 Collector:
   ServerURL: ""
-  WSPath: "/diggate/v1/collector/ws"
+  WSPath: "/digcrawl/v1/collector/ws"
   Token: ""
   InstanceID: ""
   HeartbeatIntervalSec: 30
@@ -49,7 +49,7 @@ Collect:
   DefaultFormats: ["md", "json"]
   # 持久化方案：files | index | sqlite | both
   PersistMode: index
-  DBPath: "storage/diggate/collect.db"
+  DBPath: "storage/digcrawl/collect.db"
   IncludeMedia: true
   DownloadMedia: true
   IndexEnabled: true
@@ -87,7 +87,7 @@ LocalBrowser:
     - www.twitter.com
   ChromePath: ""
   Headless: true
-  CookieStoreDir: "storage/diggate/browser_cookies"
+  CookieStoreDir: "storage/digcrawl/browser_cookies"
   CDPMode: false
   CDPPort: 9222
   CDPConnectExisting: false

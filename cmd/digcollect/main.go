@@ -9,8 +9,8 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/originaleric/diggate/collect"
-	"github.com/originaleric/diggate/config"
+	"github.com/originaleric/digcrawl/collect"
+	"github.com/originaleric/digcrawl/config"
 )
 
 func main() {

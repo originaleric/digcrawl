@@ -3,9 +3,9 @@ package stub
 import (
 	"context"
 
-	"github.com/originaleric/diggate/protocol"
-	"github.com/originaleric/diggate/provider"
-	"github.com/originaleric/diggate/runtime/registry"
+	"github.com/originaleric/digcrawl/protocol"
+	"github.com/originaleric/digcrawl/provider"
+	"github.com/originaleric/digcrawl/runtime/registry"
 )
 
 const Name = "stub"

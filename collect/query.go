@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/originaleric/diggate/collect/store"
-	"github.com/originaleric/diggate/config"
+	"github.com/originaleric/digcrawl/collect/store"
+	"github.com/originaleric/digcrawl/config"
 )
 
 // CollectDB returns the SQLite store when configured, opening on demand.

@@ -1,6 +1,6 @@
-# DigGate 使用指南
+# DigCrawl 使用指南
 
-DigGate 是面向任意 Agent 编排系统的**本地工具网关**：在用户机器上安全暴露浏览器、本地文件、私有 API 等能力，供云端宿主或 IDE 通过 HTTP、WebSocket、MCP、stdio 调用。
+DigCrawl 是面向任意 Agent 编排系统的**本地工具网关**：在用户机器上安全暴露浏览器、本地文件、私有 API 等能力，供云端宿主或 IDE 通过 HTTP、WebSocket、MCP、stdio 调用。
 
 本文档覆盖安装、配置、全部 CLI 命令、Collect 采集、宿主接入与扩展开发。**快速概览见 [README.md](README.md)。**
 
@@ -16,16 +16,16 @@ DigGate 是面向任意 Agent 编排系统的**本地工具网关**：在用户�
 ### 从源码运行
 
 ```bash
-git clone https://github.com/originaleric/diggate.git
-cd diggate
-go build -o diggate ./cmd/diggate
+git clone https://github.com/originaleric/digcrawl.git
+cd digcrawl
+go build -o digcrawl ./cmd/digcrawl
 go build -o digcollect ./cmd/digcollect
 ```
 
 ### 安装到 PATH（可选）
 
 ```bash
-go install ./cmd/diggate
+go install ./cmd/digcrawl
 go install ./cmd/digcollect
 # 二进制通常在 $GOPATH/bin 或 $HOME/go/bin
 ```
@@ -35,9 +35,9 @@ go install ./cmd/digcollect
 | 场景 | 默认路径 |
 |------|----------|
 | `gateway` / `collector` / `mcp` / `collect` 等 | 命令行 `--config`，未指定时为 `config/config.yaml` |
-| `connect` / `login` | `~/.diggate/config.yaml`（可用 `--config` 覆盖） |
+| `connect` / `login` | `~/.digcrawl/config.yaml`（可用 `--config` 覆盖） |
 
-首次 `connect` 或 `login` 会自动创建 `~/.diggate/` 目录并写入配置。
+首次 `connect` 或 `login` 会自动创建 `~/.digcrawl/` 目录并写入配置。
 
 ---
 
@@ -51,7 +51,7 @@ go install ./cmd/digcollect
 |------|------|
 | `ListenAddr` | 监听地址，默认 `127.0.0.1:8787` |
 | `InstanceID` | 实例标识，出现在 manifest 中 |
-| `AuthToken` | 非空时要求请求携带 Bearer / `X-DigGate-Token` |
+| `AuthToken` | 非空时要求请求携带 Bearer / `X-DigCrawl-Token` |
 | `AllowedTools` | 工具名白名单；空表示不限制 |
 | `AllowedReadPaths` | `file.read` 允许读取的本地路径前缀 |
 | `AllowedDomains` | 与策略合并的 URL 域名白名单 |
@@ -63,7 +63,7 @@ go install ./cmd/digcollect
 | 字段 | 说明 |
 |------|------|
 | `ServerURL` | 宿主根地址，如 `https://api.example.com` |
-| `WSPath` | WebSocket 路径，默认 `/diggate/v1/collector/ws` |
+| `WSPath` | WebSocket 路径，默认 `/digcrawl/v1/collector/ws` |
 | `Token` | 与宿主约定的鉴权令牌 |
 | `InstanceID` | 本机 Collector 实例 ID（空则自动生成） |
 | `PullIntervalSec` | `>0` 时由 Collector 主动拉取任务；`0` 为推送模式 |
@@ -82,7 +82,7 @@ go install ./cmd/digcollect
 | `DefaultFormats` | 默认导出格式：`md`、`html`、`json` |
 | `DownloadMedia` | 是否下载正文中的媒体到 `.assets/` |
 | `PersistMode` | 持久化方案：`files`（仅文件）/ `index`（默认，+ index.json）/ `sqlite`（+ collect.db）/ `both` |
-| `DBPath` | SQLite 库路径，默认 `storage/diggate/collect.db` |
+| `DBPath` | SQLite 库路径，默认 `storage/digcrawl/collect.db` |
 | `IndexEnabled` | `index`/`both` 模式下是否写 `index.json`（同 URL 覆盖更新） |
 | `RateLimitMs` | inbox 批处理时 URL 之间的间隔（毫秒） |
 | `PlatformRateLimits` | 按平台覆盖批处理间隔，如 `xiaohongshu`、`douyin`、`toutiao` |
@@ -108,7 +108,7 @@ go install ./cmd/digcollect
 | `BrowseRetryMaxAttempts` | Browser 兜底读取 transient 错误最大尝试次数 |
 | `BrowseRetryDelayMs` | Browser 重试间隔 |
 | `ReadMetricsEnabled` | 是否输出 `[platform-read]` 结构化日志 |
-| `HealthProbes` | `diggate browser check --trial` 的平台默认试读 URL |
+| `HealthProbes` | `digcrawl browser check --trial` 的平台默认试读 URL |
 
 ### Providers（内置 Provider 开关）
 
@@ -124,19 +124,19 @@ go install ./cmd/digcollect
 ## 3. 命令行总览
 
 ```text
-diggate gateway [flags]       # HTTP 工具网关
-diggate collector [flags]     # WebSocket 反向连接宿主
-diggate connect [flags]       # 保存宿主配置并启动 Collector
-diggate login [flags]         # 仅保存 Token / 宿主地址
-diggate mcp [flags]           # MCP stdio（Cursor / Claude Desktop）
-diggate stdio [flags]         # 逐行 JSON 协议
-diggate dev-host [flags]      # 本地参考宿主（仅开发调试）
-diggate collect <url>         # 采集单个 URL
-diggate collect inbox         # 处理收件箱
-diggate browser login         # 平台扫码/交互登录并保存 Cookie
-diggate browser check         # 检查平台会话，可选试读
-digcollect <url>              # 轻量采集入口，等价于 diggate collect <url>
-diggate help
+digcrawl gateway [flags]       # HTTP 工具网关
+digcrawl collector [flags]     # WebSocket 反向连接宿主
+digcrawl connect [flags]       # 保存宿主配置并启动 Collector
+digcrawl login [flags]         # 仅保存 Token / 宿主地址
+digcrawl mcp [flags]           # MCP stdio（Cursor / Claude Desktop）
+digcrawl stdio [flags]         # 逐行 JSON 协议
+digcrawl dev-host [flags]      # 本地参考宿主（仅开发调试）
+digcrawl collect <url>         # 采集单个 URL
+digcrawl collect inbox         # 处理收件箱
+digcrawl browser login         # 平台扫码/交互登录并保存 Cookie
+digcrawl browser check         # 检查平台会话，可选试读
+digcollect <url>              # 轻量采集入口，等价于 digcrawl collect <url>
+digcrawl help
 ```
 
 全局习惯：多数子命令支持 `--config <path>` 指定配置文件。
@@ -149,10 +149,10 @@ diggate help
 
 ```bash
 # 使用仓库示例配置
-diggate gateway --config config/config.yaml
+digcrawl gateway --config config/config.yaml
 
 # 覆盖监听地址
-diggate gateway --config config/config.yaml --addr 127.0.0.1:8787
+digcrawl gateway --config config/config.yaml --addr 127.0.0.1:8787
 ```
 
 验证：
@@ -187,39 +187,39 @@ curl -s -X POST http://127.0.0.1:8787/tools/call \
 
 ## 5. 连接云端宿主（collector / connect / login）
 
-典型部署：**用户本机运行 DigGate Collector**，通过 WebSocket **反向连接**到你的业务宿主；宿主下发 `tool_call`，在本机执行后回传结果。
+典型部署：**用户本机运行 DigCrawl Collector**，通过 WebSocket **反向连接**到你的业务宿主；宿主下发 `tool_call`，在本机执行后回传结果。
 
 ### 方式 A：一步连接（推荐）
 
 ```bash
-diggate connect --server https://your-host.example.com --token <collector-token>
+digcrawl connect --server https://your-host.example.com --token <collector-token>
 ```
 
-- 将 `ServerURL`、`Token` 写入 `~/.diggate/config.yaml`
+- 将 `ServerURL`、`Token` 写入 `~/.digcrawl/config.yaml`
 - 随即以该配置启动 `collector`
 
 仅保存配置、不启动：
 
 ```bash
-diggate connect --server https://your-host.example.com --token <token> --save-only
+digcrawl connect --server https://your-host.example.com --token <token> --save-only
 ```
 
 ### 方式 B：分步配置
 
 ```bash
 # 先保存令牌（可选同时写 server）
-diggate login --token <collector-token>
-diggate login --server https://your-host.example.com --token <token>
+digcrawl login --token <collector-token>
+digcrawl login --server https://your-host.example.com --token <token>
 
 # 再启动 Collector
-diggate collector --config ~/.diggate/config.yaml
+digcrawl collector --config ~/.digcrawl/config.yaml
 ```
 
 ### Collector 常用参数
 
 ```bash
-diggate collector \
-  --config ~/.diggate/config.yaml \
+digcrawl collector \
+  --config ~/.digcrawl/config.yaml \
   --server https://your-host.example.com \
   --token <token> \
   --instance-id my-laptop \
@@ -238,26 +238,26 @@ diggate collector \
 生产环境请在**你自己的项目**中实现 WebSocket 宿主；仓库仅提供最小参考：
 
 ```bash
-diggate dev-host --addr :8790 --token dev
+digcrawl dev-host --addr :8790 --token dev
 ```
 
 再在另一终端：
 
 ```bash
-diggate collector --server http://127.0.0.1:8790 --token dev
+digcrawl collector --server http://127.0.0.1:8790 --token dev
 ```
 
 ---
 
 ## 6. IDE 集成（MCP）
 
-在 Cursor、Claude Desktop 等支持 MCP 的客户端中，将 DigGate 注册为 stdio 服务：
+在 Cursor、Claude Desktop 等支持 MCP 的客户端中，将 DigCrawl 注册为 stdio 服务：
 
 ```json
 {
   "mcpServers": {
-    "diggate": {
-      "command": "/path/to/diggate",
+    "digcrawl": {
+      "command": "/path/to/digcrawl",
       "args": ["mcp", "--config", "/path/to/config/config.yaml"]
     }
   }
@@ -273,7 +273,7 @@ diggate collector --server http://127.0.0.1:8790 --token dev
 适用于需要管道集成的宿主或脚本：
 
 ```bash
-diggate stdio --config config/config.yaml
+digcrawl stdio --config config/config.yaml
 ```
 
 stdin/stdout 上逐行 JSON，消息类型与 [`protocol/`](protocol/) 包一致（如 manifest 查询、tool_call、tool_result）。适合与自定义编排器对接。
@@ -300,9 +300,9 @@ Collect 在**无云端宿主**的情况下，把链接抓取并导出到本地�
 ### 单条 URL
 
 ```bash
-diggate collect "https://mp.weixin.qq.com/s/xxxx"
-diggate collect "https://www.toutiao.com/article/xxxx"
-diggate collect "https://example.com/article" --format md,html,json --out ./my-output
+digcrawl collect "https://mp.weixin.qq.com/s/xxxx"
+digcrawl collect "https://www.toutiao.com/article/xxxx"
+digcrawl collect "https://example.com/article" --format md,html,json --out ./my-output
 ```
 
 ### 平台登录与健康检查
@@ -310,15 +310,15 @@ diggate collect "https://example.com/article" --format md,html,json --out ./my-o
 部分平台在未登录或 Cookie 过期时会返回 `LOGIN_REQUIRED`。可使用有头浏览器完成登录并保存 Cookie：
 
 ```bash
-diggate browser login --platform xiaohongshu
-diggate browser login --platform douyin
-diggate browser login --platform toutiao
+digcrawl browser login --platform xiaohongshu
+digcrawl browser login --platform douyin
+digcrawl browser login --platform toutiao
 ```
 
 登录后可检查会话，并可选试读一个 URL：
 
 ```bash
-diggate browser check --platform toutiao \
+digcrawl browser check --platform toutiao \
   --url "https://www.toutiao.com/article/xxxx" --trial
 ```
 
@@ -332,7 +332,7 @@ diggate browser check --platform toutiao \
 ### 批量文件
 
 ```bash
-diggate collect --file urls.txt --format md,json --out ./collect-output
+digcrawl collect --file urls.txt --format md,json --out ./collect-output
 ```
 
 ### 收件箱（inbox）
@@ -345,10 +345,10 @@ diggate collect --file urls.txt --format md,json --out ./collect-output
 
 ```bash
 # 处理一次
-diggate collect inbox
+digcrawl collect inbox
 
 # 持续轮询（Ctrl+C 停止）
-diggate collect inbox --watch
+digcrawl collect inbox --watch
 ```
 
 批处理受 `Collect.RateLimitMs` 节流，避免对目标站请求过快。
@@ -359,11 +359,11 @@ diggate collect inbox --watch
 当 `PersistMode` 为 `sqlite` 或 `both` 时：
 
 ```bash
-diggate collect list
-diggate collect list --q wechat --limit 50
-diggate collect show <collect-id>
-diggate collect show "https://mp.weixin.qq.com/s/..."
-diggate collect migrate-index   # 将已有 index.json 导入 collect.db
+digcrawl collect list
+digcrawl collect list --q wechat --limit 50
+digcrawl collect show <collect-id>
+digcrawl collect show "https://mp.weixin.qq.com/s/..."
+digcrawl collect migrate-index   # 将已有 index.json 导入 collect.db
 ```
 
 ### 输出目录结构
@@ -379,7 +379,7 @@ collect-output/
       media.json
       001.jpg
 
-storage/diggate/
+storage/digcrawl/
   collect.db                 # PersistMode=sqlite|both
 
 collect-inbox/
@@ -441,7 +441,7 @@ collect-inbox/
 鉴权（当 `Gateway.AuthToken` 非空时）：
 
 - Header：`Authorization: Bearer <token>`
-- 或：`X-DigGate-Token: <token>`
+- 或：`X-DigCrawl-Token: <token>`
 
 ---
 
@@ -453,8 +453,8 @@ collect-inbox/
 import (
     "context"
     "encoding/json"
-    "github.com/originaleric/diggate/client"
-    "github.com/originaleric/diggate/protocol"
+    "github.com/originaleric/digcrawl/client"
+    "github.com/originaleric/digcrawl/protocol"
 )
 
 func callPing(ctx context.Context, gatewayURL, token string) error {
@@ -488,11 +488,11 @@ func callPing(ctx context.Context, gatewayURL, token string) error {
 宿主侧如需实现 Collector WebSocket 服务，可直接复用 `transport/host` 包：
 
 ```go
-srv := host.NewServer("collector-token", "/diggate/v1/collector/ws")
+srv := host.NewServer("collector-token", "/digcrawl/v1/collector/ws")
 http.ListenAndServe(":8790", srv.Handler())
 ```
 
-业务系统可通过 `srv.Enqueue(instanceID, call)` 支持拉取模式，或用 `srv.Push(instanceID, call)` 立即推送任务。`diggate dev-host` 仍保留为本地调试参考。
+业务系统可通过 `srv.Enqueue(instanceID, call)` 支持拉取模式，或用 `srv.Push(instanceID, call)` 立即推送任务。`digcrawl dev-host` 仍保留为本地调试参考。
 
 ---
 
@@ -534,8 +534,8 @@ internal/browser/   go-rod 本地浏览器
 
 数据与状态默认落在项目目录下：
 
-- `storage/diggate/artifacts` — Artifact 文件
-- `storage/diggate/browser_cookies` — 浏览器 Cookie
+- `storage/digcrawl/artifacts` — Artifact 文件
+- `storage/digcrawl/browser_cookies` — 浏览器 Cookie
 - `collect-output/`、`collect-inbox/` — Collect 产出与收件箱
 
 ---
@@ -556,13 +556,13 @@ internal/browser/   go-rod 本地浏览器
 
 ### 与 DigEino 的关系
 
-[DigEino](https://github.com/originaleric/digeino) 是 Eino / DigFlow 生态的工具 Provider 实现；DigGate 与之**解耦**，本仓库已内置 Collect 与平台/browser 工具。你可单独把 DigEino 作为 Provider 接到自建 runtime，也可仅使用 DigGate 独立发行版。
+[DigEino](https://github.com/originaleric/digeino) 是 Eino / DigFlow 生态的工具 Provider 实现；DigCrawl 与之**解耦**，本仓库已内置 Collect 与平台/browser 工具。你可单独把 DigEino 作为 Provider 接到自建 runtime，也可仅使用 DigCrawl 独立发行版。
 
 ---
 
 ## 15. 相关链接
 
-- 仓库：<https://github.com/originaleric/diggate>
+- 仓库：<https://github.com/originaleric/digcrawl>
 - 示例配置：[`config/config.yaml`](config/config.yaml)
 - Collect 模块：[`collect/README.md`](collect/README.md)
 - 更新记录：[`updates/`](updates/)
@@ -576,14 +576,14 @@ internal/browser/   go-rod 本地浏览器
 ### 16.1 构建与基础检查
 
 ```bash
-/Users/dig/.gvm/gos/go1.24.8/bin/go build -o diggate ./cmd/diggate
-./diggate --help
+/Users/dig/.gvm/gos/go1.24.8/bin/go build -o digcrawl ./cmd/digcrawl
+./digcrawl --help
 ```
 
 ### 16.2 通用网页 fallback
 
 ```bash
-./diggate collect "https://example.com" --format md,json --out ./collect-output-test
+./digcrawl collect "https://example.com" --format md,json --out ./collect-output-test
 ```
 
 预期：生成 md/json，说明 collect、browser 与 export 基础链路可用。
@@ -591,7 +591,7 @@ internal/browser/   go-rod 本地浏览器
 ### 16.3 今日头条文章
 
 ```bash
-./diggate collect "https://www.toutiao.com/article/你的文章ID/" \
+./digcrawl collect "https://www.toutiao.com/article/你的文章ID/" \
   --format md,json --out ./collect-output-test
 ```
 
@@ -606,11 +606,11 @@ internal/browser/   go-rod 本地浏览器
 ### 16.4 登录后试读
 
 ```bash
-./diggate browser login --platform xiaohongshu
-./diggate browser login --platform douyin
-./diggate browser login --platform toutiao
+./digcrawl browser login --platform xiaohongshu
+./digcrawl browser login --platform douyin
+./digcrawl browser login --platform toutiao
 
-./diggate browser check --platform toutiao \
+./digcrawl browser check --platform toutiao \
   --url "https://www.toutiao.com/article/你的文章ID/" --trial
 ```
 
@@ -621,17 +621,17 @@ internal/browser/   go-rod 本地浏览器
 小红书优先使用带 `xsec_token` 的 URL：
 
 ```bash
-./diggate collect "https://www.xiaohongshu.com/explore/笔记ID?xsec_token=xxx&xsec_source=pc_search" \
+./digcrawl collect "https://www.xiaohongshu.com/explore/笔记ID?xsec_token=xxx&xsec_source=pc_search" \
   --format md,json --out ./collect-output-test
 ```
 
 抖音测试标准视频和 `modal_id`：
 
 ```bash
-./diggate collect "https://www.douyin.com/video/视频ID" \
+./digcrawl collect "https://www.douyin.com/video/视频ID" \
   --format md,json --out ./collect-output-test
 
-./diggate collect "https://www.douyin.com/user/SEC_UID?modal_id=视频ID" \
+./digcrawl collect "https://www.douyin.com/user/SEC_UID?modal_id=视频ID" \
   --format md,json --out ./collect-output-test
 ```
 
@@ -650,7 +650,7 @@ https://www.douyin.com/video/视频ID
 执行：
 
 ```bash
-./diggate collect --file test-urls.txt --format md,json --out ./collect-output-test
+./digcrawl collect --file test-urls.txt --format md,json --out ./collect-output-test
 ```
 
 预期：批量采集按 `Collect.RateLimitMs` / `Collect.PlatformRateLimits` 节流；失败 URL 不影响其他 URL 继续处理。

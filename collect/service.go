@@ -7,10 +7,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/originaleric/diggate/collect/store"
-	"github.com/originaleric/diggate/config"
-	"github.com/originaleric/diggate/runtime"
-	"github.com/originaleric/diggate/runtime/artifact"
+	"github.com/originaleric/digcrawl/collect/store"
+	"github.com/originaleric/digcrawl/config"
+	"github.com/originaleric/digcrawl/runtime"
+	"github.com/originaleric/digcrawl/runtime/artifact"
 )
 
 // Service runs local content collect and export.

@@ -1,7 +1,7 @@
 package toutiao
 
 import (
-	platform "github.com/originaleric/diggate/internal/platform"
+	platform "github.com/originaleric/digcrawl/internal/platform"
 )
 
 // MetadataScript 页面状态 + hydration/meta/DOM 提取。

@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/originaleric/diggate/protocol"
+	"github.com/originaleric/digcrawl/protocol"
 )
 
 // Store persists large tool outputs (screenshots, files).
@@ -60,7 +60,7 @@ func (s *DiskStore) Put(_ context.Context, id, contentType, name string, data []
 		Type:      contentType,
 		Name:      name,
 		Size:      int64(len(data)),
-		URI:       "diggate-artifact://" + id,
+		URI:       "digcrawl-artifact://" + id,
 		ExpiresAt: expires,
 	}, nil
 }
@@ -86,7 +86,7 @@ func (s *DiskStore) metaPath(id string) string {
 
 func sanitizeID(id string) string {
 	id = strings.TrimSpace(id)
-	id = strings.TrimPrefix(id, "diggate-artifact://")
+	id = strings.TrimPrefix(id, "digcrawl-artifact://")
 	return filepath.Base(id)
 }
 

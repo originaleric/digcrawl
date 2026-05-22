@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/originaleric/diggate/internal/browser"
-	"github.com/originaleric/diggate/internal/platform"
+	"github.com/originaleric/digcrawl/internal/browser"
+	"github.com/originaleric/digcrawl/internal/platform"
 )
 
 // ReadArticle 读取今日头条文章（API 优先，Browser 兜底）。

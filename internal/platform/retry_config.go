@@ -3,7 +3,7 @@ package platform
 import (
 	"time"
 
-	"github.com/originaleric/diggate/config"
+	"github.com/originaleric/digcrawl/config"
 )
 
 // BrowseRetryPolicy 从配置读取浏览器重试策略。

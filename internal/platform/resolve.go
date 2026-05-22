@@ -41,7 +41,7 @@ func ResolveHTTPFollow(ctx context.Context, rawURL string, allowedHosts []string
 	if err != nil {
 		return "", err
 	}
-	req.Header.Set("User-Agent", "DigGate/1.0 (+https://github.com/originaleric/diggate)")
+	req.Header.Set("User-Agent", "DigCrawl/1.0 (+https://github.com/originaleric/digcrawl)")
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -50,7 +50,7 @@ func ResolveHTTPFollow(ctx context.Context, rawURL string, allowedHosts []string
 		if err != nil {
 			return "", err
 		}
-		req.Header.Set("User-Agent", "DigGate/1.0 (+https://github.com/originaleric/diggate)")
+		req.Header.Set("User-Agent", "DigCrawl/1.0 (+https://github.com/originaleric/digcrawl)")
 		resp, err = client.Do(req)
 		if err != nil {
 			return "", fmt.Errorf("短链解析失败: %w", err)

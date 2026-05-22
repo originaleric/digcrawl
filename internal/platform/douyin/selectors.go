@@ -1,7 +1,7 @@
 package douyin
 
 import (
-	"github.com/originaleric/diggate/internal/platform"
+	"github.com/originaleric/digcrawl/internal/platform"
 )
 
 const (

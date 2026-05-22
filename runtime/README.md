@@ -1,6 +1,6 @@
 # 运行时（runtime）
 
-DigGate **工具注册、策略校验、审计、Artifact 与统一执行入口**。
+DigCrawl **工具注册、策略校验、审计、Artifact 与统一执行入口**。
 
 ## 入口
 

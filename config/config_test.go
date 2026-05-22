@@ -33,7 +33,7 @@ func TestCollectPersistModeHelpers(t *testing.T) {
 			t.Fatalf("mode=%q UseSQLite=%v want %v", tc.mode, c.UseSQLite(), tc.wantSQLite)
 		}
 	}
-	if got := (CollectConfig{}).DBPathOrDefault(); got != "storage/diggate/collect.db" {
+	if got := (CollectConfig{}).DBPathOrDefault(); got != "storage/digcrawl/collect.db" {
 		t.Fatalf("DBPathOrDefault=%q", got)
 	}
 }
