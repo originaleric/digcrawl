@@ -17,6 +17,7 @@ import (
 	"github.com/originaleric/digcrawl/collect/store"
 	"github.com/originaleric/digcrawl/config"
 	"github.com/originaleric/digcrawl/runtime"
+	"github.com/originaleric/digcrawl/runtime/version"
 	"github.com/originaleric/digcrawl/transport/collector"
 	"github.com/originaleric/digcrawl/transport/devhost"
 	httpgw "github.com/originaleric/digcrawl/transport/http"
@@ -58,9 +59,15 @@ func run(argv []string) {
 		runLogin(argv[2:])
 	case "browser":
 		runBrowser(argv[2:])
+	case "version", "--version", "-v":
+		printVersion()
 	case "help", "-h", "--help":
 		printUsage()
 	default:
+		if looksLikeURL(argv[1]) {
+			runCollectCommand(argv[1:])
+			return
+		}
 		fmt.Fprintf(os.Stderr, "未知命令: %s\n\n", argv[1])
 		printUsage()
 		os.Exit(1)
@@ -81,9 +88,11 @@ func printUsage() {
   digcrawl collect list        列出 SQLite 采集记录（需 PersistMode=sqlite/both）
   digcrawl collect show <id>   查看单条采集详情（id 或 URL）
   digcrawl collect migrate-index  从 index.json 导入 SQLite
+  digcrawl <url>               等价于 digcrawl collect <url>
   digcrawl connect [flags]     保存宿主配置并启动 Collector
   digcrawl login [flags]       保存 Collector Token 到配置
   digcrawl browser check --platform xiaohongshu|douyin|toutiao [--url URL] [--trial]
+  digcrawl version
   digcrawl help
 
 采集示例:
@@ -95,6 +104,15 @@ func printUsage() {
 宿主 SDK: github.com/originaleric/digcrawl/client
 
 `)
+}
+
+func printVersion() {
+	fmt.Printf("%s %s\ncommit: %s\nbuilt: %s\n", version.RuntimeName, version.RuntimeVersion, version.Commit, version.BuildDate)
+}
+
+func looksLikeURL(s string) bool {
+	lower := strings.ToLower(strings.TrimSpace(s))
+	return strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://")
 }
 
 func runGateway(args []string) {
