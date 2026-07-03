@@ -21,6 +21,9 @@ func ReadArticle(ctx context.Context, in platform.ReadInput) (*platform.Content,
 	if err != nil {
 		return nil, err
 	}
+	if err := checkArticlePreflight(ctx, norm); err != nil {
+		return nil, err
+	}
 
 	cookieDomain := strings.TrimSpace(in.UseCookieDomain)
 	if cookieDomain == "" {
@@ -108,5 +111,61 @@ func readArticleBrowser(ctx context.Context, in platform.ReadInput, norm *platfo
 	if code == platform.ErrPartialContent || code == platform.ErrSelectorStale {
 		content.PlatformMetadata = platform.SetMetaError(content.PlatformMetadata, code, platform.MetaString(resp.Metadata, "error_message"))
 	}
+	if err := validateArticleContent(content); err != nil {
+		return nil, time.Since(start).Milliseconds(), 0, err
+	}
 	return content, time.Since(start).Milliseconds(), 0, nil
+}
+
+func validateArticleContent(content *platform.Content) error {
+	if content == nil {
+		return platform.NewReadError(platform.ErrPartialContent, "头条文章结果为空", PlatformName, nil)
+	}
+	meta := platform.EnsureMeta(content.PlatformMetadata)
+	if code := platform.MetaErrorCode(meta); code != "" {
+		return platform.NewReadError(code, platform.MetaString(meta, "error_message"), PlatformName, meta)
+	}
+	if isVideoLikeArticle(content) {
+		meta = platform.SetMetaError(meta, platform.ErrContentTypeMismatch, "当前 URL 不是头条文章页")
+		return platform.NewReadError(platform.ErrContentTypeMismatch, platform.MetaString(meta, "error_message"), PlatformName, meta)
+	}
+	if strings.TrimSpace(content.Title) == "" || isShellTitle(content.Title) {
+		meta = platform.SetMetaError(meta, platform.ErrSelectorStale, "未提取到真实头条文章标题")
+		return platform.NewReadError(platform.ErrSelectorStale, platform.MetaString(meta, "error_message"), PlatformName, meta)
+	}
+	if strings.TrimSpace(content.Text) == "" {
+		meta = platform.SetMetaError(meta, platform.ErrPartialContent, "头条文章正文为空")
+		return platform.NewReadError(platform.ErrPartialContent, platform.MetaString(meta, "error_message"), PlatformName, meta)
+	}
+	content.PlatformMetadata = meta
+	return nil
+}
+
+func isShellTitle(title string) bool {
+	title = strings.TrimSpace(strings.TrimSuffix(title, "- 今日头条"))
+	switch strings.ToLower(title) {
+	case "", "今日头条", "toutiao":
+		return true
+	default:
+		return false
+	}
+}
+
+func isVideoLikeArticle(content *platform.Content) bool {
+	meta := content.PlatformMetadata
+	haystack := strings.ToLower(strings.Join([]string{
+		content.SourceURL,
+		content.CanonicalURL,
+		platform.MetaString(meta, "final_url"),
+		platform.MetaString(meta, "resolved_url"),
+		platform.MetaString(meta, "detail_schema"),
+		platform.MetaString(meta, "page_kind"),
+		platform.MetaString(meta, "result_type"),
+	}, " "))
+	for _, marker := range []string{"awemevideo", "shortvideo", "hotsoon_video", "video_oracle", "/video/"} {
+		if strings.Contains(haystack, marker) {
+			return true
+		}
+	}
+	return false
 }

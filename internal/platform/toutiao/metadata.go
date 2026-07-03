@@ -18,15 +18,21 @@ func MetadataScript() string {
     }
     return '';
   };
-  const detectPageState = () => {
-    const body = (document.body?.innerText || '').slice(0, 4000);
-    const loginHints = ['登录', '请登录', '扫码登录', '手机号登录'];
-    const captchaHints = ['验证', '滑块', '安全验证', '拖动滑块'];
-    const deletedHints = ['内容不存在', '已删除', '找不到', '文章不存在'];
-    const privateHints = ['无法查看', '内容不可见', '审核中'];
-    if (loginHints.some(h => body.includes(h)) && document.querySelector('[class*="login"], .login-wrap')) {
-      return { error_code: 'LOGIN_REQUIRED', error_message: '需要登录后查看' };
-    }
+	  const detectPageState = () => {
+	    const body = (document.body?.innerText || '').slice(0, 4000);
+	    const href = String(location.href || '').toLowerCase();
+	    const html = document.documentElement?.innerHTML?.slice(0, 12000).toLowerCase() || '';
+	    const videoMarkers = ['awemevideo', 'shortvideo', 'hotsoon_video', 'video_oracle', 'sslocal://awemevideo'];
+	    const loginHints = ['登录', '请登录', '扫码登录', '手机号登录'];
+	    const captchaHints = ['验证', '滑块', '安全验证', '拖动滑块'];
+	    const deletedHints = ['内容不存在', '已删除', '找不到', '文章不存在'];
+	    const privateHints = ['无法查看', '内容不可见', '审核中'];
+	    if (href.includes('/video/') || videoMarkers.some(h => html.includes(h))) {
+	      return { error_code: 'CONTENT_TYPE_MISMATCH', error_message: '当前 URL 不是头条文章页', page_kind: 'video' };
+	    }
+	    if (loginHints.some(h => body.includes(h)) && document.querySelector('[class*="login"], .login-wrap')) {
+	      return { error_code: 'LOGIN_REQUIRED', error_message: '需要登录后查看' };
+	    }
     if (captchaHints.some(h => body.includes(h)) && document.querySelector('[class*="captcha"], [class*="verify"]')) {
       return { error_code: 'CAPTCHA_REQUIRED', error_message: '需要完成安全验证' };
     }
@@ -124,8 +130,8 @@ func MetadataScript() string {
   const tryDOM = () => {
     const title = pick(['h1', '.article-title', '.title', '[class*="title"]']);
     const text = pick(['article', '.article-content', '.tt-article-content', '.article-box', 'main']);
-    const author = pick(['.name', '.author-name', '.source', '[class*="author"]', '.media-name']);
-    const published = pick(['.time', '.publish-time', 'time', '[class*="time"]']);
+	    const author = pick(['.name', '.author-name', '.source', '[class*="author"]', '.media-name', '[class*="media"] [class*="name"]']);
+	    const published = pick(['.time', '.publish-time', 'time', '[class*="time"]', '[class*="publish"]']);
     const imgs = Array.from(document.querySelectorAll('article img, .article-content img, main img'))
       .map(i => i.currentSrc || i.src || i.getAttribute('data-src'))
       .filter(u => u && !u.startsWith('data:'));
@@ -153,18 +159,21 @@ func MetadataScript() string {
     if (merged.title && merged.text) break;
   }
 
-  if (!merged) {
+	  if (!merged) {
     return {
       error_code: 'SELECTOR_STALE',
       error_message: '未能从页面提取结构化内容',
       warnings: ['hydration/meta/dom extraction failed'],
       extraction_source: 'none',
     };
-  }
+	  }
 
-  if (!merged.text && (merged.image_urls?.length)) {
-    merged.error_code = 'PARTIAL_CONTENT';
-    merged.warnings = [...(merged.warnings || []), 'text empty, media only'];
+	  merged.final_url = String(location.href || '');
+	  merged.page_title = document.title || '';
+	  merged.body_text_length = (merged.text || '').length;
+	  if (!merged.text && (merged.image_urls?.length)) {
+	    merged.error_code = 'PARTIAL_CONTENT';
+	    merged.warnings = [...(merged.warnings || []), 'text empty, media only'];
   }
   return merged;
 })()`

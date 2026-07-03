@@ -85,6 +85,16 @@ func (s *Service) throttle(platform string) {
 	time.Sleep(time.Duration(sleepMs) * time.Millisecond)
 }
 
+func (s *Service) collectTimeoutMs() int {
+	totalSec := s.cfg.LocalBrowser.TotalTimeoutSec
+	if totalSec <= 0 {
+		totalSec = 90
+	}
+	// Keep runtime's outer budget larger than browser navigation/selector work
+	// plus lightweight API probing and export handoff.
+	return (totalSec + 30) * 1000
+}
+
 // CollectURL fetches one URL and exports to disk.
 func (s *Service) CollectURL(ctx context.Context, url string, formats []string, outDir string) (ExportResult, error) {
 	if len(formats) == 0 {
@@ -102,6 +112,7 @@ func (s *Service) CollectURL(ctx context.Context, url string, formats []string, 
 		Formats:      formats,
 		IncludeMedia: s.cfg.Collect.IncludeMedia == nil || *s.cfg.Collect.IncludeMedia,
 		Match:        match,
+		TimeoutMs:    s.collectTimeoutMs(),
 	})
 	if err != nil {
 		return ExportResult{}, err

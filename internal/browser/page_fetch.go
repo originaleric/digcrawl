@@ -24,9 +24,10 @@ type PageFetchRequest struct {
 
 // PageFetchResult fetch 执行结果。
 type PageFetchResult struct {
-	Status     int            `json:"status"`
-	Body       string         `json:"body"`
-	ParsedJSON map[string]any `json:"-"`
+	Status      int            `json:"status"`
+	Body        string         `json:"body"`
+	ContentType string         `json:"content_type,omitempty"`
+	ParsedJSON  map[string]any `json:"-"`
 }
 
 // PageFetchJSON 打开 warm 页后在浏览器上下文执行 fetch，返回 JSON 响应体（若可解析）。
@@ -108,10 +109,11 @@ func pageFetchEval(page *rod.Page, fetchURL, method, body, referer string) (*Pag
     opts.headers['Content-Type'] = 'application/json';
     opts.body = body;
   }
-  return fetch(url, opts).then(async (r) => ({
+  return fetch(url, opts).then(async (r) => JSON.stringify({
     status: r.status,
+    content_type: r.headers.get('content-type') || '',
     body: await r.text()
-  })).catch((e) => ({ status: 0, body: String(e) }));
+  })).catch((e) => JSON.stringify({ status: 0, body: String(e), content_type: '' }));
 }`
 	eval, err := page.Eval(script, fetchURL, method, body, referer)
 	if err != nil {
@@ -121,8 +123,15 @@ func pageFetchEval(page *rod.Page, fetchURL, method, body, referer string) (*Pag
 	if err != nil {
 		return nil, err
 	}
+	raw := strings.TrimSpace(jsonVal.Str())
+	var payload string
+	if strings.HasPrefix(raw, "\"") {
+		if err := json.Unmarshal([]byte(raw), &payload); err == nil {
+			raw = strings.TrimSpace(payload)
+		}
+	}
 	var out PageFetchResult
-	if err := json.Unmarshal([]byte(jsonVal.Str()), &out); err != nil {
+	if err := json.Unmarshal([]byte(raw), &out); err != nil {
 		return nil, fmt.Errorf("解析 fetch 结果失败: %w", err)
 	}
 	if out.Status == 0 {

@@ -18,6 +18,7 @@ type RunOptions struct {
 	Formats      []string
 	IncludeMedia bool
 	Match        Match
+	TimeoutMs    int
 }
 
 // Run executes a tool via gateway runtime and returns parsed output.
@@ -45,6 +46,9 @@ func Run(ctx context.Context, rt *runtime.Runtime, opts RunOptions) (map[string]
 		ID:    "collect_" + uuid.NewString(),
 		Tool:  match.Tool,
 		Input: inBytes,
+	}
+	if opts.TimeoutMs > 0 {
+		call.Policy.TimeoutMs = opts.TimeoutMs
 	}
 	result := rt.Execute(ctx, call)
 	if result.Status != "success" {

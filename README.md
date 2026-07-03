@@ -35,13 +35,15 @@ DigCrawl 的核心目标不是“提供一个网关”，而是把公众号、�
 | 微信公众号 | `mp.weixin.qq.com` | `wechat.article.read` |
 | 小红书 | `xiaohongshu.com`、`xhslink.com` | `xiaohongshu.note.read` |
 | 抖音 | `douyin.com` | `douyin.video.read` |
-| 今日头条 | `toutiao.com`、`m.toutiao.com` | `toutiao.article.read` |
+| 今日头条文章 | `toutiao.com`、`m.toutiao.com` | `toutiao.article.read` |
 | X | `x.com`、`twitter.com` | `x.post.read` |
 | 普通网页 | 任意 `http(s)` URL | `browser.browse` |
 
-平台读取会返回结构化错误，便于业务系统判断是否需要人工登录、重试或跳过，例如 `LOGIN_REQUIRED`、`CAPTCHA_REQUIRED`、`RATE_LIMITED`、内容删除/私密、选择器失效等。
+平台读取会返回结构化错误，便于业务系统判断是否需要人工登录、重试或跳过，例如 `LOGIN_REQUIRED`、`CAPTCHA_REQUIRED`、`RATE_LIMITED`、`CONTENT_TYPE_MISMATCH`、内容删除/私密、选择器失效等。
 
 微信公众号公开文章会优先走 HTTP 静态解析，直接提取标题、作者、发布时间、正文、Markdown/HTML 和图片资源；只有网络瞬断或解析状态不确定时才进入浏览器兜底。若微信安全验证、频控、删除/私密页面或最终 URL 跳出微信域名，会返回结构化错误而不是导出占位内容。
+
+今日头条读取面向公开文章页，先进行轻量 API 探测，再回落到浏览器 DOM / hydration / meta 提取；若 `toutiao.com/group/...` 实际跳转到西瓜、抖音或视频内容，会快速返回 `CONTENT_TYPE_MISMATCH`，不会作为文章导出。
 
 ## 快速开始
 

@@ -53,3 +53,35 @@ func TestStructuredPlatformErrorIgnoresNormalOutput(t *testing.T) {
 		t.Fatalf("expected no structured error, got code=%q msg=%q", code, msg)
 	}
 }
+
+func TestRunSetsToolCallTimeoutPolicy(t *testing.T) {
+	t.Parallel()
+
+	var gotTimeout int
+	reg := registry.New()
+	reg.Register(registry.Entry{
+		Descriptor: protocol.ToolDescriptor{Name: "toutiao.article.read"},
+		Handler: func(ctx context.Context, call *protocol.ToolCall) (map[string]any, []protocol.Artifact, error) {
+			gotTimeout = call.Policy.TimeoutMs
+			return map[string]any{
+				"platform":     "toutiao",
+				"content_type": "article",
+				"title":        "标题",
+				"text":         "正文",
+			}, nil, nil
+		},
+	})
+	rt := runtime.New(reg, runtime.Options{InstanceID: "test"})
+
+	_, _, err := Run(context.Background(), rt, RunOptions{
+		URL:       "https://www.toutiao.com/group/123/",
+		Match:     Match{Platform: "toutiao", Tool: "toutiao.article.read"},
+		TimeoutMs: 120000,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotTimeout != 120000 {
+		t.Fatalf("expected timeout policy 120000, got %d", gotTimeout)
+	}
+}

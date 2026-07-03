@@ -16,6 +16,7 @@ const (
 )
 
 var ArticleBrowseAttempts = []platform.BrowseAttempt{
+	{WaitSelector: DefaultWaitSelector, ContentSelector: DefaultContentSelector},
 	{WaitSelector: "article", ContentSelector: "article"},
 	{WaitSelector: ".article-content", ContentSelector: ".article-content"},
 	{WaitSelector: ".tt-article-content", ContentSelector: ".tt-article-content"},
