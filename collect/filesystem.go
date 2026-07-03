@@ -11,6 +11,8 @@ import (
 
 var unsafeName = regexp.MustCompile(`[<>:"/\\|?*\x00-\x1f]+`)
 
+const maxFilenameBytes = 120
+
 // OutputPaths describes files written for one collect run.
 type OutputPaths struct {
 	Dir      string
@@ -56,13 +58,28 @@ func BuildOutputPaths(root string, title string, t time.Time) (OutputPaths, erro
 }
 
 func sanitizeFilename(name string) string {
-	name = strings.TrimSpace(name)
+	name = strings.ToValidUTF8(strings.TrimSpace(name), "")
 	name = unsafeName.ReplaceAllString(name, "_")
 	name = strings.Trim(name, "._ ")
-	if len(name) > 120 {
-		name = name[:120]
-	}
+	name = truncateUTF8Bytes(name, maxFilenameBytes)
+	name = strings.Trim(name, "._ ")
 	return name
+}
+
+func truncateUTF8Bytes(name string, maxBytes int) string {
+	if maxBytes <= 0 || len(name) <= maxBytes {
+		return name
+	}
+	out := strings.Builder{}
+	out.Grow(maxBytes)
+	for _, r := range name {
+		next := string(r)
+		if out.Len()+len(next) > maxBytes {
+			break
+		}
+		out.WriteString(next)
+	}
+	return out.String()
 }
 
 // UniquePaths avoids overwriting when the same title is collected twice.

@@ -70,10 +70,24 @@ func (c *Content) ToMap() map[string]any {
 
 func normalizeFormats(formats []string) []string {
 	out := make([]string, 0, len(formats))
+	seen := map[string]bool{}
+	add := func(f string) {
+		if f == "" || seen[f] {
+			return
+		}
+		seen[f] = true
+		out = append(out, f)
+	}
 	for _, f := range formats {
 		f = strings.ToLower(strings.TrimSpace(f))
-		if f != "" {
-			out = append(out, f)
+		switch f {
+		case "md", "markdown":
+			add("markdown")
+		case "json":
+			add("text")
+			add("markdown")
+		case "text", "html":
+			add(f)
 		}
 	}
 	return out

@@ -111,8 +111,12 @@ func BrowserBrowse(ctx context.Context, req *BrowserBrowseRequest) (*BrowserBrow
 	}
 
 	title, _ := pageTitle(page)
+	finalURL := targetURL.String()
+	if info, err := page.Info(); err == nil && strings.TrimSpace(info.URL) != "" {
+		finalURL = strings.TrimSpace(info.URL)
+	}
 	resp := &BrowserBrowseResponse{
-		URL:   targetURL.String(),
+		URL:   finalURL,
 		Title: title,
 	}
 

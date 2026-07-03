@@ -9,6 +9,7 @@ const (
 	ErrContentDeleted   = "CONTENT_DELETED"
 	ErrRateLimited      = "RATE_LIMITED"
 	ErrRegionRestricted = "REGION_RESTRICTED"
+	ErrScopeViolation   = "SCOPE_VIOLATION"
 	ErrSelectorStale    = "SELECTOR_STALE"
 	ErrPartialContent   = "PARTIAL_CONTENT"
 )
@@ -22,6 +23,7 @@ var fatalErrorCodes = map[string]bool{
 	ErrContentDeleted:   true,
 	ErrRateLimited:      true,
 	ErrRegionRestricted: true,
+	ErrScopeViolation:   true,
 }
 
 // IsFatalErrorCode 判断 metadata 中的 error_code 是否应作为读取失败返回。

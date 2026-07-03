@@ -1,0 +1,18 @@
+<!doctype html>
+<html>
+<body>
+  <div id="js_article">
+    <h1 id="activity-name"></h1>
+    <div id="js_content">
+      <p>这篇文章依赖脚本变量回填标题和作者，但正文 DOM 仍然存在。</p>
+      <p>测试静态解析器应该能够从 msg_title 和 nickname 中取到可用的结构化字段。</p>
+      <p>这里补充文本，保证正文长度足以通过质量校验并模拟真实文章内容。</p>
+    </div>
+  </div>
+  <script>
+    var nickname = htmlDecode("脚本作者");
+    var ct = "1557836267";
+    var msg_title = '脚本标题'.html(false);
+  </script>
+</body>
+</html>

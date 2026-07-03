@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/originaleric/digcrawl/protocol"
@@ -63,6 +64,12 @@ func Run(ctx context.Context, rt *runtime.Runtime, opts RunOptions) (map[string]
 	if out == nil {
 		out = map[string]any{}
 	}
+	if code, message := structuredPlatformError(out); code != "" {
+		if message == "" {
+			message = code
+		}
+		return out, result, fmt.Errorf("%s", message)
+	}
 	out["_collect_platform"] = match.Platform
 	if _, ok := out["source_url"]; !ok {
 		out["source_url"] = opts.URL
@@ -83,4 +90,25 @@ func buildToolInput(match Match, opts RunOptions) (map[string]any, error) {
 		"format":        opts.Formats,
 		"include_media": opts.IncludeMedia,
 	}, nil
+}
+
+func structuredPlatformError(out map[string]any) (string, string) {
+	if out == nil {
+		return "", ""
+	}
+	meta, _ := out["platform_metadata"].(map[string]any)
+	if len(meta) == 0 {
+		return "", ""
+	}
+	code, _ := meta["error_code"].(string)
+	code = strings.TrimSpace(code)
+	if code == "" {
+		return "", ""
+	}
+	message, _ := meta["error_message"].(string)
+	message = strings.TrimSpace(message)
+	if message == "" {
+		message = code
+	}
+	return code, message
 }

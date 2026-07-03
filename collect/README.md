@@ -27,6 +27,10 @@ digcrawl collect show <id|url>
 digcrawl collect migrate-index           # 从 index.json 导入 SQLite
 ```
 
+## 平台读取
+
+Collect 会先按 URL 检测平台并调用对应读取工具。微信公众号公开文章优先使用 HTTP HTML 静态解析，成功时输出 `read_channel=http`、`extraction_source=html`；网络 transient 或解析状态不确定时才进入浏览器兜底。验证码、频控、删除、私密、登录要求和跳出微信域名会作为结构化错误返回，避免把平台壳页或风控页写成正常文章。
+
 ## 输出布局
 
 ```text
@@ -47,6 +51,8 @@ collect-inbox/
   processed/             # 已成功
   failed/                # 失败记录
 ```
+
+导出文件名会移除非法路径字符，并按 UTF-8 边界限制长度；长中文标题会被安全截断，不会切断多字节字符。
 
 ## 配置
 

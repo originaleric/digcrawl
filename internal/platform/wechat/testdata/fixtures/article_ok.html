@@ -1,0 +1,27 @@
+<!doctype html>
+<html>
+<head><title></title></head>
+<body>
+  <div id="js_article" class="rich_media">
+    <h1 class="rich_media_title" id="activity-name">
+      <span class="js_title_inner">测试文章标题</span>
+    </h1>
+    <div id="meta_content">
+      <span id="profileBt"><a id="js_name">测试公众号</a></span>
+      <em id="publish_time"></em>
+    </div>
+    <div class="rich_media_content js_underline_content" id="js_content" style="visibility: hidden; opacity: 0;">
+      <p>这是一段用于测试的微信公众号正文，保留真实的 js_content 结构。</p>
+      <p>正文需要足够长，以便验证静态解析路径可以稳定提取纯文本、Markdown、HTML 与媒体列表。</p>
+      <p>这里继续补充一些测试文本，模拟公开文章里常见的段落内容和图片。</p>
+      <p><img data-src="https://mmbiz.qpic.cn/test/image-a.jpg" data-type="jpeg"></p>
+    </div>
+  </div>
+  <script>
+    var nickname = htmlDecode("测试公众号");
+    var ct = "1557836267";
+    var createTime = '2019-05-14 20:17';
+    var msg_title = '测试文章标题'.html(false);
+  </script>
+</body>
+</html>

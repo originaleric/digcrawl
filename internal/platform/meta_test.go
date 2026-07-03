@@ -19,6 +19,9 @@ func TestIsFatalErrorCode(t *testing.T) {
 	if !IsFatalErrorCode(ErrLoginRequired) {
 		t.Fatal("login should be fatal")
 	}
+	if !IsFatalErrorCode(ErrScopeViolation) {
+		t.Fatal("scope violation should be fatal")
+	}
 	if IsFatalErrorCode(ErrPartialContent) {
 		t.Fatal("partial should not be fatal")
 	}

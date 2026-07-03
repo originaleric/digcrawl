@@ -110,6 +110,8 @@ go install ./cmd/digcollect
 | `ReadMetricsEnabled` | 是否输出 `[platform-read]` 结构化日志 |
 | `HealthProbes` | `digcrawl browser check --trial` 的平台默认试读 URL |
 
+微信公众号公开文章默认优先使用 HTTP HTML 静态解析，成功时会在 `platform_metadata` 中标记 `read_channel=http`、`extraction_source=html`。只有网络 transient 或解析状态不确定时才进入 Browser 兜底；验证码、频控、删除、私密、登录要求和最终 URL 跳出微信域名会直接返回结构化错误。
+
 ### Providers（内置 Provider 开关）
 
 | 字段 | 说明 |
@@ -328,6 +330,8 @@ digcrawl browser check --platform toutiao \
 | `--out` | 覆盖 `Collect.OutputDir` |
 | `--format` | 逗号分隔：`md`、`html`、`json` |
 | `--file` | 文本文件，每行一个 URL |
+
+导出的文章文件名会清理非法字符，并按 UTF-8 边界截断长标题；`--format md,json,html` 会同时保留 Markdown、JSON 所需文本字段和 HTML。
 
 ### 批量文件
 

@@ -21,6 +21,25 @@ func TestApplyFormats(t *testing.T) {
 	}
 }
 
+func TestApplyFormatsTreatsCollectFormatsAsTextualOutputs(t *testing.T) {
+	t.Parallel()
+	c := &Content{
+		Platform:    "wechat",
+		ContentType: "article",
+		SourceURL:   "https://mp.weixin.qq.com/s/1",
+		Text:        "body",
+		Markdown:    "# title",
+		HTML:        "<p>body</p>",
+		CapturedAt:  "2026-07-03T10:00:00+08:00",
+	}
+	out := ApplyFormats(c, []string{"md", "json", "html"})
+	for _, key := range []string{"text", "markdown", "html"} {
+		if _, ok := out[key]; !ok {
+			t.Fatalf("expected %s to be preserved for collect formats, got %+v", key, out)
+		}
+	}
+}
+
 func TestEngagementFromMeta(t *testing.T) {
 	t.Parallel()
 	e := EngagementFromMeta(map[string]any{"likes": float64(10), "comments": float64(2)})
