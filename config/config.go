@@ -102,6 +102,90 @@ type PlatformConfig struct {
 	BrowseRetryDelayMs     int               `yaml:"BrowseRetryDelayMs" json:"BrowseRetryDelayMs,omitempty"`
 	ReadMetricsEnabled     *bool             `yaml:"ReadMetricsEnabled" json:"ReadMetricsEnabled,omitempty"`
 	HealthProbes           map[string]string `yaml:"HealthProbes" json:"HealthProbes,omitempty"`
+	X                      XAPIConfig        `yaml:"X" json:"X,omitempty"`
+}
+
+// XAPIConfig controls X/Twitter API based post reads.
+type XAPIConfig struct {
+	APIEnabled        *bool  `yaml:"APIEnabled" json:"APIEnabled,omitempty"`
+	OEmbedEnabled     *bool  `yaml:"OEmbedEnabled" json:"OEmbedEnabled,omitempty"`
+	AuthMode          string `yaml:"AuthMode" json:"AuthMode,omitempty"` // app_only | bearer
+	APIBaseURL        string `yaml:"APIBaseURL" json:"APIBaseURL,omitempty"`
+	TokenURL          string `yaml:"TokenURL" json:"TokenURL,omitempty"`
+	OEmbedURL         string `yaml:"OEmbedURL" json:"OEmbedURL,omitempty"`
+	ConsumerKey       string `yaml:"ConsumerKey" json:"ConsumerKey,omitempty"`
+	ConsumerKeySecret string `yaml:"ConsumerKeySecret" json:"ConsumerKeySecret,omitempty"`
+	BearerToken       string `yaml:"BearerToken" json:"BearerToken,omitempty"`
+	APITimeoutSec     int    `yaml:"APITimeoutSec" json:"APITimeoutSec,omitempty"`
+	APIMaxRetries     int    `yaml:"APIMaxRetries" json:"APIMaxRetries,omitempty"`
+}
+
+// OEmbedEnabledOrDefault reports whether X oEmbed fallback is enabled.
+func (c XAPIConfig) OEmbedEnabledOrDefault() bool {
+	if c.OEmbedEnabled == nil {
+		return true
+	}
+	return *c.OEmbedEnabled
+}
+
+// EnabledOrDefault reports whether X API reads are enabled.
+func (c XAPIConfig) EnabledOrDefault() bool {
+	if c.APIEnabled == nil {
+		return true
+	}
+	return *c.APIEnabled
+}
+
+// AuthModeOrDefault returns the configured X API auth mode.
+func (c XAPIConfig) AuthModeOrDefault() string {
+	mode := strings.ToLower(strings.TrimSpace(c.AuthMode))
+	if mode == "bearer" || mode == "app_only" {
+		return mode
+	}
+	if strings.TrimSpace(c.BearerToken) != "" {
+		return "bearer"
+	}
+	return "app_only"
+}
+
+// APIBaseURLOrDefault returns the X API base URL.
+func (c XAPIConfig) APIBaseURLOrDefault() string {
+	if strings.TrimSpace(c.APIBaseURL) != "" {
+		return strings.TrimRight(strings.TrimSpace(c.APIBaseURL), "/")
+	}
+	return "https://api.twitter.com"
+}
+
+// TokenURLOrDefault returns the OAuth2 app-only token endpoint.
+func (c XAPIConfig) TokenURLOrDefault() string {
+	if strings.TrimSpace(c.TokenURL) != "" {
+		return strings.TrimSpace(c.TokenURL)
+	}
+	return "https://api.twitter.com/oauth2/token"
+}
+
+// OEmbedURLOrDefault returns the public X/Twitter oEmbed endpoint.
+func (c XAPIConfig) OEmbedURLOrDefault() string {
+	if strings.TrimSpace(c.OEmbedURL) != "" {
+		return strings.TrimSpace(c.OEmbedURL)
+	}
+	return "https://publish.twitter.com/oembed"
+}
+
+// APITimeoutSecOrDefault returns the X API timeout in seconds.
+func (c XAPIConfig) APITimeoutSecOrDefault() int {
+	if c.APITimeoutSec > 0 {
+		return c.APITimeoutSec
+	}
+	return 8
+}
+
+// APIMaxRetriesOrDefault returns transient retry attempts for X API requests.
+func (c XAPIConfig) APIMaxRetriesOrDefault() int {
+	if c.APIMaxRetries > 0 {
+		return c.APIMaxRetries
+	}
+	return 1
 }
 
 // GatewayConfig HTTP Tool Gateway settings.
@@ -236,6 +320,18 @@ func init() {
 				BrowseRetryDelayMs:     800,
 				ReadMetricsEnabled:     &enabled,
 				HealthProbes:           map[string]string{},
+				X: XAPIConfig{
+					APIEnabled:        &enabled,
+					OEmbedEnabled:     &enabled,
+					AuthMode:          "app_only",
+					APIBaseURL:        "https://api.twitter.com",
+					TokenURL:          "https://api.twitter.com/oauth2/token",
+					OEmbedURL:         "https://publish.twitter.com/oembed",
+					ConsumerKey:       "r3lDvHngF1lLm9nbKABcpieHt",
+					ConsumerKeySecret: "DdQgNA7LVBByIAlQTMniEwH4r42dFIfCtpOTxPyWjhTIZe21WI",
+					APITimeoutSec:     8,
+					APIMaxRetries:     1,
+				},
 			},
 			Providers: ProvidersConfig{
 				ExampleEnabled:  &enabled,
@@ -410,6 +506,36 @@ func mergeDefaults(cfg *Config) {
 	}
 	if cfg.Platform.HealthProbes == nil {
 		cfg.Platform.HealthProbes = defaultCfg.Platform.HealthProbes
+	}
+	if cfg.Platform.X.APIEnabled == nil {
+		cfg.Platform.X.APIEnabled = defaultCfg.Platform.X.APIEnabled
+	}
+	if cfg.Platform.X.OEmbedEnabled == nil {
+		cfg.Platform.X.OEmbedEnabled = defaultCfg.Platform.X.OEmbedEnabled
+	}
+	if cfg.Platform.X.AuthMode == "" {
+		cfg.Platform.X.AuthMode = defaultCfg.Platform.X.AuthMode
+	}
+	if cfg.Platform.X.APIBaseURL == "" {
+		cfg.Platform.X.APIBaseURL = defaultCfg.Platform.X.APIBaseURL
+	}
+	if cfg.Platform.X.TokenURL == "" {
+		cfg.Platform.X.TokenURL = defaultCfg.Platform.X.TokenURL
+	}
+	if cfg.Platform.X.OEmbedURL == "" {
+		cfg.Platform.X.OEmbedURL = defaultCfg.Platform.X.OEmbedURL
+	}
+	if cfg.Platform.X.ConsumerKey == "" {
+		cfg.Platform.X.ConsumerKey = defaultCfg.Platform.X.ConsumerKey
+	}
+	if cfg.Platform.X.ConsumerKeySecret == "" {
+		cfg.Platform.X.ConsumerKeySecret = defaultCfg.Platform.X.ConsumerKeySecret
+	}
+	if cfg.Platform.X.APITimeoutSec == 0 {
+		cfg.Platform.X.APITimeoutSec = defaultCfg.Platform.X.APITimeoutSec
+	}
+	if cfg.Platform.X.APIMaxRetries == 0 {
+		cfg.Platform.X.APIMaxRetries = defaultCfg.Platform.X.APIMaxRetries
 	}
 }
 

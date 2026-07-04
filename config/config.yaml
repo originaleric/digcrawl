@@ -99,6 +99,18 @@ Platform:
   BrowseRetryDelayMs: 800
   ReadMetricsEnabled: true
   HealthProbes: {}
+  X:
+    APIEnabled: true
+    OEmbedEnabled: true
+    AuthMode: "app_only"
+    APIBaseURL: "https://api.twitter.com"
+    TokenURL: "https://api.twitter.com/oauth2/token"
+    OEmbedURL: "https://publish.twitter.com/oembed"
+    ConsumerKey: "r3lDvHngF1lLm9nbKABcpieHt"
+    ConsumerKeySecret: "DdQgNA7LVBByIAlQTMniEwH4r42dFIfCtpOTxPyWjhTIZe21WI"
+    BearerToken: ""
+    APITimeoutSec: 8
+    APIMaxRetries: 1
 
 Providers:
   ExampleEnabled: true
