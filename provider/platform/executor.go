@@ -3,7 +3,10 @@ package platformprov
 import (
 	"context"
 	"errors"
+	"strings"
 
+	"github.com/originaleric/digcrawl/config"
+	"github.com/originaleric/digcrawl/internal/ocr"
 	iplatform "github.com/originaleric/digcrawl/internal/platform"
 	"github.com/originaleric/digcrawl/protocol"
 	"github.com/originaleric/digcrawl/runtime/artifact"
@@ -117,6 +120,13 @@ func platformReadHandler(
 				return iplatform.ErrorOutput(re), nil, nil
 			}
 			return nil, nil, err
+		}
+		if !strings.HasPrefix(call.ID, "collect_") {
+			opts := ocr.EnrichOptions{}
+			if content.ScreenshotBase64 != "" {
+				opts.ExtraImages = []ocr.ImageRef{ocr.PNGDataURLImageRef("screenshot", content.ScreenshotBase64)}
+			}
+			ocr.EnrichContentWithOptions(ctx, content, config.Get().OCR, opts)
 		}
 		out := iplatform.ApplyFormats(content, in.Format)
 		var artifacts []protocol.Artifact

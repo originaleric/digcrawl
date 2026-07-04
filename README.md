@@ -24,9 +24,12 @@ DigCrawl 的核心目标不是“提供一个网关”，而是把公众号、�
 | 登录态复用 | 支持通过有头浏览器完成平台登录，后续采集复用本机 Cookie |
 | 批量采集与收件箱 | 支持 URL 文件批处理、`collect-inbox` 收件箱和 `--watch` 轮询 |
 | 多格式导出 | 同时导出 Markdown、HTML、JSON，可选下载媒体到 `.assets/` |
+| OCR 图片文字提取 | 可通过配置接入 OCR provider，对正文图片、截图、平台媒体和本地 assets 提取文字并写入结构化元数据 |
 | 可检索持久化 | 支持 `index.json`、SQLite `collect.db` 或二者同时启用 |
 | 宿主集成 | 可通过 HTTP Gateway、反向 Collector、MCP、stdio 或 Go SDK 接入业务系统 |
 | 本机安全边界 | 默认本机监听、工具白名单、高风险工具审批、域名策略、审计日志和 Artifact 管理 |
+
+OCR 目前支持 OpenAI-compatible 视觉模型、智谱 `zhipu_ocr` / `glm-ocr` 原生接口和本地开发桩；Collect 下载媒体时会优先对本地 `.assets` 图片做 OCR，并将结果写入 `platform_metadata.ocr_results`。
 
 ## 支持的平台
 

@@ -74,12 +74,22 @@ func DownloadAssets(ctx context.Context, assetsDir string, out map[string]any, o
 			mediaType, _ := item["type"].(string)
 			name := assetFilename(rawURL, mediaType, i)
 			dest := filepath.Join(assetsDir, name)
-			if err := downloadFile(ctx, client, rawURL, dest, opts.MaxBytes, referer); err != nil {
+			contentType, err := downloadFile(ctx, client, rawURL, dest, opts.MaxBytes, referer)
+			if err != nil {
 				manifest = append(manifest, map[string]any{
 					"type": item["type"], "url": rawURL, "error": err.Error(),
 				})
 				continue
 			}
+			finalName, finalDest, err := normalizeDownloadedAssetName(name, dest, rawURL, mediaType, contentType)
+			if err != nil {
+				manifest = append(manifest, map[string]any{
+					"type": item["type"], "url": rawURL, "error": err.Error(),
+				})
+				continue
+			}
+			name = finalName
+			dest = finalDest
 			saved = append(saved, dest)
 			manifest = append(manifest, map[string]any{
 				"type": mediaType, "url": rawURL, "local": name,
@@ -292,40 +302,142 @@ func assetFilename(rawURL, mediaType string, index int) string {
 	return fmt.Sprintf("%03d%s", index+1, ext)
 }
 
-func downloadFile(ctx context.Context, client *http.Client, rawURL, dest string, maxBytes int64, referer string) error {
+func normalizeDownloadedAssetName(name, dest, rawURL, mediaType, contentType string) (string, string, error) {
+	ext := assetExtension(rawURL, mediaType, contentType, dest)
+	currentExt := strings.ToLower(filepath.Ext(name))
+	if ext == "" || ext == currentExt {
+		return name, dest, nil
+	}
+	base := strings.TrimSuffix(name, filepath.Ext(name))
+	finalName := base + ext
+	finalDest := filepath.Join(filepath.Dir(dest), finalName)
+	if finalDest == dest {
+		return finalName, finalDest, nil
+	}
+	if err := os.Rename(dest, finalDest); err != nil {
+		return "", "", err
+	}
+	return finalName, finalDest, nil
+}
+
+func assetExtension(rawURL, mediaType, contentType, path string) string {
+	if ext := extensionFromContentType(contentType); ext != "" {
+		return ext
+	}
+	if path != "" {
+		if ext := extensionFromContentType(detectFileContentType(path)); ext != "" {
+			return ext
+		}
+	}
+	if ext := knownExtensionFromURL(rawURL); ext != "" {
+		return ext
+	}
+	switch strings.ToLower(mediaType) {
+	case "image":
+		return ".jpg"
+	case "video":
+		return ".mp4"
+	default:
+		return ".bin"
+	}
+}
+
+func extensionFromContentType(contentType string) string {
+	contentType = strings.ToLower(strings.TrimSpace(strings.Split(contentType, ";")[0]))
+	switch contentType {
+	case "image/jpeg", "image/jpg":
+		return ".jpg"
+	case "image/png":
+		return ".png"
+	case "image/gif":
+		return ".gif"
+	case "image/webp":
+		return ".webp"
+	case "image/bmp", "image/x-ms-bmp":
+		return ".bmp"
+	case "image/avif":
+		return ".avif"
+	case "image/svg+xml":
+		return ".svg"
+	case "video/mp4":
+		return ".mp4"
+	case "video/webm":
+		return ".webm"
+	case "video/quicktime":
+		return ".mov"
+	default:
+		return ""
+	}
+}
+
+func detectFileContentType(path string) string {
+	f, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	buf := make([]byte, 512)
+	n, err := f.Read(buf)
+	if err != nil && err != io.EOF {
+		return ""
+	}
+	if n == 0 {
+		return ""
+	}
+	return http.DetectContentType(buf[:n])
+}
+
+func knownExtensionFromURL(rawURL string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return ""
+	}
+	path := strings.ToLower(u.EscapedPath())
+	for _, ext := range []string{".jpeg", ".jpg", ".png", ".gif", ".webp", ".bmp", ".avif", ".svg", ".mp4", ".webm", ".mov"} {
+		if strings.Contains(path, ext) {
+			if ext == ".jpeg" {
+				return ".jpg"
+			}
+			return ext
+		}
+	}
+	return ""
+}
+
+func downloadFile(ctx context.Context, client *http.Client, rawURL, dest string, maxBytes int64, referer string) (string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
-		return err
+		return "", err
 	}
 	if referer != "" {
 		req.Header.Set("Referer", referer)
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("http %d", resp.StatusCode)
+		return "", fmt.Errorf("http %d", resp.StatusCode)
 	}
 	if resp.ContentLength > maxBytes {
-		return fmt.Errorf("content length %d exceeds max %d", resp.ContentLength, maxBytes)
+		return "", fmt.Errorf("content length %d exceeds max %d", resp.ContentLength, maxBytes)
 	}
 	f, err := os.Create(dest)
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer f.Close()
 	limited := io.LimitReader(resp.Body, maxBytes+1)
 	n, err := io.Copy(f, limited)
 	if err != nil {
-		return err
+		return "", err
 	}
 	if n > maxBytes {
 		_ = os.Remove(dest)
-		return fmt.Errorf("download exceeds max bytes %d", maxBytes)
+		return "", fmt.Errorf("download exceeds max bytes %d", maxBytes)
 	}
-	return nil
+	return resp.Header.Get("Content-Type"), nil
 }
 
 func writeAssetsManifest(assetsDir string, out map[string]any, downloaded []map[string]any) ([]string, error) {

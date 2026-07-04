@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/originaleric/digcrawl/config"
+	"github.com/originaleric/digcrawl/internal/ocr"
 	"github.com/originaleric/digcrawl/runtime/artifact"
 )
 
@@ -21,6 +23,7 @@ type ExportOptions struct {
 	MaxMediaBytes   int64
 	MediaTimeoutSec int
 	ArtifactStore   artifact.Store
+	OCR             config.OCRConfig
 }
 
 // ExportResult lists written files.
@@ -44,6 +47,10 @@ func Export(ctx context.Context, out map[string]any, opts ExportOptions) (Export
 	paths, err = UniquePaths(paths, formats)
 	if err != nil {
 		return ExportResult{}, err
+	}
+
+	if opts.OCR.EnabledOrDefault() && !opts.DownloadMedia {
+		ocr.EnrichMap(ctx, out, opts.OCR, ocr.EnrichOptions{})
 	}
 
 	var written []string
@@ -78,6 +85,7 @@ func Export(ctx context.Context, out map[string]any, opts ExportOptions) (Export
 	}
 
 	var downloaded []map[string]any
+	ocrAppliedAfterWrite := false
 	if opts.DownloadMedia {
 		assetFiles, err := DownloadAssets(ctx, paths.Assets, out, AssetDownloadOptions{
 			MaxBytes:      opts.MaxMediaBytes,
@@ -100,6 +108,14 @@ func Export(ctx context.Context, out map[string]any, opts ExportOptions) (Export
 				}
 			}
 		}
+		if opts.OCR.EnabledOrDefault() {
+			if results := ocr.EnrichMap(ctx, out, opts.OCR, ocr.EnrichOptions{
+				AssetsDir:  paths.Assets,
+				Downloaded: downloaded,
+			}); len(results) > 0 {
+				ocrAppliedAfterWrite = true
+			}
+		}
 	} else {
 		manifestFiles, err := writeAssetsManifest(paths.Assets, out, nil)
 		if err != nil {
@@ -108,11 +124,43 @@ func Export(ctx context.Context, out map[string]any, opts ExportOptions) (Export
 		written = append(written, manifestFiles...)
 	}
 
+	if ocrAppliedAfterWrite {
+		if err := rewriteTextualOutputs(out, paths, formats); err != nil {
+			return ExportResult{}, err
+		}
+	}
+
 	if containsFormat(formats, "md") && len(downloaded) > 0 {
 		_ = RewriteMarkdownAssets(paths.Markdown, paths.Assets, downloaded)
 	}
 
 	return ExportResult{Paths: paths, Written: written, Downloaded: downloaded}, nil
+}
+
+func rewriteTextualOutputs(out map[string]any, paths OutputPaths, formats []string) error {
+	if containsFormat(formats, "md") {
+		if err := os.WriteFile(paths.Markdown, []byte(pickMarkdownBody(out)), 0o644); err != nil {
+			return err
+		}
+	}
+	if containsFormat(formats, "html") {
+		body := pickHTMLBody(out)
+		if body != "" {
+			if err := os.WriteFile(paths.HTML, []byte(body), 0o644); err != nil {
+				return err
+			}
+		}
+	}
+	if containsFormat(formats, "json") {
+		data, err := json.MarshalIndent(out, "", "  ")
+		if err != nil {
+			return err
+		}
+		if err := os.WriteFile(paths.JSON, data, 0o644); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func normalizeExportFormats(formats []string) []string {

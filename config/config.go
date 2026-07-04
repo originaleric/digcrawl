@@ -16,6 +16,7 @@ type Config struct {
 	Collect      CollectConfig      `yaml:"Collect" json:"Collect"`
 	LocalBrowser LocalBrowserConfig `yaml:"LocalBrowser" json:"LocalBrowser"`
 	Platform     PlatformConfig     `yaml:"Platform" json:"Platform"`
+	OCR          OCRConfig          `yaml:"OCR" json:"OCR"`
 	Providers    ProvidersConfig    `yaml:"Providers" json:"Providers"`
 }
 
@@ -103,6 +104,115 @@ type PlatformConfig struct {
 	ReadMetricsEnabled     *bool             `yaml:"ReadMetricsEnabled" json:"ReadMetricsEnabled,omitempty"`
 	HealthProbes           map[string]string `yaml:"HealthProbes" json:"HealthProbes,omitempty"`
 	X                      XAPIConfig        `yaml:"X" json:"X,omitempty"`
+}
+
+// OCRConfig controls optional image OCR enrichment.
+type OCRConfig struct {
+	Enabled          *bool  `yaml:"Enabled" json:"Enabled,omitempty"`
+	Provider         string `yaml:"Provider" json:"Provider,omitempty"` // openai_compatible | zhipu_ocr | stub
+	APIKey           string `yaml:"APIKey" json:"APIKey,omitempty"`
+	BaseURL          string `yaml:"BaseURL" json:"BaseURL,omitempty"`
+	Model            string `yaml:"Model" json:"Model,omitempty"`
+	Prompt           string `yaml:"Prompt" json:"Prompt,omitempty"`
+	TimeoutSec       int    `yaml:"TimeoutSec" json:"TimeoutSec,omitempty"`
+	MaxImages        int    `yaml:"MaxImages" json:"MaxImages,omitempty"`
+	MaxImageBytes    int64  `yaml:"MaxImageBytes" json:"MaxImageBytes,omitempty"`
+	MaxTokens        int    `yaml:"MaxTokens" json:"MaxTokens,omitempty"`
+	AppendToMarkdown *bool  `yaml:"AppendToMarkdown" json:"AppendToMarkdown,omitempty"`
+	AppendToText     *bool  `yaml:"AppendToText" json:"AppendToText,omitempty"`
+}
+
+// EnabledOrDefault reports whether OCR enrichment is enabled.
+func (c OCRConfig) EnabledOrDefault() bool {
+	if c.Enabled == nil {
+		return false
+	}
+	return *c.Enabled
+}
+
+// ProviderOrDefault returns the configured OCR provider.
+func (c OCRConfig) ProviderOrDefault() string {
+	p := strings.ToLower(strings.TrimSpace(c.Provider))
+	switch p {
+	case "openai_compatible", "stub", "zhipu_ocr":
+		return p
+	case "glm_ocr", "glm-ocr":
+		return "zhipu_ocr"
+	default:
+		return "openai_compatible"
+	}
+}
+
+// BaseURLOrDefault returns the OCR provider base URL.
+func (c OCRConfig) BaseURLOrDefault() string {
+	if strings.TrimSpace(c.BaseURL) != "" {
+		return strings.TrimRight(strings.TrimSpace(c.BaseURL), "/")
+	}
+	return "https://api.openai.com/v1"
+}
+
+// ModelOrDefault returns the OCR model name.
+func (c OCRConfig) ModelOrDefault() string {
+	if strings.TrimSpace(c.Model) != "" {
+		return strings.TrimSpace(c.Model)
+	}
+	return "gpt-4o-mini"
+}
+
+// PromptOrDefault returns the OCR extraction prompt.
+func (c OCRConfig) PromptOrDefault() string {
+	if strings.TrimSpace(c.Prompt) != "" {
+		return strings.TrimSpace(c.Prompt)
+	}
+	return "Extract all readable text from this image. Return only the OCR text. Preserve line breaks when useful."
+}
+
+// TimeoutSecOrDefault returns the OCR request timeout.
+func (c OCRConfig) TimeoutSecOrDefault() int {
+	if c.TimeoutSec > 0 {
+		return c.TimeoutSec
+	}
+	return 30
+}
+
+// MaxImagesOrDefault returns the maximum images OCR will process per content item.
+func (c OCRConfig) MaxImagesOrDefault() int {
+	if c.MaxImages > 0 {
+		return c.MaxImages
+	}
+	return 8
+}
+
+// MaxImageBytesOrDefault returns the maximum local image payload size.
+func (c OCRConfig) MaxImageBytesOrDefault() int64 {
+	if c.MaxImageBytes > 0 {
+		return c.MaxImageBytes
+	}
+	return 5 * 1024 * 1024
+}
+
+// MaxTokensOrDefault returns the OCR response token budget.
+func (c OCRConfig) MaxTokensOrDefault() int {
+	if c.MaxTokens > 0 {
+		return c.MaxTokens
+	}
+	return 1200
+}
+
+// AppendToMarkdownOrDefault reports whether OCR text is appended to Markdown.
+func (c OCRConfig) AppendToMarkdownOrDefault() bool {
+	if c.AppendToMarkdown == nil {
+		return true
+	}
+	return *c.AppendToMarkdown
+}
+
+// AppendToTextOrDefault reports whether OCR text is appended to plain text.
+func (c OCRConfig) AppendToTextOrDefault() bool {
+	if c.AppendToText == nil {
+		return false
+	}
+	return *c.AppendToText
 }
 
 // XAPIConfig controls X/Twitter API based post reads.
@@ -333,6 +443,16 @@ func init() {
 					APIMaxRetries:     1,
 				},
 			},
+			OCR: OCRConfig{
+				Provider:         "openai_compatible",
+				BaseURL:          "https://api.openai.com/v1",
+				Model:            "gpt-4o-mini",
+				TimeoutSec:       30,
+				MaxImages:        8,
+				MaxImageBytes:    5 * 1024 * 1024,
+				MaxTokens:        1200,
+				AppendToMarkdown: &enabled,
+			},
 			Providers: ProvidersConfig{
 				ExampleEnabled:  &enabled,
 				PlatformEnabled: &enabled,
@@ -536,6 +656,39 @@ func mergeDefaults(cfg *Config) {
 	}
 	if cfg.Platform.X.APIMaxRetries == 0 {
 		cfg.Platform.X.APIMaxRetries = defaultCfg.Platform.X.APIMaxRetries
+	}
+	if cfg.OCR.Enabled == nil {
+		cfg.OCR.Enabled = defaultCfg.OCR.Enabled
+	}
+	if cfg.OCR.Provider == "" {
+		cfg.OCR.Provider = defaultCfg.OCR.Provider
+	}
+	if cfg.OCR.BaseURL == "" {
+		cfg.OCR.BaseURL = defaultCfg.OCR.BaseURL
+	}
+	if cfg.OCR.Model == "" {
+		cfg.OCR.Model = defaultCfg.OCR.Model
+	}
+	if cfg.OCR.Prompt == "" {
+		cfg.OCR.Prompt = defaultCfg.OCR.Prompt
+	}
+	if cfg.OCR.TimeoutSec == 0 {
+		cfg.OCR.TimeoutSec = defaultCfg.OCR.TimeoutSec
+	}
+	if cfg.OCR.MaxImages == 0 {
+		cfg.OCR.MaxImages = defaultCfg.OCR.MaxImages
+	}
+	if cfg.OCR.MaxImageBytes == 0 {
+		cfg.OCR.MaxImageBytes = defaultCfg.OCR.MaxImageBytes
+	}
+	if cfg.OCR.MaxTokens == 0 {
+		cfg.OCR.MaxTokens = defaultCfg.OCR.MaxTokens
+	}
+	if cfg.OCR.AppendToMarkdown == nil {
+		cfg.OCR.AppendToMarkdown = defaultCfg.OCR.AppendToMarkdown
+	}
+	if cfg.OCR.AppendToText == nil {
+		cfg.OCR.AppendToText = defaultCfg.OCR.AppendToText
 	}
 }
 

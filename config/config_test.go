@@ -76,3 +76,48 @@ func TestXAPIConfigHelpers(t *testing.T) {
 		t.Fatalf("APIMaxRetriesOrDefault=%d", got)
 	}
 }
+
+func TestOCRConfigHelpers(t *testing.T) {
+	t.Parallel()
+
+	if (OCRConfig{}).EnabledOrDefault() {
+		t.Fatal("zero OCRConfig should default to disabled")
+	}
+	enabled := true
+	if !(OCRConfig{Enabled: &enabled}).EnabledOrDefault() {
+		t.Fatal("explicit enabled OCR should be enabled")
+	}
+	if got := (OCRConfig{}).ProviderOrDefault(); got != "openai_compatible" {
+		t.Fatalf("ProviderOrDefault=%q", got)
+	}
+	if got := (OCRConfig{Provider: "stub"}).ProviderOrDefault(); got != "stub" {
+		t.Fatalf("ProviderOrDefault stub=%q", got)
+	}
+	if got := (OCRConfig{Provider: "zhipu_ocr"}).ProviderOrDefault(); got != "zhipu_ocr" {
+		t.Fatalf("ProviderOrDefault zhipu_ocr=%q", got)
+	}
+	if got := (OCRConfig{Provider: "glm-ocr"}).ProviderOrDefault(); got != "zhipu_ocr" {
+		t.Fatalf("ProviderOrDefault glm-ocr=%q", got)
+	}
+	if got := (OCRConfig{}).BaseURLOrDefault(); got != "https://api.openai.com/v1" {
+		t.Fatalf("BaseURLOrDefault=%q", got)
+	}
+	if got := (OCRConfig{}).ModelOrDefault(); got != "gpt-4o-mini" {
+		t.Fatalf("ModelOrDefault=%q", got)
+	}
+	if got := (OCRConfig{}).TimeoutSecOrDefault(); got != 30 {
+		t.Fatalf("TimeoutSecOrDefault=%d", got)
+	}
+	if got := (OCRConfig{}).MaxImagesOrDefault(); got != 8 {
+		t.Fatalf("MaxImagesOrDefault=%d", got)
+	}
+	if got := (OCRConfig{}).MaxImageBytesOrDefault(); got != 5*1024*1024 {
+		t.Fatalf("MaxImageBytesOrDefault=%d", got)
+	}
+	if !(OCRConfig{}).AppendToMarkdownOrDefault() {
+		t.Fatal("AppendToMarkdown should default to true")
+	}
+	if (OCRConfig{}).AppendToTextOrDefault() {
+		t.Fatal("AppendToText should default to false")
+	}
+}

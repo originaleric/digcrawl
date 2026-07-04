@@ -2,8 +2,11 @@ package browser
 
 import (
 	"context"
+	"strings"
 
+	"github.com/originaleric/digcrawl/config"
 	"github.com/originaleric/digcrawl/internal/browser"
+	"github.com/originaleric/digcrawl/internal/ocr"
 	"github.com/originaleric/digcrawl/protocol"
 	"github.com/originaleric/digcrawl/runtime/artifact"
 	"github.com/originaleric/digcrawl/runtime/executor"
@@ -73,6 +76,13 @@ func BrowseEntry(configDomains []string, artStore artifact.Store) registry.Entry
 			}
 			if resp.Summary != "" {
 				out["summary"] = resp.Summary
+			}
+			if !strings.HasPrefix(call.ID, "collect_") {
+				opts := ocr.EnrichOptions{}
+				if resp.ScreenshotBase != "" {
+					opts.ExtraImages = []ocr.ImageRef{ocr.PNGDataURLImageRef("screenshot", resp.ScreenshotBase)}
+				}
+				ocr.EnrichMap(ctx, out, config.Get().OCR, opts)
 			}
 			var artifacts []protocol.Artifact
 			if resp.ScreenshotBase != "" {

@@ -114,6 +114,40 @@ go install ./cmd/digcollect
 
 X 单帖读取默认先尝试官方 Tweet lookup API；当 API 读权限或套餐不足时，会尝试公开 oEmbed 端点，成功时 `platform_metadata.read_channel=api`、`platform_metadata.extraction_source=oembed`。Browser 仅作为最后兜底，登录墙、删除、不可见和空壳页会返回结构化错误。
 
+### OCR（图片文字提取）
+
+| 字段 | 说明 |
+|------|------|
+| `Enabled` | 是否启用 OCR，默认 `false` |
+| `Provider` | OCR provider，目前支持 `openai_compatible`、`zhipu_ocr`、`stub`；`glm_ocr` / `glm-ocr` 会归一为 `zhipu_ocr` |
+| `APIKey` | OCR provider API key |
+| `BaseURL` | provider API base URL，`openai_compatible` 默认 `https://api.openai.com/v1`，`zhipu_ocr` 默认 `https://open.bigmodel.cn/api/paas/v4` |
+| `Model` | OCR 使用的视觉模型；`zhipu_ocr` 默认 `glm-ocr` |
+| `Prompt` | OCR 提示词 |
+| `TimeoutSec` | OCR 单次请求超时 |
+| `MaxImages` | 每条内容最多处理图片数 |
+| `MaxImageBytes` | 本地图片转 data URL 前的大小上限 |
+| `MaxTokens` | OCR 返回 token 上限 |
+| `AppendToMarkdown` | 是否把 OCR 文本追加到 Markdown，默认 `true` |
+| `AppendToText` | 是否把 OCR 文本追加到纯文本，默认 `false` |
+
+OCR 启用后会在平台工具、通用浏览器读取和 Collect 导出中统一生效。结果写入 `platform_metadata.ocr_results`，并记录 `ocr_count`、provider、model、图片来源和错误诊断。直接平台/浏览器调用会把截图作为显式 OCR 候选；Collect 下载媒体时会优先对本地 `.assets/` 图片做 OCR，未下载媒体时会使用远程图片 URL。`zhipu_ocr` 对远程图片 URL 使用智谱 `layout_parsing` / `glm-ocr`，对本地图片和截图使用智谱 `files/ocr` 上传接口。
+
+智谱 GLM-OCR 配置示例：
+
+```yaml
+OCR:
+  Enabled: true
+  Provider: zhipu_ocr
+  APIKey: "<zhipu-api-key>"
+  BaseURL: "https://open.bigmodel.cn/api/paas/v4"
+  Model: "glm-ocr"
+  TimeoutSec: 60
+  MaxImages: 8
+  MaxImageBytes: 8388608
+  AppendToMarkdown: true
+```
+
 ### Providers（内置 Provider 开关）
 
 | 字段 | 说明 |

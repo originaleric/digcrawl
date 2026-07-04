@@ -53,6 +53,7 @@ func (s *Service) exportOpts(outDir string, formats []string) ExportOptions {
 		MaxMediaBytes:   s.cfg.Collect.MaxMediaBytes,
 		MediaTimeoutSec: s.cfg.Collect.MediaTimeoutSec,
 		ArtifactStore:   s.artifacts,
+		OCR:             s.cfg.OCR,
 	}
 }
 
