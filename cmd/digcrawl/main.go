@@ -53,6 +53,8 @@ func run(argv []string) {
 		runStdio(argv[2:])
 	case "collect":
 		runCollectCommand(argv[2:])
+	case "asr":
+		runASR(argv[2:])
 	case "connect":
 		runConnect(argv[2:])
 	case "login":
@@ -88,6 +90,7 @@ func printUsage() {
   digcrawl collect list        列出 SQLite 采集记录（需 PersistMode=sqlite/both）
   digcrawl collect show <id>   查看单条采集详情（id 或 URL）
   digcrawl collect migrate-index  从 index.json 导入 SQLite
+  digcrawl asr transcribe <video>  ffmpeg 抽音频并转写
   digcrawl <url>               等价于 digcrawl collect <url>
   digcrawl connect [flags]     保存宿主配置并启动 Collector
   digcrawl login [flags]       保存 Collector Token 到配置

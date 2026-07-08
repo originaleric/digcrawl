@@ -148,12 +148,57 @@ OCR:
   AppendToMarkdown: true
 ```
 
+### ASR（视频语音转写）
+
+| 字段 | 说明 |
+|------|------|
+| `Enabled` | 预留开关，默认 `false`；CLI 和工具调用仍以显式请求为准 |
+| `Provider` | ASR provider，支持 `api`、`local`、`stub` |
+| `APIKey` | API provider key |
+| `BaseURL` | OpenAI-compatible API base URL，默认 `https://api.openai.com/v1` |
+| `Model` | 留空时按 provider 选择默认值：`api=whisper-1`，`local=small` |
+| `Language` | 可选语言代码 |
+| `Prompt` | 可选转写提示词，API provider 会透传 |
+| `ResponseFormat` | API provider response format，支持 `verbose_json`、`json`、`text`、`srt`、`vtt`，默认 `verbose_json` |
+| `TimeoutSec` | ffmpeg + ASR 总超时 |
+| `FFmpegPath` | ffmpeg 可执行文件路径，默认 `ffmpeg` |
+| `TempDir` | 抽取音频的临时目录，空则使用系统临时目录 |
+| `AudioSampleRate` | ffmpeg 抽取 wav 的采样率，默认 `16000` |
+| `MaxAudioBytes` | API provider 上传音频大小上限 |
+| `LocalCommand` | 本地 ASR 命令，默认 `faster-whisper` |
+| `LocalArgs` | 本地 ASR 参数模板，支持 `{audio_path}`、`{model}`、`{language}`、`{output_dir}` |
+
+配置示例：
+
+```yaml
+ASR:
+  Provider: api
+  APIKey: "<api-key>"
+  BaseURL: "https://api.openai.com/v1"
+  Model: ""
+  ResponseFormat: "verbose_json"
+  TimeoutSec: 300
+  FFmpegPath: "ffmpeg"
+```
+
+本地 `faster-whisper` 示例：
+
+```yaml
+ASR:
+  Provider: local
+  Model: ""
+  FFmpegPath: "ffmpeg"
+  LocalCommand: "faster-whisper"
+  LocalArgs: []
+```
+
 ### Providers（内置 Provider 开关）
 
 | 字段 | 说明 |
 |------|------|
 | `PlatformEnabled` | 公众号 / 小红书 / 抖音 / X 平台工具 |
 | `BrowserEnabled` | `browser.browse` / `snapshot` / `action` |
+| `ASREnabled` | `asr.transcribe` 视频/音频转写工具 |
 | `ExampleEnabled` | `gateway.ping`、`file.read` |
 | `StubEnabled` | 示例第三方 Provider（开发用） |
 
@@ -173,6 +218,7 @@ digcrawl collect <url>         # 采集单个 URL
 digcrawl collect inbox         # 处理收件箱
 digcrawl browser login         # 平台扫码/交互登录并保存 Cookie
 digcrawl browser check         # 检查平台会话，可选试读
+digcrawl asr transcribe        # ffmpeg 抽音频并转写
 digcollect <url>              # 轻量采集入口，等价于 digcrawl collect <url>
 digcrawl help
 ```
@@ -460,6 +506,12 @@ collect-inbox/
 | `browser.browse` | 打开 URL，提取正文 / 截图 / 摘要 |
 | `browser.snapshot` | 无障碍树快照（可交互元素） |
 | `browser.action` | 点击、输入等（高风险，建议需用户确认） |
+
+### 语音转写（asr）
+
+| 工具名 | 说明 |
+|--------|------|
+| `asr.transcribe` | 读取 `AllowedReadPaths` 下的视频/音频文件，用 ffmpeg 抽音频后转写 |
 
 ### 开发桩（stub，需 `StubEnabled: true`）
 

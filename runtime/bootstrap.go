@@ -6,6 +6,7 @@ import (
 
 	"github.com/originaleric/digcrawl/config"
 	"github.com/originaleric/digcrawl/provider"
+	asrprov "github.com/originaleric/digcrawl/provider/asr"
 	browserprov "github.com/originaleric/digcrawl/provider/browser"
 	exampleprov "github.com/originaleric/digcrawl/provider/example"
 	platformprov "github.com/originaleric/digcrawl/provider/platform"
@@ -56,6 +57,16 @@ func collectProviders(cfg *config.Config, opts RegistryOptions) []provider.Provi
 		out = append(out, &browserprov.Provider{
 			ConfigDomains: domains,
 			ArtifactStore: opts.ArtifactStore,
+		})
+	}
+	if cfg.Providers.ASREnabled == nil || *cfg.Providers.ASREnabled {
+		readPaths := opts.AllowedReadPaths
+		if len(readPaths) == 0 {
+			readPaths = cfg.Gateway.AllowedReadPaths
+		}
+		out = append(out, &asrprov.Provider{
+			Config:           cfg.ASR,
+			AllowedReadPaths: readPaths,
 		})
 	}
 	if cfg.Providers.ExampleEnabled == nil || *cfg.Providers.ExampleEnabled {

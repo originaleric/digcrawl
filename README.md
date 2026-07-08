@@ -25,11 +25,14 @@ DigCrawl 的核心目标不是“提供一个网关”，而是把公众号、�
 | 批量采集与收件箱 | 支持 URL 文件批处理、`collect-inbox` 收件箱和 `--watch` 轮询 |
 | 多格式导出 | 同时导出 Markdown、HTML、JSON，可选下载媒体到 `.assets/` |
 | OCR 图片文字提取 | 可通过配置接入 OCR provider，对正文图片、截图、平台媒体和本地 assets 提取文字并写入结构化元数据 |
+| ASR 视频语音转写 | 通过 `ffmpeg` 抽音频后，支持 OpenAI-compatible API 或本地 `faster-whisper` 命令转写 |
 | 可检索持久化 | 支持 `index.json`、SQLite `collect.db` 或二者同时启用 |
 | 宿主集成 | 可通过 HTTP Gateway、反向 Collector、MCP、stdio 或 Go SDK 接入业务系统 |
 | 本机安全边界 | 默认本机监听、工具白名单、高风险工具审批、域名策略、审计日志和 Artifact 管理 |
 
 OCR 目前支持 OpenAI-compatible 视觉模型、智谱 `zhipu_ocr` / `glm-ocr` 原生接口和本地开发桩；Collect 下载媒体时会优先对本地 `.assets` 图片做 OCR，并将结果写入 `platform_metadata.ocr_results`。
+
+ASR 能力通过 `digcrawl asr transcribe <video>` 或 Gateway 工具 `asr.transcribe` 调用：先用 `ffmpeg` 抽取 16k 单声道 wav，再按配置选择 API provider 或本地 provider。API provider 兼容 `/audio/transcriptions`；本地 provider 默认调用 `faster-whisper`，也可在 `ASR.LocalCommand` / `ASR.LocalArgs` 中替换为 whisper.cpp 等命令。
 
 ## 支持的平台
 
@@ -170,6 +173,7 @@ curl -s http://127.0.0.1:8787/manifest
 | `digcrawl collect show` | 查看单条采集详情 |
 | `digcrawl browser login` | 打开有头浏览器完成平台登录并保存 Cookie |
 | `digcrawl browser check` | 检查平台会话，可选试读 URL |
+| `digcrawl asr transcribe` | ffmpeg 抽音频并用 API 或本地 ASR 转写 |
 | `digcrawl gateway` | HTTP 工具网关 |
 | `digcrawl collector` | WebSocket 反向连接 Collector |
 | `digcrawl connect` | 保存宿主配置并启动 Collector |
@@ -185,7 +189,7 @@ curl -s http://127.0.0.1:8787/manifest
 collect/            URL 检测、采集编排、导出、索引、收件箱
 internal/platform/  微信、小红书、抖音、头条、X 的平台读取实现
 internal/browser/   本地 go-rod 浏览器、登录、快照、页面操作
-provider/           platform、browser、example、stub 工具 Provider
+provider/           platform、browser、asr、example、stub 工具 Provider
 runtime/            registry、policy、audit、artifact、统一执行入口
 transport/          http、collector、host、mcp、stdio、devhost
 protocol/           ToolManifest、ToolCall、ToolResult 线协议

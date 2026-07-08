@@ -17,6 +17,7 @@ type Config struct {
 	LocalBrowser LocalBrowserConfig `yaml:"LocalBrowser" json:"LocalBrowser"`
 	Platform     PlatformConfig     `yaml:"Platform" json:"Platform"`
 	OCR          OCRConfig          `yaml:"OCR" json:"OCR"`
+	ASR          ASRConfig          `yaml:"ASR" json:"ASR"`
 	Providers    ProvidersConfig    `yaml:"Providers" json:"Providers"`
 }
 
@@ -215,6 +216,124 @@ func (c OCRConfig) AppendToTextOrDefault() bool {
 	return *c.AppendToText
 }
 
+// ASRConfig controls optional audio transcription.
+type ASRConfig struct {
+	Enabled         *bool    `yaml:"Enabled" json:"Enabled,omitempty"`
+	Provider        string   `yaml:"Provider" json:"Provider,omitempty"` // api | local | stub
+	APIKey          string   `yaml:"APIKey" json:"APIKey,omitempty"`
+	BaseURL         string   `yaml:"BaseURL" json:"BaseURL,omitempty"`
+	Model           string   `yaml:"Model" json:"Model,omitempty"`
+	Language        string   `yaml:"Language" json:"Language,omitempty"`
+	Prompt          string   `yaml:"Prompt" json:"Prompt,omitempty"`
+	ResponseFormat  string   `yaml:"ResponseFormat" json:"ResponseFormat,omitempty"`
+	TimeoutSec      int      `yaml:"TimeoutSec" json:"TimeoutSec,omitempty"`
+	FFmpegPath      string   `yaml:"FFmpegPath" json:"FFmpegPath,omitempty"`
+	TempDir         string   `yaml:"TempDir" json:"TempDir,omitempty"`
+	AudioSampleRate int      `yaml:"AudioSampleRate" json:"AudioSampleRate,omitempty"`
+	MaxAudioBytes   int64    `yaml:"MaxAudioBytes" json:"MaxAudioBytes,omitempty"`
+	LocalCommand    string   `yaml:"LocalCommand" json:"LocalCommand,omitempty"`
+	LocalArgs       []string `yaml:"LocalArgs" json:"LocalArgs,omitempty"`
+}
+
+// EnabledOrDefault reports whether ASR tooling is enabled.
+func (c ASRConfig) EnabledOrDefault() bool {
+	if c.Enabled == nil {
+		return false
+	}
+	return *c.Enabled
+}
+
+// ProviderOrDefault returns the configured ASR provider.
+func (c ASRConfig) ProviderOrDefault() string {
+	switch strings.ToLower(strings.TrimSpace(c.Provider)) {
+	case "api", "openai_compatible", "openai-compatible":
+		return "api"
+	case "local", "faster_whisper", "faster-whisper", "whisper":
+		return "local"
+	case "stub":
+		return "stub"
+	default:
+		return "api"
+	}
+}
+
+// BaseURLOrDefault returns the API ASR base URL.
+func (c ASRConfig) BaseURLOrDefault() string {
+	if strings.TrimSpace(c.BaseURL) != "" {
+		return strings.TrimRight(strings.TrimSpace(c.BaseURL), "/")
+	}
+	return "https://api.openai.com/v1"
+}
+
+// ModelOrDefault returns the ASR model name.
+func (c ASRConfig) ModelOrDefault() string {
+	if strings.TrimSpace(c.Model) != "" {
+		return strings.TrimSpace(c.Model)
+	}
+	if c.ProviderOrDefault() == "local" {
+		return "small"
+	}
+	return "whisper-1"
+}
+
+// ResponseFormatOrDefault returns the API ASR response format.
+func (c ASRConfig) ResponseFormatOrDefault() string {
+	if strings.TrimSpace(c.ResponseFormat) != "" {
+		return strings.ToLower(strings.TrimSpace(c.ResponseFormat))
+	}
+	return "verbose_json"
+}
+
+// SupportedASRResponseFormat reports whether format is supported by the API provider parser.
+func SupportedASRResponseFormat(format string) bool {
+	switch strings.ToLower(strings.TrimSpace(format)) {
+	case "verbose_json", "json", "text", "srt", "vtt":
+		return true
+	default:
+		return false
+	}
+}
+
+// TimeoutSecOrDefault returns ASR timeout seconds.
+func (c ASRConfig) TimeoutSecOrDefault() int {
+	if c.TimeoutSec > 0 {
+		return c.TimeoutSec
+	}
+	return 300
+}
+
+// FFmpegPathOrDefault returns ffmpeg executable path.
+func (c ASRConfig) FFmpegPathOrDefault() string {
+	if strings.TrimSpace(c.FFmpegPath) != "" {
+		return strings.TrimSpace(c.FFmpegPath)
+	}
+	return "ffmpeg"
+}
+
+// AudioSampleRateOrDefault returns extracted audio sample rate.
+func (c ASRConfig) AudioSampleRateOrDefault() int {
+	if c.AudioSampleRate > 0 {
+		return c.AudioSampleRate
+	}
+	return 16000
+}
+
+// MaxAudioBytesOrDefault returns the maximum audio payload size.
+func (c ASRConfig) MaxAudioBytesOrDefault() int64 {
+	if c.MaxAudioBytes > 0 {
+		return c.MaxAudioBytes
+	}
+	return 25 * 1024 * 1024
+}
+
+// LocalCommandOrDefault returns local ASR command.
+func (c ASRConfig) LocalCommandOrDefault() string {
+	if strings.TrimSpace(c.LocalCommand) != "" {
+		return strings.TrimSpace(c.LocalCommand)
+	}
+	return "faster-whisper"
+}
+
 // XAPIConfig controls X/Twitter API based post reads.
 type XAPIConfig struct {
 	APIEnabled        *bool  `yaml:"APIEnabled" json:"APIEnabled,omitempty"`
@@ -337,6 +456,7 @@ type ProvidersConfig struct {
 	ExampleEnabled  *bool `yaml:"ExampleEnabled" json:"ExampleEnabled,omitempty"`
 	PlatformEnabled *bool `yaml:"PlatformEnabled" json:"PlatformEnabled,omitempty"`
 	BrowserEnabled  *bool `yaml:"BrowserEnabled" json:"BrowserEnabled,omitempty"`
+	ASREnabled      *bool `yaml:"ASREnabled" json:"ASREnabled,omitempty"`
 	StubEnabled     *bool `yaml:"StubEnabled" json:"StubEnabled,omitempty"`
 }
 
@@ -361,6 +481,7 @@ func init() {
 					"douyin.video.read",
 					"toutiao.article.read",
 					"x.post.read",
+					"asr.transcribe",
 				},
 				ArtifactDir:        "storage/digcrawl/artifacts",
 				ArtifactTTLMinutes: 60,
@@ -388,6 +509,7 @@ func init() {
 					"douyin.video.read",
 					"toutiao.article.read",
 					"x.post.read",
+					"asr.transcribe",
 				},
 			},
 			Collect: CollectConfig{
@@ -453,10 +575,21 @@ func init() {
 				MaxTokens:        1200,
 				AppendToMarkdown: &enabled,
 			},
+			ASR: ASRConfig{
+				Provider:        "api",
+				BaseURL:         "https://api.openai.com/v1",
+				ResponseFormat:  "verbose_json",
+				TimeoutSec:      300,
+				FFmpegPath:      "ffmpeg",
+				AudioSampleRate: 16000,
+				MaxAudioBytes:   25 * 1024 * 1024,
+				LocalCommand:    "faster-whisper",
+			},
 			Providers: ProvidersConfig{
 				ExampleEnabled:  &enabled,
 				PlatformEnabled: &enabled,
 				BrowserEnabled:  &enabled,
+				ASREnabled:      &enabled,
 			},
 		}
 	})
@@ -542,6 +675,9 @@ func mergeDefaults(cfg *Config) {
 	}
 	if cfg.Providers.BrowserEnabled == nil {
 		cfg.Providers.BrowserEnabled = defaultCfg.Providers.BrowserEnabled
+	}
+	if cfg.Providers.ASREnabled == nil {
+		cfg.Providers.ASREnabled = defaultCfg.Providers.ASREnabled
 	}
 	if cfg.Providers.StubEnabled == nil {
 		cfg.Providers.StubEnabled = defaultCfg.Providers.StubEnabled
@@ -689,6 +825,35 @@ func mergeDefaults(cfg *Config) {
 	}
 	if cfg.OCR.AppendToText == nil {
 		cfg.OCR.AppendToText = defaultCfg.OCR.AppendToText
+	}
+	if cfg.ASR.Enabled == nil {
+		cfg.ASR.Enabled = defaultCfg.ASR.Enabled
+	}
+	if cfg.ASR.Provider == "" {
+		cfg.ASR.Provider = defaultCfg.ASR.Provider
+	}
+	if cfg.ASR.BaseURL == "" {
+		cfg.ASR.BaseURL = defaultCfg.ASR.BaseURL
+	}
+	// Leave Model empty so ModelOrDefault can choose a provider-aware default.
+	// For api this is whisper-1; for local this is small.
+	if cfg.ASR.ResponseFormat == "" {
+		cfg.ASR.ResponseFormat = defaultCfg.ASR.ResponseFormat
+	}
+	if cfg.ASR.TimeoutSec == 0 {
+		cfg.ASR.TimeoutSec = defaultCfg.ASR.TimeoutSec
+	}
+	if cfg.ASR.FFmpegPath == "" {
+		cfg.ASR.FFmpegPath = defaultCfg.ASR.FFmpegPath
+	}
+	if cfg.ASR.AudioSampleRate == 0 {
+		cfg.ASR.AudioSampleRate = defaultCfg.ASR.AudioSampleRate
+	}
+	if cfg.ASR.MaxAudioBytes == 0 {
+		cfg.ASR.MaxAudioBytes = defaultCfg.ASR.MaxAudioBytes
+	}
+	if cfg.ASR.LocalCommand == "" {
+		cfg.ASR.LocalCommand = defaultCfg.ASR.LocalCommand
 	}
 }
 

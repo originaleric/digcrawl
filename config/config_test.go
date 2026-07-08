@@ -121,3 +121,42 @@ func TestOCRConfigHelpers(t *testing.T) {
 		t.Fatal("AppendToText should default to false")
 	}
 }
+
+func TestASRConfigProviderAwareModelDefault(t *testing.T) {
+	t.Parallel()
+
+	if got := (ASRConfig{}).ProviderOrDefault(); got != "api" {
+		t.Fatalf("ProviderOrDefault=%q", got)
+	}
+	if got := (ASRConfig{}).ModelOrDefault(); got != "whisper-1" {
+		t.Fatalf("api ModelOrDefault=%q", got)
+	}
+	if got := (ASRConfig{Provider: "local"}).ModelOrDefault(); got != "small" {
+		t.Fatalf("local ModelOrDefault=%q", got)
+	}
+	if got := (ASRConfig{}).ResponseFormatOrDefault(); got != "verbose_json" {
+		t.Fatalf("ResponseFormatOrDefault=%q", got)
+	}
+	if got := (ASRConfig{ResponseFormat: "TEXT"}).ResponseFormatOrDefault(); got != "text" {
+		t.Fatalf("normalized ResponseFormatOrDefault=%q", got)
+	}
+	if !SupportedASRResponseFormat("vtt") {
+		t.Fatal("expected vtt response format to be supported")
+	}
+	if SupportedASRResponseFormat("xml") {
+		t.Fatal("unexpected xml response format support")
+	}
+
+	cfg := Config{
+		ASR: ASRConfig{
+			Provider: "local",
+		},
+	}
+	mergeDefaults(&cfg)
+	if cfg.ASR.Model != "" {
+		t.Fatalf("mergeDefaults should not materialize provider-specific ASR model, got %q", cfg.ASR.Model)
+	}
+	if got := cfg.ASR.ModelOrDefault(); got != "small" {
+		t.Fatalf("merged local ModelOrDefault=%q", got)
+	}
+}

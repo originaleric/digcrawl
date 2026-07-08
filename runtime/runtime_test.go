@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/originaleric/digcrawl/config"
 	"github.com/originaleric/digcrawl/protocol"
 	"github.com/originaleric/digcrawl/runtime/registry"
 )
@@ -77,5 +78,17 @@ func TestExecuteRequiresApproval(t *testing.T) {
 	res = rt.Execute(context.Background(), &protocol.ToolCall{Type: protocol.TypeToolCall, ID: "c2", Tool: "danger.tool", Approved: true})
 	if res.Status != "success" {
 		t.Fatalf("expected success after approval, got %+v", res)
+	}
+}
+
+func TestDefaultRegistryIncludesASRTranscribe(t *testing.T) {
+	t.Parallel()
+	cfg := config.Get()
+	reg, err := NewRegistry(cfg, RegistryOptions{AllowedReadPaths: []string{t.TempDir()}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := reg.Get("asr.transcribe"); !ok {
+		t.Fatalf("asr.transcribe not registered")
 	}
 }
