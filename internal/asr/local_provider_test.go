@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 )
@@ -47,5 +48,21 @@ func TestExpandArgs(t *testing.T) {
 		if got[i] != want[i] {
 			t.Fatalf("got=%+v want=%+v", got, want)
 		}
+	}
+}
+
+func TestLocalProviderMissingCommandReturnsReadinessError(t *testing.T) {
+	dir := t.TempDir()
+	audio := filepath.Join(dir, "audio.wav")
+	if err := os.WriteFile(audio, []byte("wav"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p := &localProvider{command: "digcrawl-missing-local-asr-command", model: "small", timeout: time.Second}
+	_, err := p.Transcribe(context.Background(), audio)
+	if err == nil {
+		t.Fatal("expected missing command error")
+	}
+	if !strings.Contains(err.Error(), "ASR.LocalCommand") || !strings.Contains(err.Error(), "--local-command") {
+		t.Fatalf("error is not actionable: %v", err)
 	}
 }

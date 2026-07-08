@@ -34,6 +34,15 @@ OCR 目前支持 OpenAI-compatible 视觉模型、智谱 `zhipu_ocr` / `glm-ocr`
 
 ASR 能力通过 `digcrawl asr transcribe <video>` 或 Gateway 工具 `asr.transcribe` 调用：先用 `ffmpeg` 抽取 16k 单声道 wav，再按配置选择 API provider 或本地 provider。API provider 兼容 `/audio/transcriptions`；本地 provider 默认调用 `faster-whisper`，也可在 `ASR.LocalCommand` / `ASR.LocalArgs` 中替换为 whisper.cpp 等命令。
 
+## 更新概览
+
+- 2026-05-21：完成 DigGate 采集链路 Phase 1-3，补齐平台识别、会话复用、浏览器/API 策略链、队列重试、限流、健康检查和今日头条增强。
+- 2026-07-03：微信公众号采集改为 HTTP 静态解析优先，修复最终 URL、导出格式、UTF-8 文件名截断、结构化错误和生产验证中的边界问题。
+- 2026-07-03：今日头条文章采集增强轻量 API 探测、浏览器 hydration/meta/DOM 提取、视频/西瓜跳转识别、超时策略和 JSON 文本完整性。
+- 2026-07-04：X/Twitter 单帖读取新增 Tweet lookup API 优先、OAuth2 app-only token 缓存、公开 oEmbed 兜底和登录墙/不可见壳页校验。
+- 2026-07-04：OCR 全库接入智谱 `zhipu_ocr` / `glm-ocr`，支持远程图片 `layout_parsing`、本地 assets `files/ocr`、图片类型 sniff 和 OCR metadata 输出。
+- 2026-07-08：视频解析链路补齐 `ffmpeg` 音频抽取、ASR API provider、本地 `faster-whisper` provider、Gateway 工具 `asr.transcribe` 和 CLI 转写命令。
+
 ## 支持的平台
 
 | 平台 | 典型 URL | 内置工具 |
@@ -85,6 +94,28 @@ go build -o digcollect ./cmd/digcollect
 ```bash
 ./digcrawl collect inbox
 ./digcrawl collect inbox --watch
+```
+
+本地 ASR 依赖 `ffmpeg` 和 `faster-whisper`。`ffmpeg` 需能在 `PATH` 中直接调用；`faster-whisper` 建议安装到隔离 venv，再把可执行命令加入 `PATH` 或通过 `--local-command` / `ASR.LocalCommand` 显式指定。
+
+```bash
+python3 -m venv /Users/dig/.openclaw/tmp/faster-whisper-venv
+/Users/dig/.openclaw/tmp/faster-whisper-venv/bin/python -m pip install --upgrade pip
+/Users/dig/.openclaw/tmp/faster-whisper-venv/bin/python -m pip install faster-whisper
+
+export PATH="/Users/dig/.openclaw/tmp/faster-whisper-venv/bin:$PATH"
+export HF_HOME="/Users/dig/.openclaw/tmp/huggingface"
+
+./digcrawl asr transcribe ./video.mp4 --provider local --model small
+```
+
+如果安装的 Python 包没有提供 `faster-whisper` CLI，可提供一个兼容命令，或在运行时指定完整路径：
+
+```bash
+./digcrawl asr transcribe ./video.mp4 \
+  --provider local \
+  --model small \
+  --local-command /Users/dig/.openclaw/tmp/faster-whisper-venv/bin/faster-whisper
 ```
 
 平台登录与会话检查：

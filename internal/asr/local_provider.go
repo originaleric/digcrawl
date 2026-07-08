@@ -28,6 +28,9 @@ func (p *localProvider) Transcribe(ctx context.Context, audioPath string) (*Resu
 	if err != nil {
 		return nil, fmt.Errorf("stat audio: %w", err)
 	}
+	if _, err := exec.LookPath(p.command); err != nil {
+		return nil, fmt.Errorf("local ASR command %q not found in PATH; install it or configure ASR.LocalCommand / --local-command", p.command)
+	}
 	outDir, err := os.MkdirTemp("", "digcrawl-asr-local-*")
 	if err != nil {
 		return nil, fmt.Errorf("create local ASR temp dir: %w", err)

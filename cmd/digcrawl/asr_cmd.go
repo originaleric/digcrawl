@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 
 	"github.com/originaleric/digcrawl/internal/asr"
 )
@@ -51,7 +52,7 @@ func runASRTranscribe(args []string) {
 	responseFormat := fs.String("response-format", "", "ASR API response format override: verbose_json | json | text | srt | vtt")
 	ffmpegPath := fs.String("ffmpeg", "", "ffmpeg executable path override")
 	localCommand := fs.String("local-command", "", "local ASR command override")
-	_ = fs.Parse(args)
+	_ = fs.Parse(normalizeASRTranscribeArgs(args))
 
 	if len(fs.Args()) == 0 {
 		log.Fatal("asr transcribe: provide a video or audio path")
@@ -98,4 +99,57 @@ func runASRTranscribe(args []string) {
 		log.Fatalf("marshal: %v", err)
 	}
 	fmt.Println(string(data))
+}
+
+func normalizeASRTranscribeArgs(args []string) []string {
+	if len(args) == 0 {
+		return args
+	}
+	flagNamesWithValue := map[string]struct{}{
+		"-config":           {},
+		"--config":          {},
+		"-provider":         {},
+		"--provider":        {},
+		"-api-key":          {},
+		"--api-key":         {},
+		"-base-url":         {},
+		"--base-url":        {},
+		"-model":            {},
+		"--model":           {},
+		"-language":         {},
+		"--language":        {},
+		"-prompt":           {},
+		"--prompt":          {},
+		"-response-format":  {},
+		"--response-format": {},
+		"-ffmpeg":           {},
+		"--ffmpeg":          {},
+		"-local-command":    {},
+		"--local-command":   {},
+	}
+	var flags []string
+	var positional []string
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "--" {
+			positional = append(positional, args[i+1:]...)
+			break
+		}
+		if strings.HasPrefix(arg, "-") {
+			flags = append(flags, arg)
+			if strings.Contains(arg, "=") {
+				continue
+			}
+			if _, ok := flagNamesWithValue[arg]; ok && i+1 < len(args) {
+				i++
+				flags = append(flags, args[i])
+			}
+			continue
+		}
+		positional = append(positional, arg)
+	}
+	out := make([]string, 0, len(args))
+	out = append(out, flags...)
+	out = append(out, positional...)
+	return out
 }
