@@ -46,7 +46,7 @@ Watchlist 能力通过 `digcrawl watchlist run --once` 或 `digcrawl watchlist r
 - 2026-07-04：X/Twitter 单帖读取新增 Tweet lookup API 优先、OAuth2 app-only token 缓存、公开 oEmbed 兜底和登录墙/不可见壳页校验。
 - 2026-07-04：OCR 全库接入智谱 `zhipu_ocr` / `glm-ocr`，支持远程图片 `layout_parsing`、本地 assets `files/ocr`、图片类型 sniff 和 OCR metadata 输出。
 - 2026-07-08：视频解析链路补齐 `ffmpeg` 音频抽取、ASR API provider、本地 `faster-whisper` provider、Gateway 工具 `asr.transcribe` 和 CLI 转写命令。
-- 2026-07-09：新增 Watchlist 定时监控、SQLite 状态/锁、Summary provider、DigFlow HTTP 摘要 adapter 和 Feishu 通知模块。
+- 2026-07-09：新增 Watchlist 定时监控、SQLite 状态/锁、Summary provider、DigFlow 内嵌 Runtime / HTTP 摘要 adapter、Feishu 通知模块、`df_` DigFlow DDL 和无密钥 GORM 示例配置。
 
 ## 支持的平台
 
@@ -112,6 +112,20 @@ Watchlist 常驻调度：
 ```bash
 ./digcrawl watchlist run --config config/config.yaml
 ```
+
+DigFlow 内嵌 Runtime 摘要需要先准备数据库与模型配置。真实数据库连接写入本地 `config/gorm.yml`，该文件已被 `.gitignore` 忽略；仓库提供无密钥模板 `config/gorm.example.yml`。DigFlow 自身表保持 `df_` 前缀，配置入口为 `config/digflow-gorm.yml`、`config/digflow.yml`、`config/eino.yml` 和 `agents/watchlist/agents.yml`。
+
+```bash
+cp config/gorm.example.yml config/gorm.yml
+
+export DIGCRAWL_MYSQL_HOST="127.0.0.1"
+export DIGCRAWL_MYSQL_DATABASE="dig_crawl"
+export DIGCRAWL_MYSQL_USER="root"
+export DIGCRAWL_MYSQL_PASSWORD="<password>"
+export DIGFLOW_SUMMARY_API_KEY="<openai-compatible-api-key>"
+```
+
+只补 DigFlow runtime 表时执行 `sqls/2026-07-09_DigFlow内嵌Runtime初始化DDL.sql`；初始化完整库时执行 `sqls/digcrawl_full_sql_ddl.sql`。
 
 本地 ASR 依赖 `ffmpeg` 和 `faster-whisper`。`ffmpeg` 需能在 `PATH` 中直接调用；`faster-whisper` 建议安装到隔离 venv，再把可执行命令加入 `PATH` 或通过 `--local-command` / `ASR.LocalCommand` 显式指定。
 
@@ -237,8 +251,10 @@ curl -s http://127.0.0.1:8787/manifest
 ```text
 collect/            URL 检测、采集编排、导出、索引、收件箱
 internal/watchlist/ Watchlist 发现、锁、状态机、调度和通知编排
-internal/summary/   Extractive、LLM direct、DigFlow Runtime 摘要 provider
+internal/summary/   Extractive、LLM direct、DigFlow Runtime/HTTP 摘要 provider
 internal/notify/    Feishu webhook 等通知 provider
+agents/             DigFlow 内嵌 Runtime 的宿主侧 agent manifest 与 YAML
+sqls/               DigCrawl `dc_*` 与 DigFlow `df_*` MySQL DDL
 internal/platform/  微信、小红书、抖音、头条、X 的平台读取实现
 internal/browser/   本地 go-rod 浏览器、登录、快照、页面操作
 provider/           platform、browser、asr、example、stub 工具 Provider

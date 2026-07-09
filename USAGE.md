@@ -36,6 +36,8 @@ go install ./cmd/digcollect
 |------|----------|
 | `gateway` / `collector` / `mcp` / `collect` 等 | 命令行 `--config`，未指定时为 `config/config.yaml` |
 | `connect` / `login` | `~/.digcrawl/config.yaml`（可用 `--config` 覆盖） |
+| 本地 GORM 数据库连接 | `config/gorm.yml`，由 `config/gorm.example.yml` 复制生成；包含密码，默认不入 Git |
+| DigFlow 内嵌 Runtime 配置 | `config/digflow.yml`、`config/digflow-gorm.yml`、`config/eino.yml`、`agents/watchlist/agents.yml` |
 
 首次 `connect` 或 `login` 会自动创建 `~/.digcrawl/` 目录并写入配置。
 
@@ -214,12 +216,12 @@ Watchlist 用于按配置定期检查指定来源的新增内容，复用 Collec
 | 字段 | 说明 |
 |------|------|
 | `Enabled` | 是否启用摘要；关闭时使用规则摘要兜底 |
-| `Provider` | `extractive`、`llm_direct`、`digflow_runtime` |
+| `Provider` | `extractive`、`llm_direct`、`digflow_runtime`、`digflow_http` |
 | `TimeoutSec` | 摘要请求超时 |
 | `MaxInputChars` | 送入摘要 provider 的总输入上限 |
 | `FallbackProvider` | 摘要失败时的兜底 provider，默认 `extractive` |
 | `InputBudget` | 正文、ASR、OCR、metadata 的分桶预算 |
-| `DigFlow` | DigFlow HTTP Runtime 接入配置 |
+| `DigFlow` | DigFlow 内嵌 Runtime 或 HTTP 兼容接入配置 |
 | `LLM` | OpenAI-compatible chat completion 直连接入配置 |
 
 `Notifications.Feishu` 字段：
@@ -257,11 +259,16 @@ Summary:
   Provider: digflow_runtime
   FallbackProvider: extractive
   DigFlow:
-    RuntimeMode: http
-    BaseURL: http://127.0.0.1:20201
-    Endpoint: /api/v1/invoke
+    RuntimeMode: embedded
+    RootDir: "."
+    ConfigPath: config/digflow.yml
+    GormConfigPath: config/digflow-gorm.yml
+    EinoConfigPath: config/eino.yml
+    ManifestPath: agents/watchlist/agents.yml
+    GlobalToolsPath: config/global_tools.yml
+    GlobalSkillsDir: skills
+    DisableCheckpoint: true
     Agent: watchlist_summary_agent
-    AuthToken: ${DIGFLOW_API_TOKEN}
 
 Notifications:
   Feishu:
@@ -274,6 +281,37 @@ Notifications:
         TimeoutSec: 10
         MaxMessageChars: 12000
 ```
+
+DigFlow HTTP 兼容模式仍可用，适合已有独立 DigFlow 服务的部署：
+
+```yaml
+Summary:
+  Enabled: true
+  Provider: digflow_http
+  DigFlow:
+    RuntimeMode: http
+    BaseURL: http://127.0.0.1:20201
+    Endpoint: /api/v1/invoke
+    Agent: watchlist_summary_agent
+    AuthToken: ${DIGFLOW_API_TOKEN}
+```
+
+DigFlow 内嵌 Runtime 需要额外准备：
+
+- `config/digflow-gorm.yml`：DigFlow 平台库连接，表前缀固定 `df_`。
+- `config/eino.yml`：DigFlow / DigEino domain 表名、上下文、skills、chat history、execution state 配置。
+- `agents/watchlist/agents.yml`：宿主侧 agent manifest。
+- `agents/watchlist/summary-agent.yml`：watchlist 摘要 agent。
+
+数据库 DDL：
+
+- 只补 DigFlow runtime 表：`sqls/2026-07-09_DigFlow内嵌Runtime初始化DDL.sql`
+- 初始化完整库：`sqls/digcrawl_full_sql_ddl.sql`
+
+表前缀约定：
+
+- DigCrawl 业务表：`dc_*`
+- DigFlow runtime 表：`df_*`
 
 ### Providers（内置 Provider 开关）
 
