@@ -10,7 +10,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3
 	github.com/mark3labs/mcp-go v0.44.0
-	github.com/originaleric/DigFlow v1.1.1
+	github.com/originaleric/DigFlow v1.1.2-0.20260706170955-8e77addb892c
 	golang.org/x/net v0.50.0
 	gopkg.in/yaml.v3 v3.0.1
 )

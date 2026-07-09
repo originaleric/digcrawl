@@ -305,8 +305,8 @@ github.com/onsi/ginkgo v1.8.0/go.mod h1:lLunBs/Ym6LB5Z9jYTR76FiuTmxDTDusOGeTQH+W
 github.com/onsi/gomega v1.5.0/go.mod h1:ex+gbHU/CVuBBDIJjb2X0qEXbFg53c61hWP/1CpauHY=
 github.com/openai/openai-go v1.10.1 h1:7VR8z1foqJDjlaFZsNH5zZIYTWKYz97tdsVSzXDHQck=
 github.com/openai/openai-go v1.10.1/go.mod h1:g461MYGXEXBVdV5SaR/5tNzNbSfwTBBefwc+LlDCK0Y=
-github.com/originaleric/DigFlow v1.1.1 h1:Qp2yRRkVjpsh7ev4yO2t3Rq5K6Xp31lfQN9WWmCHG1Q=
-github.com/originaleric/DigFlow v1.1.1/go.mod h1:xb2hvkKStmu1ADKR15RlYYv46Fa2OaqAUYTtKeHEydc=
+github.com/originaleric/DigFlow v1.1.2-0.20260706170955-8e77addb892c h1:bE9a7IV0WziTFmxXne/sqlo5VAX6nAV91MSUD93nf04=
+github.com/originaleric/DigFlow v1.1.2-0.20260706170955-8e77addb892c/go.mod h1:xb2hvkKStmu1ADKR15RlYYv46Fa2OaqAUYTtKeHEydc=
 github.com/originaleric/digeino v1.0.13 h1:D6yUo1hLPI3wFP0q2HlPUoDXT5CMsrwOdiWl7uPfIZA=
 github.com/originaleric/digeino v1.0.13/go.mod h1:ILVhQO74mIEIlkXiRE0bSyyTApIi//aJ0mYjC8GtveA=
 github.com/originaleric/goDig v1.0.4 h1:BnKFHvNWC6eETUpn6+g8mw25BzIbJOG0CfNHGaPU1+Q=
