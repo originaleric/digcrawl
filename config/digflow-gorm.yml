@@ -1,0 +1,28 @@
+Gorm:
+  UseDbType: "mysql"
+
+  Mysql:
+    IsInitGolobalGormMysql: 1
+    SlowThreshold: 30
+    Write:
+      Host: "${DIGCRAWL_MYSQL_HOST}"
+      DataBase: "${DIGCRAWL_MYSQL_DATABASE}"
+      Port: 3306
+      Prefix: "df_"
+      User: "${DIGCRAWL_MYSQL_USER}"
+      Pass: "${DIGCRAWL_MYSQL_PASSWORD}"
+      Charset: "utf8mb4"
+      SetMaxIdleConns: 10
+      SetMaxOpenConns: 100
+      SetConnMaxLifetime: 3600
+    IsOpenReadDb: 0
+
+  Sqlite:
+    IsInitGolobalGormSqlite: 0
+    SlowThreshold: 30
+    Write:
+      Path: "./storage/sqlite/digflow.db"
+      SetMaxIdleConns: 1
+      SetMaxOpenConns: 1
+      SetConnMaxLifetime: 3600
+    IsOpenReadDb: 0

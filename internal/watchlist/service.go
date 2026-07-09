@@ -46,7 +46,26 @@ func NewService(cfg *config.Config) (*Service, error) {
 	var summarizer summary.Provider = fallback
 	if cfg.Summary.EnabledOrDefault() {
 		switch cfg.Summary.ProviderOrDefault() {
-		case "digflow_runtime", "digflow_http":
+		case "digflow_runtime":
+			if cfg.Summary.DigFlow.RuntimeModeOrDefault() == "http" {
+				summarizer = summary.DigFlowProvider{
+					BaseURL: cfg.Summary.DigFlow.BaseURL, Endpoint: cfg.Summary.DigFlow.Endpoint,
+					Agent: cfg.Summary.DigFlow.Agent, AuthToken: cfg.Summary.DigFlow.AuthToken,
+					Timeout: time.Duration(cfg.Summary.TimeoutSecOrDefault()) * time.Second,
+					Budget:  budget, Fallback: fallback,
+				}
+			} else {
+				summarizer = &summary.EmbeddedDigFlowProvider{
+					RootDir: cfg.Summary.DigFlow.RootDir, ConfigPath: cfg.Summary.DigFlow.ConfigPath,
+					GormConfigPath: cfg.Summary.DigFlow.GormConfigPath, EinoConfigPath: cfg.Summary.DigFlow.EinoConfigPath,
+					ManifestPath: cfg.Summary.DigFlow.ManifestPath, GlobalToolsPath: cfg.Summary.DigFlow.GlobalToolsPath,
+					GlobalSkillsDir: cfg.Summary.DigFlow.GlobalSkillsDir, Agent: cfg.Summary.DigFlow.Agent,
+					DisableCheckpoint: cfg.Summary.DigFlow.DisableCheckpointOrDefault(),
+					Timeout:           time.Duration(cfg.Summary.TimeoutSecOrDefault()) * time.Second,
+					Budget:            budget, Fallback: fallback,
+				}
+			}
+		case "digflow_http":
 			summarizer = summary.DigFlowProvider{
 				BaseURL: cfg.Summary.DigFlow.BaseURL, Endpoint: cfg.Summary.DigFlow.Endpoint,
 				Agent: cfg.Summary.DigFlow.Agent, AuthToken: cfg.Summary.DigFlow.AuthToken,

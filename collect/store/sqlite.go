@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
+	_ "github.com/glebarez/go-sqlite"
 	"github.com/google/uuid"
-	_ "modernc.org/sqlite"
 )
 
 //go:embed migrate/001_init.sql

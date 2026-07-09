@@ -175,7 +175,7 @@ Watchlist:
 
 Summary:
   Enabled: false
-  # extractive | llm_direct | digflow_runtime
+  # extractive | llm_direct | digflow_runtime | digflow_http
   Provider: "extractive"
   TimeoutSec: 60
   MaxInputChars: 30000
@@ -188,7 +188,16 @@ Summary:
     OCRChars: 4000
     MetadataChars: 2000
   DigFlow:
-    RuntimeMode: "http"
+    # embedded 使用 DigCrawl 进程内 DigFlow.runtime；http 保留远程兼容路径。
+    RuntimeMode: "embedded"
+    RootDir: "."
+    ConfigPath: "config/digflow.yml"
+    GormConfigPath: "config/digflow-gorm.yml"
+    EinoConfigPath: "config/eino.yml"
+    ManifestPath: "agents/watchlist/agents.yml"
+    GlobalToolsPath: "config/global_tools.yml"
+    GlobalSkillsDir: "skills"
+    DisableCheckpoint: true
     BaseURL: "http://127.0.0.1:20201"
     Endpoint: "/api/v1/invoke"
     Agent: "watchlist_summary_agent"

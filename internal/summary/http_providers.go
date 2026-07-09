@@ -13,13 +13,14 @@ import (
 )
 
 type DigFlowProvider struct {
-	BaseURL   string
-	Endpoint  string
-	Agent     string
-	AuthToken string
-	Timeout   time.Duration
-	Budget    InputBudget
-	Fallback  Provider
+	BaseURL      string
+	Endpoint     string
+	Agent        string
+	AuthToken    string
+	ProviderName string
+	Timeout      time.Duration
+	Budget       InputBudget
+	Fallback     Provider
 }
 
 func (p DigFlowProvider) Summarize(ctx context.Context, req Request) (*Result, error) {
@@ -85,7 +86,7 @@ func (p DigFlowProvider) Summarize(ctx context.Context, req Request) (*Result, e
 	if err != nil {
 		return p.fallback(ctx, req, err)
 	}
-	res.Provider = "digflow_runtime"
+	res.Provider = p.providerName()
 	return res, nil
 }
 
@@ -95,9 +96,16 @@ func (p DigFlowProvider) fallback(ctx context.Context, req Request, cause error)
 	}
 	res, err := p.Fallback.Summarize(ctx, req)
 	if res != nil {
-		res.Error = cause.Error()
+		res.Error = safeFallbackError(cause)
 	}
 	return res, err
+}
+
+func (p DigFlowProvider) providerName() string {
+	if strings.TrimSpace(p.ProviderName) != "" {
+		return strings.TrimSpace(p.ProviderName)
+	}
+	return "digflow_http"
 }
 
 type LLMProvider struct {
@@ -180,7 +188,7 @@ func (p LLMProvider) fallback(ctx context.Context, req Request, cause error) (*R
 	}
 	res, err := p.Fallback.Summarize(ctx, req)
 	if res != nil {
-		res.Error = cause.Error()
+		res.Error = safeFallbackError(cause)
 	}
 	return res, err
 }
@@ -257,4 +265,27 @@ func safeProviderError(provider string, status int, body []byte) error {
 		}
 	}
 	return fmt.Errorf("%s http %d: %s", provider, status, msg)
+}
+
+func safeFallbackError(cause error) string {
+	if cause == nil {
+		return ""
+	}
+	msg := strings.ToLower(cause.Error())
+	switch {
+	case strings.Contains(msg, "schema"):
+		return "summary response schema invalid"
+	case strings.Contains(msg, "json"):
+		return "summary response json invalid"
+	case strings.Contains(msg, "api key") || strings.Contains(msg, "apikey") || strings.Contains(msg, "unauthorized") || strings.Contains(msg, "forbidden"):
+		return "summary provider credential invalid"
+	case strings.Contains(msg, "manifest") || strings.Contains(msg, "config") || strings.Contains(msg, "agent"):
+		return "summary provider configuration invalid"
+	case strings.Contains(msg, "deadline exceeded") || strings.Contains(msg, "timeout") || strings.Contains(msg, "connection refused") || strings.Contains(msg, "no such host") || strings.Contains(msg, "dial tcp"):
+		return "summary provider unavailable"
+	case strings.Contains(msg, "empty summary"):
+		return "summary provider returned empty result"
+	default:
+		return "summary provider failed"
+	}
 }

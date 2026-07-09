@@ -1,0 +1,3 @@
+Agents:
+  - Name: watchlist_summary_agent
+    Config: ./summary-agent.yml

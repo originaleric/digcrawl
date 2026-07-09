@@ -31,3 +31,4 @@
 .env
 .env.*
 *.pem
+config/gorm.yml

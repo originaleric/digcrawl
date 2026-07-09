@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
+	_ "github.com/glebarez/go-sqlite"
 	"github.com/google/uuid"
-	_ "modernc.org/sqlite"
 )
 
 type Store struct {

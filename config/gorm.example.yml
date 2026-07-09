@@ -1,0 +1,86 @@
+Gorm:
+  UseDbType: "mysql"
+  Mysql:
+    IsInitGolobalGormMysql: 1
+    SlowThreshold: 30
+    Write:
+      Host: "${DIGCRAWL_MYSQL_HOST}"
+      DataBase: "${DIGCRAWL_MYSQL_DATABASE}"
+      Port: 3306
+      Prefix: "dc_"
+      User: "${DIGCRAWL_MYSQL_USER}"
+      Pass: "${DIGCRAWL_MYSQL_PASSWORD}"
+      Charset: "utf8mb4"
+      SetMaxIdleConns: 10
+      SetMaxOpenConns: 50
+      SetConnMaxLifetime: 300
+    IsOpenReadDb: 0
+    Read:
+      Host: "${DIGCRAWL_MYSQL_HOST}"
+      DataBase: "${DIGCRAWL_MYSQL_DATABASE}"
+      Port: 3306
+      Prefix: "dc_"
+      User: "${DIGCRAWL_MYSQL_USER}"
+      Pass: "${DIGCRAWL_MYSQL_PASSWORD}"
+      Charset: "utf8mb4"
+      SetMaxIdleConns: 10
+      SetMaxOpenConns: 50
+      SetConnMaxLifetime: 300
+  SqlServer:
+    IsInitGolobalGormSqlserver: 0
+    SlowThreshold: 30
+    Write:
+      Host: "127.0.0.1"
+      DataBase: "dig_crawl"
+      Port: 1433
+      Prefix: "dc_"
+      User: ""
+      Pass: ""
+      SetMaxIdleConns: 10
+      SetMaxOpenConns: 50
+      SetConnMaxLifetime: 300
+    IsOpenReadDb: 0
+    Read:
+      Host: "127.0.0.1"
+      DataBase: "dig_crawl"
+      Port: 1433
+      Prefix: "dc_"
+      User: ""
+      Pass: ""
+      SetMaxIdleConns: 10
+      SetMaxOpenConns: 50
+      SetConnMaxLifetime: 300
+  PostgreSql:
+    IsInitGolobalGormPostgreSql: 0
+    SlowThreshold: 30
+    Write:
+      Host: "127.0.0.1"
+      DataBase: "dig_crawl"
+      Port: 5432
+      Prefix: "dc_"
+      User: ""
+      Pass: ""
+      SetMaxIdleConns: 10
+      SetMaxOpenConns: 50
+      SetConnMaxLifetime: 300
+    IsOpenReadDb: 0
+    Read:
+      Host: "127.0.0.1"
+      DataBase: "dig_crawl"
+      Port: 5432
+      Prefix: "dc_"
+      User: ""
+      Pass: ""
+      SetMaxIdleConns: 10
+      SetMaxOpenConns: 50
+      SetConnMaxLifetime: 300
+  Sqlite:
+    IsInitGolobalGormSqlite: 0
+    SlowThreshold: 30
+    Write:
+      Dsn: ""
+      Path: "./storage/sqlite/dig-crawl.db"
+      SetMaxIdleConns: 1
+      SetMaxOpenConns: 1
+      SetConnMaxLifetime: 3600
+    IsOpenReadDb: 0

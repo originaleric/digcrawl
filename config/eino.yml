@@ -1,0 +1,69 @@
+version: 2
+
+digeino:
+  Gateway:
+    AllowedReadPaths:
+      - "agents"
+      - "prompts"
+      - "skills"
+      - "docs"
+      - "updates"
+    AllowedWritePaths:
+      - "storage/digcrawl/digflow-output"
+  Status:
+    Store:
+      Enabled: false
+      Type: "mysql"
+      Vector:
+        Enabled: false
+  Learning:
+    Enabled: false
+  Tools:
+    Embedding:
+      Type: "disabled"
+
+resources:
+  ocr:
+    enabled: false
+
+context:
+  Enabled: true
+  Engine:
+    SummarizeThreshold: 10
+    SlidingWindowSize: 6
+    MaxSummaryLength: 2000
+  LongTerm:
+    Enabled: false
+    Store: "auto"
+  ChatHistory:
+    Enabled: true
+    Type: "mysql"
+    ReuseGlobalMySQL: true
+
+vectorstore:
+  Enabled: false
+  Type: "disabled"
+
+skill:
+  table: "df_skills"
+  auto_migrate: false
+
+chat_history:
+  message_table: "df_chat_message"
+  session_table: "df_chat_session"
+
+long_term_memory:
+  table: "df_long_term_memory"
+  local_sqlite:
+    index_prefix: "df_ltm_search"
+
+execution_state:
+  table: "df_execution_state"
+
+checkpoint:
+  table: "df_check_points"
+
+Apps:
+  AutoLoadAll: false
+  Whitelist:
+    - "watchlist_summary_agent"

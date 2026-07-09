@@ -442,11 +442,19 @@ type SummaryInputBudget struct {
 }
 
 type DigFlowSummaryConfig struct {
-	RuntimeMode string `yaml:"RuntimeMode" json:"RuntimeMode,omitempty"`
-	BaseURL     string `yaml:"BaseURL" json:"BaseURL,omitempty"`
-	Endpoint    string `yaml:"Endpoint" json:"Endpoint,omitempty"`
-	Agent       string `yaml:"Agent" json:"Agent,omitempty"`
-	AuthToken   string `yaml:"AuthToken" json:"AuthToken,omitempty"`
+	RuntimeMode       string `yaml:"RuntimeMode" json:"RuntimeMode,omitempty"`
+	RootDir           string `yaml:"RootDir" json:"RootDir,omitempty"`
+	ConfigPath        string `yaml:"ConfigPath" json:"ConfigPath,omitempty"`
+	GormConfigPath    string `yaml:"GormConfigPath" json:"GormConfigPath,omitempty"`
+	EinoConfigPath    string `yaml:"EinoConfigPath" json:"EinoConfigPath,omitempty"`
+	ManifestPath      string `yaml:"ManifestPath" json:"ManifestPath,omitempty"`
+	GlobalToolsPath   string `yaml:"GlobalToolsPath" json:"GlobalToolsPath,omitempty"`
+	GlobalSkillsDir   string `yaml:"GlobalSkillsDir" json:"GlobalSkillsDir,omitempty"`
+	DisableCheckpoint *bool  `yaml:"DisableCheckpoint" json:"DisableCheckpoint,omitempty"`
+	BaseURL           string `yaml:"BaseURL" json:"BaseURL,omitempty"`
+	Endpoint          string `yaml:"Endpoint" json:"Endpoint,omitempty"`
+	Agent             string `yaml:"Agent" json:"Agent,omitempty"`
+	AuthToken         string `yaml:"AuthToken" json:"AuthToken,omitempty"`
 }
 
 type LLMSummaryConfig struct {
@@ -508,6 +516,25 @@ func (c SummaryConfig) InputBudgetOrDefault() SummaryInputBudget {
 		b.MetadataChars = 2000
 	}
 	return b
+}
+
+func (c DigFlowSummaryConfig) RuntimeModeOrDefault() string {
+	mode := strings.ToLower(strings.TrimSpace(c.RuntimeMode))
+	switch mode {
+	case "embedded", "runtime", "local":
+		return "embedded"
+	case "http", "remote":
+		return "http"
+	default:
+		return "embedded"
+	}
+}
+
+func (c DigFlowSummaryConfig) DisableCheckpointOrDefault() bool {
+	if c.DisableCheckpoint == nil {
+		return true
+	}
+	return *c.DisableCheckpoint
 }
 
 // NotificationsConfig controls outbound notification providers.
@@ -808,10 +835,18 @@ func init() {
 					MetadataChars: 2000,
 				},
 				DigFlow: DigFlowSummaryConfig{
-					RuntimeMode: "http",
-					BaseURL:     "http://127.0.0.1:20201",
-					Endpoint:    "/api/v1/invoke",
-					Agent:       "watchlist_summary_agent",
+					RuntimeMode:       "embedded",
+					RootDir:           ".",
+					ConfigPath:        "config/digflow.yml",
+					GormConfigPath:    "config/digflow-gorm.yml",
+					EinoConfigPath:    "config/eino.yml",
+					ManifestPath:      "agents/watchlist/agents.yml",
+					GlobalToolsPath:   "config/global_tools.yml",
+					GlobalSkillsDir:   "skills",
+					DisableCheckpoint: &enabled,
+					BaseURL:           "http://127.0.0.1:20201",
+					Endpoint:          "/api/v1/invoke",
+					Agent:             "watchlist_summary_agent",
 				},
 				LLM: LLMSummaryConfig{
 					BaseURL: "https://api.openai.com/v1",
@@ -1132,6 +1167,30 @@ func mergeDefaults(cfg *Config) {
 	}
 	if cfg.Summary.DigFlow.RuntimeMode == "" {
 		cfg.Summary.DigFlow.RuntimeMode = defaultCfg.Summary.DigFlow.RuntimeMode
+	}
+	if cfg.Summary.DigFlow.RootDir == "" {
+		cfg.Summary.DigFlow.RootDir = defaultCfg.Summary.DigFlow.RootDir
+	}
+	if cfg.Summary.DigFlow.ConfigPath == "" {
+		cfg.Summary.DigFlow.ConfigPath = defaultCfg.Summary.DigFlow.ConfigPath
+	}
+	if cfg.Summary.DigFlow.GormConfigPath == "" {
+		cfg.Summary.DigFlow.GormConfigPath = defaultCfg.Summary.DigFlow.GormConfigPath
+	}
+	if cfg.Summary.DigFlow.EinoConfigPath == "" {
+		cfg.Summary.DigFlow.EinoConfigPath = defaultCfg.Summary.DigFlow.EinoConfigPath
+	}
+	if cfg.Summary.DigFlow.ManifestPath == "" {
+		cfg.Summary.DigFlow.ManifestPath = defaultCfg.Summary.DigFlow.ManifestPath
+	}
+	if cfg.Summary.DigFlow.GlobalToolsPath == "" {
+		cfg.Summary.DigFlow.GlobalToolsPath = defaultCfg.Summary.DigFlow.GlobalToolsPath
+	}
+	if cfg.Summary.DigFlow.GlobalSkillsDir == "" {
+		cfg.Summary.DigFlow.GlobalSkillsDir = defaultCfg.Summary.DigFlow.GlobalSkillsDir
+	}
+	if cfg.Summary.DigFlow.DisableCheckpoint == nil {
+		cfg.Summary.DigFlow.DisableCheckpoint = defaultCfg.Summary.DigFlow.DisableCheckpoint
 	}
 	if cfg.Summary.DigFlow.BaseURL == "" {
 		cfg.Summary.DigFlow.BaseURL = defaultCfg.Summary.DigFlow.BaseURL

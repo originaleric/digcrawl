@@ -1,0 +1,42 @@
+AppDebug: true
+
+Logs:
+  OutputPaths:
+    - "stdout"
+  ErrorOutputPaths:
+    - "stderr"
+  Level: "info"
+  TextFormat: "console"
+  MaxSize: 10
+  MaxBackups: 3
+  MaxAge: 7
+  Compress: false
+
+ChatHistoryStore:
+  Enabled: true
+  Type: "mysql"
+  MySQL:
+    Table: "df_chat_message"
+    SessionTable: "df_chat_session"
+
+sql_lite:
+  Path: ""
+
+long_term_memory:
+  Table: "df_long_term_memory"
+
+LocalMemory:
+  DefaultTopK: 10
+  VectorMode: "blob"
+  TableNamePrefix: "df_"
+  EmbedModelVersFilterStrict: false
+  HybridMode: "hybrid"
+  VectorCandidateLimit: 5000
+  RRFK: 60
+  EmbedModelVers: ""
+  HybridFusion: "rrf"
+  HybridFusionAlpha: 0.5
+
+AgentRender:
+  Enabled: true
+  OutputMode: "both"
