@@ -192,6 +192,89 @@ ASR:
   LocalArgs: []
 ```
 
+### Watchlist / Summary / Notifications
+
+Watchlist 用于按配置定期检查指定来源的新增内容，复用 Collect 抓详情，再通过 Summary provider 生成摘要并发送通知。
+
+`Watchlist` 字段：
+
+| 字段 | 说明 |
+|------|------|
+| `Enabled` | 是否启用 watchlist，默认 `false` |
+| `DryRun` | 是否允许不配置真实通知通道时仅记录运行，默认 `false` |
+| `DefaultInterval` | 常驻模式默认检查间隔，默认 `6h` |
+| `NotifyOnFirstRun` | 首次运行是否通知历史内容，默认 `false`，即只建基线 |
+| `MaxItemsPerRun` | 单个 watch item 每轮最多处理的新内容数 |
+| `LockTTL` | per-watch 锁过期时间，避免 cron / 常驻进程重入 |
+| `DBPath` | watchlist 状态库路径，默认复用 `Collect.DBPath` |
+| `Items` | 监控目标列表 |
+
+`Summary` 字段：
+
+| 字段 | 说明 |
+|------|------|
+| `Enabled` | 是否启用摘要；关闭时使用规则摘要兜底 |
+| `Provider` | `extractive`、`llm_direct`、`digflow_runtime` |
+| `TimeoutSec` | 摘要请求超时 |
+| `MaxInputChars` | 送入摘要 provider 的总输入上限 |
+| `FallbackProvider` | 摘要失败时的兜底 provider，默认 `extractive` |
+| `InputBudget` | 正文、ASR、OCR、metadata 的分桶预算 |
+| `DigFlow` | DigFlow HTTP Runtime 接入配置 |
+| `LLM` | OpenAI-compatible chat completion 直连接入配置 |
+
+`Notifications.Feishu` 字段：
+
+| 字段 | 说明 |
+|------|------|
+| `Enabled` | 是否启用飞书 webhook 通知 |
+| `DefaultChannel` | 默认通知通道 ID |
+| `Channels` | webhook 通道列表 |
+| `WebhookURL` | 飞书机器人 webhook，支持 `${ENV}` |
+| `Secret` | 飞书签名 secret，支持 `${ENV}` |
+| `MaxMessageChars` | 单条通知文本长度上限，超出会截断 |
+
+配置示例：
+
+```yaml
+Watchlist:
+  Enabled: true
+  DryRun: false
+  DefaultInterval: "6h"
+  NotifyOnFirstRun: false
+  MaxItemsPerRun: 20
+  LockTTL: "30m"
+  Items:
+    - ID: rss-example
+      Platform: rss
+      Type: rss
+      URL: https://example.com/feed.xml
+      Name: Example Feed
+      NotifyTo: feishu-default
+      Enabled: true
+
+Summary:
+  Enabled: true
+  Provider: digflow_runtime
+  FallbackProvider: extractive
+  DigFlow:
+    RuntimeMode: http
+    BaseURL: http://127.0.0.1:20201
+    Endpoint: /api/v1/invoke
+    Agent: watchlist_summary_agent
+    AuthToken: ${DIGFLOW_API_TOKEN}
+
+Notifications:
+  Feishu:
+    Enabled: true
+    DefaultChannel: feishu-default
+    Channels:
+      - ID: feishu-default
+        WebhookURL: ${FEISHU_WEBHOOK_URL}
+        Secret: ${FEISHU_WEBHOOK_SECRET}
+        TimeoutSec: 10
+        MaxMessageChars: 12000
+```
+
 ### Providers（内置 Provider 开关）
 
 | 字段 | 说明 |
@@ -219,6 +302,7 @@ digcrawl collect inbox         # 处理收件箱
 digcrawl browser login         # 平台扫码/交互登录并保存 Cookie
 digcrawl browser check         # 检查平台会话，可选试读
 digcrawl asr transcribe        # ffmpeg 抽音频并转写
+digcrawl watchlist run         # 执行 watchlist 监控、摘要和通知
 digcollect <url>              # 轻量采集入口，等价于 digcrawl collect <url>
 digcrawl help
 ```

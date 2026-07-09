@@ -23,9 +23,11 @@ DigCrawl 的核心目标不是“提供一个网关”，而是把公众号、�
 | 静态解析/API 优先 + 浏览器兜底 | 微信公众号优先使用 HTTP HTML 静态解析；小红书、抖音、头条优先尝试页面上下文 API；X 优先尝试官方 Tweet lookup，再回落到公开 oEmbed 和浏览器 |
 | 登录态复用 | 支持通过有头浏览器完成平台登录，后续采集复用本机 Cookie |
 | 批量采集与收件箱 | 支持 URL 文件批处理、`collect-inbox` 收件箱和 `--watch` 轮询 |
+| Watchlist 定时监控 | 支持按配置定期检查 RSS/sitemap、头条作者页和平台主页的新增内容，并通过通知通道推送 |
 | 多格式导出 | 同时导出 Markdown、HTML、JSON，可选下载媒体到 `.assets/` |
 | OCR 图片文字提取 | 可通过配置接入 OCR provider，对正文图片、截图、平台媒体和本地 assets 提取文字并写入结构化元数据 |
 | ASR 视频语音转写 | 通过 `ffmpeg` 抽音频后，支持 OpenAI-compatible API 或本地 `faster-whisper` 命令转写 |
+| LLM 摘要与通知 | Watchlist 新增内容可通过 extractive、OpenAI-compatible API 或 DigFlow Runtime 生成摘要，再推送到飞书 |
 | 可检索持久化 | 支持 `index.json`、SQLite `collect.db` 或二者同时启用 |
 | 宿主集成 | 可通过 HTTP Gateway、反向 Collector、MCP、stdio 或 Go SDK 接入业务系统 |
 | 本机安全边界 | 默认本机监听、工具白名单、高风险工具审批、域名策略、审计日志和 Artifact 管理 |
@@ -33,6 +35,8 @@ DigCrawl 的核心目标不是“提供一个网关”，而是把公众号、�
 OCR 目前支持 OpenAI-compatible 视觉模型、智谱 `zhipu_ocr` / `glm-ocr` 原生接口和本地开发桩；Collect 下载媒体时会优先对本地 `.assets` 图片做 OCR，并将结果写入 `platform_metadata.ocr_results`。
 
 ASR 能力通过 `digcrawl asr transcribe <video>` 或 Gateway 工具 `asr.transcribe` 调用：先用 `ffmpeg` 抽取 16k 单声道 wav，再按配置选择 API provider 或本地 provider。API provider 兼容 `/audio/transcriptions`；本地 provider 默认调用 `faster-whisper`，也可在 `ASR.LocalCommand` / `ASR.LocalArgs` 中替换为 whisper.cpp 等命令。
+
+Watchlist 能力通过 `digcrawl watchlist run --once` 或 `digcrawl watchlist run` 调用：先对配置的 RSS/sitemap、头条作者页或平台主页做最新内容发现，再复用 Collect 抓取详情，最后按 `Summary` 配置使用规则摘要、LLM 直连或 DigFlow Runtime 生成摘要，并通过 Feishu webhook 推送。状态、锁和投递结果写入 SQLite，避免重复通知。
 
 ## 更新概览
 
@@ -42,6 +46,7 @@ ASR 能力通过 `digcrawl asr transcribe <video>` 或 Gateway 工具 `asr.trans
 - 2026-07-04：X/Twitter 单帖读取新增 Tweet lookup API 优先、OAuth2 app-only token 缓存、公开 oEmbed 兜底和登录墙/不可见壳页校验。
 - 2026-07-04：OCR 全库接入智谱 `zhipu_ocr` / `glm-ocr`，支持远程图片 `layout_parsing`、本地 assets `files/ocr`、图片类型 sniff 和 OCR metadata 输出。
 - 2026-07-08：视频解析链路补齐 `ffmpeg` 音频抽取、ASR API provider、本地 `faster-whisper` provider、Gateway 工具 `asr.transcribe` 和 CLI 转写命令。
+- 2026-07-09：新增 Watchlist 定时监控、SQLite 状态/锁、Summary provider、DigFlow HTTP 摘要 adapter 和 Feishu 通知模块。
 
 ## 支持的平台
 
@@ -94,6 +99,18 @@ go build -o digcollect ./cmd/digcollect
 ```bash
 ./digcrawl collect inbox
 ./digcrawl collect inbox --watch
+```
+
+Watchlist 单轮检查：
+
+```bash
+./digcrawl watchlist run --once --config config/config.yaml
+```
+
+Watchlist 常驻调度：
+
+```bash
+./digcrawl watchlist run --config config/config.yaml
 ```
 
 本地 ASR 依赖 `ffmpeg` 和 `faster-whisper`。`ffmpeg` 需能在 `PATH` 中直接调用；`faster-whisper` 建议安装到隔离 venv，再把可执行命令加入 `PATH` 或通过 `--local-command` / `ASR.LocalCommand` 显式指定。
@@ -205,6 +222,7 @@ curl -s http://127.0.0.1:8787/manifest
 | `digcrawl browser login` | 打开有头浏览器完成平台登录并保存 Cookie |
 | `digcrawl browser check` | 检查平台会话，可选试读 URL |
 | `digcrawl asr transcribe` | ffmpeg 抽音频并用 API 或本地 ASR 转写 |
+| `digcrawl watchlist run` | 执行 watchlist 定时监控、摘要和通知 |
 | `digcrawl gateway` | HTTP 工具网关 |
 | `digcrawl collector` | WebSocket 反向连接 Collector |
 | `digcrawl connect` | 保存宿主配置并启动 Collector |
@@ -218,6 +236,9 @@ curl -s http://127.0.0.1:8787/manifest
 
 ```text
 collect/            URL 检测、采集编排、导出、索引、收件箱
+internal/watchlist/ Watchlist 发现、锁、状态机、调度和通知编排
+internal/summary/   Extractive、LLM direct、DigFlow Runtime 摘要 provider
+internal/notify/    Feishu webhook 等通知 provider
 internal/platform/  微信、小红书、抖音、头条、X 的平台读取实现
 internal/browser/   本地 go-rod 浏览器、登录、快照、页面操作
 provider/           platform、browser、asr、example、stub 工具 Provider

@@ -11,14 +11,17 @@ import (
 
 // Config holds DigCrawl runtime settings.
 type Config struct {
-	Gateway      GatewayConfig      `yaml:"Gateway" json:"Gateway"`
-	Collector    CollectorConfig    `yaml:"Collector" json:"Collector"`
-	Collect      CollectConfig      `yaml:"Collect" json:"Collect"`
-	LocalBrowser LocalBrowserConfig `yaml:"LocalBrowser" json:"LocalBrowser"`
-	Platform     PlatformConfig     `yaml:"Platform" json:"Platform"`
-	OCR          OCRConfig          `yaml:"OCR" json:"OCR"`
-	ASR          ASRConfig          `yaml:"ASR" json:"ASR"`
-	Providers    ProvidersConfig    `yaml:"Providers" json:"Providers"`
+	Gateway       GatewayConfig       `yaml:"Gateway" json:"Gateway"`
+	Collector     CollectorConfig     `yaml:"Collector" json:"Collector"`
+	Collect       CollectConfig       `yaml:"Collect" json:"Collect"`
+	LocalBrowser  LocalBrowserConfig  `yaml:"LocalBrowser" json:"LocalBrowser"`
+	Platform      PlatformConfig      `yaml:"Platform" json:"Platform"`
+	OCR           OCRConfig           `yaml:"OCR" json:"OCR"`
+	ASR           ASRConfig           `yaml:"ASR" json:"ASR"`
+	Watchlist     WatchlistConfig     `yaml:"Watchlist" json:"Watchlist"`
+	Summary       SummaryConfig       `yaml:"Summary" json:"Summary"`
+	Notifications NotificationsConfig `yaml:"Notifications" json:"Notifications"`
+	Providers     ProvidersConfig     `yaml:"Providers" json:"Providers"`
 }
 
 // CollectConfig local content collect and export settings.
@@ -334,6 +337,205 @@ func (c ASRConfig) LocalCommandOrDefault() string {
 	return "faster-whisper"
 }
 
+// WatchlistConfig controls periodic source monitoring.
+type WatchlistConfig struct {
+	Enabled          *bool           `yaml:"Enabled" json:"Enabled,omitempty"`
+	DryRun           *bool           `yaml:"DryRun" json:"DryRun,omitempty"`
+	DefaultInterval  string          `yaml:"DefaultInterval" json:"DefaultInterval,omitempty"`
+	NotifyOnFirstRun *bool           `yaml:"NotifyOnFirstRun" json:"NotifyOnFirstRun,omitempty"`
+	MaxItemsPerRun   int             `yaml:"MaxItemsPerRun" json:"MaxItemsPerRun,omitempty"`
+	LockTTL          string          `yaml:"LockTTL" json:"LockTTL,omitempty"`
+	DBPath           string          `yaml:"DBPath" json:"DBPath,omitempty"`
+	Items            []WatchlistItem `yaml:"Items" json:"Items,omitempty"`
+}
+
+// WatchlistItem is one monitored source.
+type WatchlistItem struct {
+	ID       string `yaml:"ID" json:"ID,omitempty"`
+	Platform string `yaml:"Platform" json:"Platform,omitempty"`
+	Type     string `yaml:"Type" json:"Type,omitempty"`
+	URL      string `yaml:"URL" json:"URL,omitempty"`
+	Name     string `yaml:"Name" json:"Name,omitempty"`
+	Interval string `yaml:"Interval" json:"Interval,omitempty"`
+	NotifyTo string `yaml:"NotifyTo" json:"NotifyTo,omitempty"`
+	Enabled  *bool  `yaml:"Enabled" json:"Enabled,omitempty"`
+}
+
+func (c WatchlistConfig) EnabledOrDefault() bool {
+	if c.Enabled == nil {
+		return false
+	}
+	return *c.Enabled
+}
+
+func (c WatchlistConfig) DryRunOrDefault() bool {
+	if c.DryRun == nil {
+		return false
+	}
+	return *c.DryRun
+}
+
+func (c WatchlistConfig) DefaultIntervalOrDefault() string {
+	if strings.TrimSpace(c.DefaultInterval) != "" {
+		return strings.TrimSpace(c.DefaultInterval)
+	}
+	return "6h"
+}
+
+func (c WatchlistConfig) LockTTLOrDefault() string {
+	if strings.TrimSpace(c.LockTTL) != "" {
+		return strings.TrimSpace(c.LockTTL)
+	}
+	return "30m"
+}
+
+func (c WatchlistConfig) MaxItemsPerRunOrDefault() int {
+	if c.MaxItemsPerRun > 0 {
+		return c.MaxItemsPerRun
+	}
+	return 20
+}
+
+func (c WatchlistConfig) NotifyOnFirstRunOrDefault() bool {
+	if c.NotifyOnFirstRun == nil {
+		return false
+	}
+	return *c.NotifyOnFirstRun
+}
+
+func (c WatchlistConfig) DBPathOrDefault(collectDB string) string {
+	if strings.TrimSpace(c.DBPath) != "" {
+		return strings.TrimSpace(c.DBPath)
+	}
+	if strings.TrimSpace(collectDB) != "" {
+		return strings.TrimSpace(collectDB)
+	}
+	return "storage/digcrawl/collect.db"
+}
+
+func (i WatchlistItem) EnabledOrDefault() bool {
+	if i.Enabled == nil {
+		return true
+	}
+	return *i.Enabled
+}
+
+// SummaryConfig controls watchlist summary generation.
+type SummaryConfig struct {
+	Enabled             *bool                `yaml:"Enabled" json:"Enabled,omitempty"`
+	Provider            string               `yaml:"Provider" json:"Provider,omitempty"`
+	TimeoutSec          int                  `yaml:"TimeoutSec" json:"TimeoutSec,omitempty"`
+	MaxInputChars       int                  `yaml:"MaxInputChars" json:"MaxInputChars,omitempty"`
+	ImportanceThreshold string               `yaml:"ImportanceThreshold" json:"ImportanceThreshold,omitempty"`
+	FallbackProvider    string               `yaml:"FallbackProvider" json:"FallbackProvider,omitempty"`
+	Mode                string               `yaml:"Mode" json:"Mode,omitempty"`
+	InputBudget         SummaryInputBudget   `yaml:"InputBudget" json:"InputBudget,omitempty"`
+	DigFlow             DigFlowSummaryConfig `yaml:"DigFlow" json:"DigFlow,omitempty"`
+	LLM                 LLMSummaryConfig     `yaml:"LLM" json:"LLM,omitempty"`
+}
+
+type SummaryInputBudget struct {
+	TextChars     int `yaml:"TextChars" json:"TextChars,omitempty"`
+	ASRChars      int `yaml:"ASRChars" json:"ASRChars,omitempty"`
+	OCRChars      int `yaml:"OCRChars" json:"OCRChars,omitempty"`
+	MetadataChars int `yaml:"MetadataChars" json:"MetadataChars,omitempty"`
+}
+
+type DigFlowSummaryConfig struct {
+	RuntimeMode string `yaml:"RuntimeMode" json:"RuntimeMode,omitempty"`
+	BaseURL     string `yaml:"BaseURL" json:"BaseURL,omitempty"`
+	Endpoint    string `yaml:"Endpoint" json:"Endpoint,omitempty"`
+	Agent       string `yaml:"Agent" json:"Agent,omitempty"`
+	AuthToken   string `yaml:"AuthToken" json:"AuthToken,omitempty"`
+}
+
+type LLMSummaryConfig struct {
+	APIKey  string `yaml:"APIKey" json:"APIKey,omitempty"`
+	BaseURL string `yaml:"BaseURL" json:"BaseURL,omitempty"`
+	Model   string `yaml:"Model" json:"Model,omitempty"`
+}
+
+func (c SummaryConfig) EnabledOrDefault() bool {
+	if c.Enabled == nil {
+		return false
+	}
+	return *c.Enabled
+}
+
+func (c SummaryConfig) ProviderOrDefault() string {
+	p := strings.ToLower(strings.TrimSpace(c.Provider))
+	switch p {
+	case "digflow_runtime", "digflow_http", "llm_direct", "extractive":
+		return p
+	default:
+		return "extractive"
+	}
+}
+
+func (c SummaryConfig) TimeoutSecOrDefault() int {
+	if c.TimeoutSec > 0 {
+		return c.TimeoutSec
+	}
+	return 60
+}
+
+func (c SummaryConfig) MaxInputCharsOrDefault() int {
+	if c.MaxInputChars > 0 {
+		return c.MaxInputChars
+	}
+	return 30000
+}
+
+func (c SummaryConfig) FallbackProviderOrDefault() string {
+	if strings.TrimSpace(c.FallbackProvider) != "" {
+		return strings.ToLower(strings.TrimSpace(c.FallbackProvider))
+	}
+	return "extractive"
+}
+
+func (c SummaryConfig) InputBudgetOrDefault() SummaryInputBudget {
+	b := c.InputBudget
+	if b.TextChars <= 0 {
+		b.TextChars = 12000
+	}
+	if b.ASRChars <= 0 {
+		b.ASRChars = 12000
+	}
+	if b.OCRChars <= 0 {
+		b.OCRChars = 4000
+	}
+	if b.MetadataChars <= 0 {
+		b.MetadataChars = 2000
+	}
+	return b
+}
+
+// NotificationsConfig controls outbound notification providers.
+type NotificationsConfig struct {
+	Feishu FeishuNotificationConfig `yaml:"Feishu" json:"Feishu,omitempty"`
+}
+
+type FeishuNotificationConfig struct {
+	Enabled        *bool           `yaml:"Enabled" json:"Enabled,omitempty"`
+	DefaultChannel string          `yaml:"DefaultChannel" json:"DefaultChannel,omitempty"`
+	Channels       []FeishuChannel `yaml:"Channels" json:"Channels,omitempty"`
+}
+
+type FeishuChannel struct {
+	ID              string `yaml:"ID" json:"ID,omitempty"`
+	WebhookURL      string `yaml:"WebhookURL" json:"WebhookURL,omitempty"`
+	Secret          string `yaml:"Secret" json:"Secret,omitempty"`
+	TimeoutSec      int    `yaml:"TimeoutSec" json:"TimeoutSec,omitempty"`
+	MaxMessageChars int    `yaml:"MaxMessageChars" json:"MaxMessageChars,omitempty"`
+}
+
+func (c FeishuNotificationConfig) EnabledOrDefault() bool {
+	if c.Enabled == nil {
+		return false
+	}
+	return *c.Enabled
+}
+
 // XAPIConfig controls X/Twitter API based post reads.
 type XAPIConfig struct {
 	APIEnabled        *bool  `yaml:"APIEnabled" json:"APIEnabled,omitempty"`
@@ -584,6 +786,37 @@ func init() {
 				AudioSampleRate: 16000,
 				MaxAudioBytes:   25 * 1024 * 1024,
 				LocalCommand:    "faster-whisper",
+			},
+			Watchlist: WatchlistConfig{
+				DefaultInterval:  "6h",
+				MaxItemsPerRun:   20,
+				LockTTL:          "30m",
+				DBPath:           "storage/digcrawl/collect.db",
+				NotifyOnFirstRun: nil,
+			},
+			Summary: SummaryConfig{
+				Provider:            "extractive",
+				TimeoutSec:          60,
+				MaxInputChars:       30000,
+				ImportanceThreshold: "medium",
+				FallbackProvider:    "extractive",
+				Mode:                "per_item_and_digest",
+				InputBudget: SummaryInputBudget{
+					TextChars:     12000,
+					ASRChars:      12000,
+					OCRChars:      4000,
+					MetadataChars: 2000,
+				},
+				DigFlow: DigFlowSummaryConfig{
+					RuntimeMode: "http",
+					BaseURL:     "http://127.0.0.1:20201",
+					Endpoint:    "/api/v1/invoke",
+					Agent:       "watchlist_summary_agent",
+				},
+				LLM: LLMSummaryConfig{
+					BaseURL: "https://api.openai.com/v1",
+					Model:   "gpt-4o-mini",
+				},
 			},
 			Providers: ProvidersConfig{
 				ExampleEnabled:  &enabled,
@@ -854,6 +1087,66 @@ func mergeDefaults(cfg *Config) {
 	}
 	if cfg.ASR.LocalCommand == "" {
 		cfg.ASR.LocalCommand = defaultCfg.ASR.LocalCommand
+	}
+	if cfg.Watchlist.DefaultInterval == "" {
+		cfg.Watchlist.DefaultInterval = defaultCfg.Watchlist.DefaultInterval
+	}
+	if cfg.Watchlist.MaxItemsPerRun == 0 {
+		cfg.Watchlist.MaxItemsPerRun = defaultCfg.Watchlist.MaxItemsPerRun
+	}
+	if cfg.Watchlist.LockTTL == "" {
+		cfg.Watchlist.LockTTL = defaultCfg.Watchlist.LockTTL
+	}
+	if cfg.Watchlist.DBPath == "" {
+		cfg.Watchlist.DBPath = cfg.Collect.DBPathOrDefault()
+	}
+	if cfg.Summary.Provider == "" {
+		cfg.Summary.Provider = defaultCfg.Summary.Provider
+	}
+	if cfg.Summary.TimeoutSec == 0 {
+		cfg.Summary.TimeoutSec = defaultCfg.Summary.TimeoutSec
+	}
+	if cfg.Summary.MaxInputChars == 0 {
+		cfg.Summary.MaxInputChars = defaultCfg.Summary.MaxInputChars
+	}
+	if cfg.Summary.ImportanceThreshold == "" {
+		cfg.Summary.ImportanceThreshold = defaultCfg.Summary.ImportanceThreshold
+	}
+	if cfg.Summary.FallbackProvider == "" {
+		cfg.Summary.FallbackProvider = defaultCfg.Summary.FallbackProvider
+	}
+	if cfg.Summary.Mode == "" {
+		cfg.Summary.Mode = defaultCfg.Summary.Mode
+	}
+	if cfg.Summary.InputBudget.TextChars == 0 {
+		cfg.Summary.InputBudget.TextChars = defaultCfg.Summary.InputBudget.TextChars
+	}
+	if cfg.Summary.InputBudget.ASRChars == 0 {
+		cfg.Summary.InputBudget.ASRChars = defaultCfg.Summary.InputBudget.ASRChars
+	}
+	if cfg.Summary.InputBudget.OCRChars == 0 {
+		cfg.Summary.InputBudget.OCRChars = defaultCfg.Summary.InputBudget.OCRChars
+	}
+	if cfg.Summary.InputBudget.MetadataChars == 0 {
+		cfg.Summary.InputBudget.MetadataChars = defaultCfg.Summary.InputBudget.MetadataChars
+	}
+	if cfg.Summary.DigFlow.RuntimeMode == "" {
+		cfg.Summary.DigFlow.RuntimeMode = defaultCfg.Summary.DigFlow.RuntimeMode
+	}
+	if cfg.Summary.DigFlow.BaseURL == "" {
+		cfg.Summary.DigFlow.BaseURL = defaultCfg.Summary.DigFlow.BaseURL
+	}
+	if cfg.Summary.DigFlow.Endpoint == "" {
+		cfg.Summary.DigFlow.Endpoint = defaultCfg.Summary.DigFlow.Endpoint
+	}
+	if cfg.Summary.DigFlow.Agent == "" {
+		cfg.Summary.DigFlow.Agent = defaultCfg.Summary.DigFlow.Agent
+	}
+	if cfg.Summary.LLM.BaseURL == "" {
+		cfg.Summary.LLM.BaseURL = defaultCfg.Summary.LLM.BaseURL
+	}
+	if cfg.Summary.LLM.Model == "" {
+		cfg.Summary.LLM.Model = defaultCfg.Summary.LLM.Model
 	}
 }
 

@@ -153,6 +153,62 @@ ASR:
   # 可使用占位符：{audio_path} {model} {language} {output_dir}
   LocalArgs: []
 
+Watchlist:
+  Enabled: false
+  DryRun: false
+  DefaultInterval: "6h"
+  NotifyOnFirstRun: false
+  MaxItemsPerRun: 20
+  LockTTL: "30m"
+  DBPath: "storage/digcrawl/collect.db"
+  Items: []
+  # 示例：
+  # Items:
+  #   - ID: toutiao-author-example
+  #     Platform: toutiao
+  #     Type: author
+  #     URL: https://www.toutiao.com/c/user/token/...
+  #     Name: 某头条作者
+  #     Interval: 6h
+  #     NotifyTo: feishu-default
+  #     Enabled: true
+
+Summary:
+  Enabled: false
+  # extractive | llm_direct | digflow_runtime
+  Provider: "extractive"
+  TimeoutSec: 60
+  MaxInputChars: 30000
+  ImportanceThreshold: "medium"
+  FallbackProvider: "extractive"
+  Mode: "per_item_and_digest"
+  InputBudget:
+    TextChars: 12000
+    ASRChars: 12000
+    OCRChars: 4000
+    MetadataChars: 2000
+  DigFlow:
+    RuntimeMode: "http"
+    BaseURL: "http://127.0.0.1:20201"
+    Endpoint: "/api/v1/invoke"
+    Agent: "watchlist_summary_agent"
+    AuthToken: "${DIGFLOW_API_TOKEN}"
+  LLM:
+    APIKey: ""
+    BaseURL: "https://api.openai.com/v1"
+    Model: "gpt-4o-mini"
+
+Notifications:
+  Feishu:
+    Enabled: false
+    DefaultChannel: "feishu-default"
+    Channels:
+      - ID: "feishu-default"
+        WebhookURL: "${FEISHU_WEBHOOK_URL}"
+        Secret: "${FEISHU_WEBHOOK_SECRET}"
+        TimeoutSec: 10
+        MaxMessageChars: 12000
+
 Providers:
   ExampleEnabled: true
   PlatformEnabled: true
