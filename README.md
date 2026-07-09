@@ -125,7 +125,7 @@ export DIGCRAWL_MYSQL_PASSWORD="<password>"
 export DIGFLOW_SUMMARY_API_KEY="<openai-compatible-api-key>"
 ```
 
-只补 DigFlow runtime 表时执行 `sqls/2026-07-09_DigFlow内嵌Runtime初始化DDL.sql`；初始化完整库时执行 `sqls/digcrawl_full_sql_ddl.sql`。
+新库初始化优先使用 `sqls/full/digcrawl_full_sql_ddl.sql`；只初始化 DigFlow `df_*` 表可使用 `sqls/full/digflow_embedded_runtime_full_ddl.sql`。根目录兼容文件 `sqls/digcrawl_full_sql_ddl.sql` 和 `sqls/2026-07-09_DigFlow内嵌Runtime初始化DDL.sql` 保持同口径。已执行过旧版 DigFlow DDL 的库，补跑 `sqls/2026-07-09_DigFlow最新Runtime增量DDL.sql`，其中包含最新 LoopRuntime `df_loop_*` 表和 `df_resource_asset.storage_key` 唯一约束迁移。
 
 本地 ASR 依赖 `ffmpeg` 和 `faster-whisper`。`ffmpeg` 需能在 `PATH` 中直接调用；`faster-whisper` 建议安装到隔离 venv，再把可执行命令加入 `PATH` 或通过 `--local-command` / `ASR.LocalCommand` 显式指定。
 

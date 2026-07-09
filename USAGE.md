@@ -303,10 +303,17 @@ DigFlow 内嵌 Runtime 需要额外准备：
 - `agents/watchlist/agents.yml`：宿主侧 agent manifest。
 - `agents/watchlist/summary-agent.yml`：watchlist 摘要 agent。
 
-数据库 DDL：
+数据库 DDL 已对齐 DigFlow commit `8e77addb892c8f71ae24890733d5ca587ec168da`：
 
-- 只补 DigFlow runtime 表：`sqls/2026-07-09_DigFlow内嵌Runtime初始化DDL.sql`
-- 初始化完整库：`sqls/digcrawl_full_sql_ddl.sql`
+- 新库完整初始化：`sqls/full/digcrawl_full_sql_ddl.sql`
+- 新库只初始化 DigFlow runtime 表：`sqls/full/digflow_embedded_runtime_full_ddl.sql`
+- 根目录兼容全量：`sqls/digcrawl_full_sql_ddl.sql`、`sqls/2026-07-09_DigFlow内嵌Runtime初始化DDL.sql`
+- 已执行旧版 DigFlow DDL 的库补跑：`sqls/2026-07-09_DigFlow最新Runtime增量DDL.sql`
+
+最新增量包含：
+
+- LoopRuntime 持久化表：`df_loop_instance`、`df_loop_iteration`、`df_loop_active`
+- ResourceAsset 存储键迁移：将 `df_resource_asset.storage_key` 调整为 nullable，并创建 `uidx_resource_asset_storage_key`
 
 表前缀约定：
 
