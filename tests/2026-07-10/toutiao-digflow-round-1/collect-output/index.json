@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "updated_at": "2026-07-10T04:10:53Z",
+  "entries": [
+    {
+      "id": "2d6235c1-8593-4a6b-b6e6-cef5cf59b72a",
+      "url": "https://www.toutiao.com/w/1870280855070795/",
+      "platform": "toutiao",
+      "title": "Coreen士仪：今天的主题是——DeepSeek自研芯片，它的底层逻辑究竟是什么？\n\n我的观点是，Deepseek并无意成为“第二个”英伟达，他的目标是——AI定价权。\n\n\n一、在7月3日，我分析彭博的小作文——Meta准备出租“富余算力”时，分享过一个观点。\n\nAI发展的一个新趋势，不再是算力（纯粹堆算力）为王，而是“效率为王”（如何通过提高效率降低成本，创造未来现金流），这是市场正在形成共识...",
+      "collected_at": "2026-07-10T04:10:53Z",
+      "base_name": "Coreen士仪：今天的主题是——DeepSeek自研芯片，它的底层逻辑究竟是什么？_我的观点是，Dee",
+      "dir": "tests/2026-07-10/toutiao-digflow-round-1/collect-output/2026-07-10",
+      "files": {
+        "json": "tests/2026-07-10/toutiao-digflow-round-1/collect-output/2026-07-10/Coreen士仪：今天的主题是——DeepSeek自研芯片，它的底层逻辑究竟是什么？_我的观点是，Dee.assets/media.json",
+        "md": "tests/2026-07-10/toutiao-digflow-round-1/collect-output/2026-07-10/Coreen士仪：今天的主题是——DeepSeek自研芯片，它的底层逻辑究竟是什么？_我的观点是，Dee.md"
+      },
+      "assets_dir": "tests/2026-07-10/toutiao-digflow-round-1/collect-output/2026-07-10/Coreen士仪：今天的主题是——DeepSeek自研芯片，它的底层逻辑究竟是什么？_我的观点是，Dee.assets"
+    }
+  ]
+}

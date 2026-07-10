@@ -91,6 +91,7 @@ func InteractiveLogin(ctx context.Context, platform string, cfg config.LocalBrow
 		}
 		l = l.RemoteDebuggingPort(port)
 	}
+	l = applyLauncherExtraArgs(l, cfg.ExtraArgs)
 
 	controlURL, err := l.Launch()
 	if err != nil {

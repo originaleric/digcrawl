@@ -11,7 +11,39 @@ DigCrawl 是面向任意 Agent 编排系统的**本地工具网关**：在用户
 ### 环境要求
 
 - Go 1.24+（以 `go.mod` 为准）
-- 使用浏览器类工具时需本机 Chrome/Chromium（go-rod 可自动查找，也可在配置中指定 `ChromePath`）
+- 使用浏览器类工具时需本机 Chrome/Chromium（go-rod 可自动查找，也可在配置中指定 `ChromePath`）。在 macOS sandbox 或 CI-like headless 环境中，建议使用 Playwright `chrome-headless-shell` 并显式配置启动参数。
+
+### 本机 Headless Chromium（推荐兜底）
+
+当系统 Chrome、Chrome for Testing 或 Rod 自动下载的 Chromium 无法 headless 启动时，可安装 Playwright 的 `chrome-headless-shell`：
+
+```bash
+mkdir -p /Users/dig/projects/.cache/digcrawl-playwright
+cd /Users/dig/projects/.cache/digcrawl-playwright
+
+npm_config_cache=/private/tmp/npm-cache \
+PLAYWRIGHT_BROWSERS_PATH=/Users/dig/projects/.cache/ms-playwright \
+npx -y playwright install chromium
+
+find /Users/dig/projects/.cache/ms-playwright -type f -name 'chrome-headless-shell'
+```
+
+将找到的 `chrome-headless-shell` 路径写入 `LocalBrowser.ChromePath`。在 macOS sandbox 下通常还需要 `--single-process` / `--no-zygote` 以及禁用 crashpad：
+
+```yaml
+LocalBrowser:
+  ChromePath: "/Users/dig/projects/.cache/ms-playwright/chromium_headless_shell-1228/chrome-headless-shell-mac-arm64/chrome-headless-shell"
+  Headless: true
+  UserDataDir: "/private/tmp/digcrawl-pw-headless-profile"
+  ExtraArgs:
+    - "--single-process"
+    - "--no-zygote"
+    - "--disable-dev-shm-usage"
+    - "--disable-crash-reporter"
+    - "--disable-crashpad"
+    - "--disable-breakpad"
+    - "--disable-features=Crashpad"
+```
 
 ### 从源码运行
 
@@ -96,12 +128,14 @@ go install ./cmd/digcollect
 |------|------|
 | `Enabled` | 为 `false` 时禁用浏览器及依赖它的 Provider |
 | `AllowedDomains` | 允许访问的域名列表（Collect / 平台工具均受约束） |
+| `ChromePath` | 指定 Chrome/Chromium/headless shell 可执行文件路径；为空时由 go-rod 自动查找或下载 |
 | `Headless` | 是否无头模式 |
 | `CookieStoreDir` | 按域名持久化 Cookie，便于登录态采集 |
 | `CDPMode` / `CDPPort` | 启动浏览器时开启 CDP 调试端口 |
 | `CDPConnectExisting` | 连接已有 CDP 浏览器（如手动启动的 Chrome） |
 | `UserDataDir` | 持久化浏览器 profile 根目录 |
 | `ProxyURL` | 浏览器代理地址，页面 fetch/API fallback 共用 |
+| `ExtraArgs` | 额外 Chromium 启动参数；适合配置 `--single-process`、`--no-zygote`、禁用 crashpad 等 headless 兼容参数 |
 
 ### Platform（平台读取）
 
@@ -766,6 +800,23 @@ internal/browser/   go-rod 本地浏览器
 ### 浏览器工具报错「域名不在白名单」
 
 在 `config.yaml` 的 `LocalBrowser.AllowedDomains` 与 `Gateway.AllowedDomains` 中加入目标域名，或放宽策略（注意安全边界）。
+
+### Headless Chrome / Chromium 启动失败
+
+如果报错包含 `Failed to get the debug url`、`can't find a browser binary`、`CreateUniqueTempDir`、`Crashpad` 或 `MachPortRendezvousServer`，优先使用上文的 Playwright `chrome-headless-shell` 方案，并在 `LocalBrowser.ExtraArgs` 中加入：
+
+```yaml
+ExtraArgs:
+  - "--single-process"
+  - "--no-zygote"
+  - "--disable-dev-shm-usage"
+  - "--disable-crash-reporter"
+  - "--disable-crashpad"
+  - "--disable-breakpad"
+  - "--disable-features=Crashpad"
+```
+
+同时建议把 `UserDataDir` 指向 `/private/tmp/...` 这类当前进程可写目录。若需要复用登录态，则使用有头登录路径单独维护平台 Cookie，headless 采集路径使用稳定 profile。
 
 ### Collect 通用网页内容不完整
 

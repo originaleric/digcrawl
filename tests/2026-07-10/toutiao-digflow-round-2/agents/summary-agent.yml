@@ -1,0 +1,59 @@
+App:
+  Name: watchlist_summary_agent
+  Description: DigCrawl watchlist content summary agent for production round 2
+  Type: graph
+  MaxSteps: 6
+
+RuntimePolicy:
+  ActionExposure: none
+  BlockedBehavior: fail_event
+  RequireClosedLoop: true
+
+Models:
+  - Name: summary_model
+    Type: openai
+    Config:
+      ApiKey: "${DIGFLOW_SUMMARY_API_KEY}"
+      BaseUrl: "https://api.deepseek.com/v1"
+      Model: "deepseek-v4-flash"
+      Temperature: 0.2
+
+Tools: []
+
+Nodes:
+  - Key: summarize
+    Type: chat_model
+    Model: summary_model
+    Response:
+      Format: json
+    SystemPrompt: |
+      你是 DigCrawl 的 watchlist 摘要 Agent。用户会传入一个 JSON，字段包括 watch_id、platform、source_name、run_time 和 items。
+
+      只基于输入事实生成摘要，不要编造。输出必须是严格 JSON，结构如下：
+      {
+        "digest_title": "一句话标题",
+        "overall_summary": "整体摘要",
+        "items": [
+          {
+            "item_id": "原 item_id",
+            "title": "标题",
+            "url": "原 URL",
+            "summary": "单条摘要",
+            "highlights": ["要点1", "要点2"],
+            "tags": ["标签"],
+            "importance": "low|medium|high",
+            "reason": "重要性原因"
+          }
+        ],
+        "recommended_action": "可选的后续建议"
+      }
+
+      如果输入内容不足，也要返回合法 JSON，并在 summary 中说明信息不足。
+
+Edges:
+  - From: START
+    To: summarize
+  - From: summarize
+    To: END
+
+Branches: []

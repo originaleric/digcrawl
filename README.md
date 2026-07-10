@@ -47,6 +47,7 @@ Watchlist 能力通过 `digcrawl watchlist run --once` 或 `digcrawl watchlist r
 - 2026-07-04：OCR 全库接入智谱 `zhipu_ocr` / `glm-ocr`，支持远程图片 `layout_parsing`、本地 assets `files/ocr`、图片类型 sniff 和 OCR metadata 输出。
 - 2026-07-08：视频解析链路补齐 `ffmpeg` 音频抽取、ASR API provider、本地 `faster-whisper` provider、Gateway 工具 `asr.transcribe` 和 CLI 转写命令。
 - 2026-07-09：新增 Watchlist 定时监控、SQLite 状态/锁、Summary provider、DigFlow 内嵌 Runtime / HTTP 摘要 adapter、Feishu 通知模块、`df_` DigFlow DDL 和无密钥 GORM 示例配置。
+- 2026-07-10：补齐本机 Chromium headless shell 安装说明与 `LocalBrowser.ExtraArgs` 配置，解决 macOS sandbox 下系统 Chrome / Rod Chromium headless 启动不稳定问题，并完成头条文章 + DigFlow Runtime 摘要二轮验证。
 
 ## 支持的平台
 
@@ -147,6 +148,36 @@ export HF_HOME="/Users/dig/.openclaw/tmp/huggingface"
   --provider local \
   --model small \
   --local-command /Users/dig/.openclaw/tmp/faster-whisper-venv/bin/faster-whisper
+```
+
+本机浏览器兜底依赖 Chrome/Chromium。若系统 Chrome 或 Rod 自动下载的 Chromium 在 macOS sandbox / headless 环境中启动失败，建议安装 Playwright 的 `chrome-headless-shell`，并通过 `LocalBrowser.ChromePath` 与 `LocalBrowser.ExtraArgs` 显式指定：
+
+```bash
+mkdir -p /Users/dig/projects/.cache/digcrawl-playwright
+cd /Users/dig/projects/.cache/digcrawl-playwright
+
+npm_config_cache=/private/tmp/npm-cache \
+PLAYWRIGHT_BROWSERS_PATH=/Users/dig/projects/.cache/ms-playwright \
+npx -y playwright install chromium
+
+find /Users/dig/projects/.cache/ms-playwright -type f -name 'chrome-headless-shell'
+```
+
+示例配置：
+
+```yaml
+LocalBrowser:
+  ChromePath: "/Users/dig/projects/.cache/ms-playwright/chromium_headless_shell-1228/chrome-headless-shell-mac-arm64/chrome-headless-shell"
+  Headless: true
+  UserDataDir: "/private/tmp/digcrawl-pw-headless-profile"
+  ExtraArgs:
+    - "--single-process"
+    - "--no-zygote"
+    - "--disable-dev-shm-usage"
+    - "--disable-crash-reporter"
+    - "--disable-crashpad"
+    - "--disable-breakpad"
+    - "--disable-features=Crashpad"
 ```
 
 平台登录与会话检查：

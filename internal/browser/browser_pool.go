@@ -232,6 +232,7 @@ func (m *browserManager) launchControlURL(ctx context.Context) (string, error) {
 	if proxy := strings.TrimSpace(m.cfg.ProxyURL); proxy != "" {
 		l = l.Proxy(proxy)
 	}
+	l = applyLauncherExtraArgs(l, m.cfg.ExtraArgs)
 
 	controlURL, err := l.Launch()
 	if err != nil {

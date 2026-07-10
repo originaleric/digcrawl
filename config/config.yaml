@@ -95,6 +95,7 @@ LocalBrowser:
   CDPConnectExisting: false
   UserDataDir: ""
   ProxyURL: ""
+  ExtraArgs: []
 
 Platform:
   BrowseRetryMaxAttempts: 2

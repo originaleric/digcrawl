@@ -1,0 +1,31 @@
+<!DOCTYPE HTML>
+<html>
+<head>
+<meta charset="utf-8">
+<title>404错误页</title>
+<style>
+html,#content{ background:#fff}
+</style>
+<script>
+    var _gaq = _gaq || [];
+    var href = location.href;
+    var ga_ua = 'UA-28423340-28';
+    _gaq.push(['_setAccount', ga_ua]);
+    _gaq.push(['_trackPageview', '[404]' + (href.indexOf('?') == -1? href : href.substring(0, href.indexOf('?')))]);
+
+    (function() {
+        var ga = document.createElement('script');
+        ga.type = 'text/javascript';
+        ga.src = 'http://www.google-analytics.com/ga.js';
+        var s = document.getElementsByTagName('script')[0];
+        s.parentNode.insertBefore(ga, s);
+     })();
+</script>
+</head>
+
+<body>
+<div class="" style="padding: 50px 0;width: 650px;margin: 0 auto;">
+<table border="0" cellspacing="0" cellpadding="0"  width="651" height="201"> <tbody> <tr> <td> <img border="0" alt="" src="http://p3.toutiaoimg.com/obj/eden-cn/uhbfnupkbps/404.jpeg" usemap="#map1355107823663" width="658" height="400"> <map name="map1355107823663" id="map1355107823663"><area href="/" shape="rect" coords="183,357,309,391" alt=""><area href="/contact/" shape="rect" coords="340,357,465,391" alt=""></map> </td> </tr> </tbody> </table>
+</div>
+</body>
+</html>

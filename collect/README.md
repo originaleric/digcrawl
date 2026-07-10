@@ -67,7 +67,7 @@ collect-inbox/
 
 如启用全局 `OCR.Enabled`，Collect 会在导出时对图片做 OCR：下载媒体时优先读取 `.assets/` 本地图片，未下载媒体时使用远程图片 URL。OCR 结果写入 JSON 的 `platform_metadata.ocr_results`，并可按 `OCR.AppendToMarkdown` 追加到 Markdown。`OCR.Provider=zhipu_ocr` 时，远程图片会走智谱 `glm-ocr` 的 `layout_parsing`，本地 assets 会走智谱 `files/ocr` 上传接口。
 
-浏览器域名白名单见 `LocalBrowser.AllowedDomains`。
+浏览器域名白名单见 `LocalBrowser.AllowedDomains`。若本机 Chrome/Chromium headless 启动失败，可按根目录 `README.md` / `USAGE.md` 中的 Playwright `chrome-headless-shell` 方案配置 `LocalBrowser.ChromePath` 与 `LocalBrowser.ExtraArgs`。
 
 ## 与 Knowledge 入库的差异
 

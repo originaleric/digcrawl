@@ -1,0 +1,27 @@
+{
+  "digest_title": "DeepSeek自研推理芯片旨在夺取AI定价权，而非成为第二个英伟达",
+  "overall_summary": "本文深入分析了DeepSeek自研芯片的底层逻辑，认为其目标并非降低对英伟达的依赖，而是通过模型-硬件协同设计提升算力效率，从而将AI定价权从硬件端转移至大模型端，可能颠覆现有AI产业链格局。",
+  "items": [
+    {
+      "item_id": "1870280855070795",
+      "title": "Coreen士仪：今天的主题是——DeepSeek自研芯片，它的底层逻辑究竟是什么？",
+      "url": "https://www.toutiao.com/article/1870280855070795/",
+      "summary": "DeepSeek自研推理芯片，区别于微软/Meta的降本逻辑，旨在通过高效算力实现AI定价权，形成“开源+自定义芯片+算力效率”闭环。",
+      "highlights": [
+        "DeepSeek自研芯片面向推理而非训练，核心是提升算力效率",
+        "与微软/Meta降低依赖不同，DeepSeek意在改变AI定价权从硬件端向模型端转移",
+        "模型-硬件协同设计可能使大模型公司重新掌握产业链定价权"
+      ],
+      "tags": [
+        "DeepSeek",
+        "自研芯片",
+        "AI定价权",
+        "算力效率"
+      ],
+      "importance": "high",
+      "reason": "文章揭示了DeepSeek自研芯片的战略意图可能颠覆AI产业链的定价模式，对行业具有深远影响"
+    }
+  ],
+  "recommended_action": "关注DeepSeek自研芯片后续进展及算力效率成为AI产业链核心关键词的趋势",
+  "summary_provider": "digflow_runtime"
+}

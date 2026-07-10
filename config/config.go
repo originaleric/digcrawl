@@ -99,6 +99,7 @@ type LocalBrowserConfig struct {
 	CDPConnectExisting     *bool    `yaml:"CDPConnectExisting" json:"CDPConnectExisting,omitempty"`
 	UserDataDir            string   `yaml:"UserDataDir" json:"UserDataDir,omitempty"`
 	ProxyURL               string   `yaml:"ProxyURL" json:"ProxyURL,omitempty"`
+	ExtraArgs              []string `yaml:"ExtraArgs" json:"ExtraArgs,omitempty"`
 }
 
 // PlatformConfig platform read/retry/health settings.
