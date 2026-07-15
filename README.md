@@ -20,7 +20,7 @@ DigCrawl 的核心目标不是“提供一个网关”，而是把公众号、�
 |------|----------|
 | 多平台内容读取 | 内置微信公众号、小红书、抖音、今日头条、X、Reddit，以及任意 `http(s)` 网页读取 |
 | 结构化内容抽取 | 输出标题、正文、作者、发布时间、互动数据、媒体列表、规范化 URL、平台诊断信息 |
-| 静态解析/API 优先 + 浏览器兜底 | 微信公众号优先使用 HTTP HTML 静态解析；小红书、抖音、头条优先尝试页面上下文 API；X 优先尝试官方 Tweet lookup，再回落到公开 oEmbed 和浏览器；Reddit 优先官方 API，再按配置兜底公开页面 |
+| 静态解析/API/RSS 优先 + 浏览器兜底 | 微信公众号优先使用 HTTP HTML 静态解析；小红书、抖音、头条优先尝试页面上下文 API；X 优先尝试官方 Tweet lookup，再回落到公开 oEmbed 和浏览器；RSS/Atom 由通用 Feed service 读取；Reddit 优先官方 API，再兜底 RSS，最后按配置兜底公开页面 |
 | 登录态复用 | 支持通过有头浏览器完成平台登录，后续采集复用本机 Cookie |
 | 批量采集与收件箱 | 支持 URL 文件批处理、`collect-inbox` 收件箱和 `--watch` 轮询 |
 | Watchlist 定时监控 | 支持按配置定期检查 RSS/sitemap、头条作者页、平台主页和 Reddit subreddit/user/post comments 的新增内容，并通过通知通道推送 |
@@ -48,7 +48,7 @@ Watchlist 能力通过 `digcrawl watchlist run --once` 或 `digcrawl watchlist r
 - 2026-07-08：视频解析链路补齐 `ffmpeg` 音频抽取、ASR API provider、本地 `faster-whisper` provider、Gateway 工具 `asr.transcribe` 和 CLI 转写命令。
 - 2026-07-09：新增 Watchlist 定时监控、SQLite 状态/锁、Summary provider、DigFlow 内嵌 Runtime / HTTP 摘要 adapter、Feishu 通知模块、`df_` DigFlow DDL 和无密钥 GORM 示例配置。
 - 2026-07-10：补齐本机 Chromium headless shell 安装说明与 `LocalBrowser.ExtraArgs` 配置，解决 macOS sandbox 下系统 Chrome / Rod Chromium headless 启动不稳定问题，并完成头条文章 + DigFlow Runtime 摘要二轮验证。
-- 2026-07-15：新增 Reddit 官方 API 优先读取、单帖评论树、subreddit/user listing、watchlist `Options`、Reddit watchlist 来源和公开页面浏览器兜底边界。
+- 2026-07-15：新增 Reddit 官方 API 优先读取、单帖评论树、subreddit/user listing、watchlist `Options`、Reddit watchlist 来源和公开页面浏览器兜底边界；同日将 RSS/Atom 抽象为通用 Feed service，支持 `feed.read`、Collect RSS URL 采集和 Reddit RSS fallback。
 
 ## 支持的平台
 
@@ -60,6 +60,7 @@ Watchlist 能力通过 `digcrawl watchlist run --once` 或 `digcrawl watchlist r
 | 今日头条文章 | `toutiao.com`、`m.toutiao.com` | `toutiao.article.read` |
 | X | `x.com`、`twitter.com` | `x.post.read` |
 | Reddit | `reddit.com`、`old.reddit.com`、`new.reddit.com`、`redd.it` | `reddit.post.read`、`reddit.subreddit.read`、`reddit.user.read` |
+| RSS / Atom | `.rss`、`.atom`、`.xml`、`/feed`、`/rss` | `feed.read` |
 | 普通网页 | 任意 `http(s)` URL | `browser.browse` |
 
 平台读取会返回结构化错误，便于业务系统判断是否需要人工登录、重试或跳过，例如 `LOGIN_REQUIRED`、`CAPTCHA_REQUIRED`、`RATE_LIMITED`、`CONTENT_TYPE_MISMATCH`、内容删除/私密、选择器失效等。
@@ -70,7 +71,9 @@ Watchlist 能力通过 `digcrawl watchlist run --once` 或 `digcrawl watchlist r
 
 X 读取面向公开单帖，先尝试官方 Tweet lookup API；当账号套餐或权限不足时，会回落到公开 oEmbed 端点提取正文、作者、发布时间和 canonical URL；删除、不可见、登录墙壳页不会作为正常内容导出。
 
-Reddit 读取面向公开单帖、subreddit listing 和用户 submitted/comments。单帖优先使用 Reddit OAuth API 读取正文、元数据和可配置评论树；API 临时失败或 OAuth 未配置且显式允许时，可使用本机浏览器兜底公开页面。401/403/429、私有社区、登录墙、受限内容不会通过浏览器绕过。
+RSS / Atom 读取由通用 Feed service 提供，输出 feed 标题、条目列表、作者、时间、摘要和 Markdown/JSON。该能力被 Watchlist、Collect 和平台 fallback 复用，避免各平台重复解析 XML。
+
+Reddit 读取面向公开单帖、subreddit listing 和用户 submitted/comments。单帖优先使用 Reddit OAuth API 读取正文、元数据和可配置评论树；API 临时失败或 OAuth 未配置时，会尝试 Reddit `.rss` 读取公开内容；RSS 不可用时才按配置使用本机浏览器兜底公开页面。401/403/429、私有社区、登录墙、受限内容不会通过浏览器绕过。
 
 ## 快速开始
 
@@ -85,6 +88,7 @@ go build -o digcollect ./cmd/digcollect
 ./digcrawl collect "https://mp.weixin.qq.com/s/..." --format md,html,json
 ./digcrawl collect "https://www.toutiao.com/article/..." --format md,json
 ./digcrawl collect "https://www.reddit.com/r/golang/comments/abc123/title/" --format md,json
+./digcrawl collect "https://www.reddit.com/r/artificial/.rss" --format md,json
 ./digcrawl collect "https://example.com/article" --out ./collect-output
 ```
 

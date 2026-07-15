@@ -33,6 +33,7 @@ func ReadPost(ctx context.Context, in ReadInput) (*platform.Content, error) {
 	opts := normalizePostOptions(cfg, in)
 	var apiAttempt *platform.APIAttempt
 	var apiLatency int64
+	var rssErr error
 	if post, comments, attempt, latency, apiErr := fetchPostViaAPI(ctx, norm, cfg, opts); apiErr == nil && post != nil {
 		content, err := mapPost(in, norm, post, comments, opts)
 		if err == nil && content != nil {
@@ -48,11 +49,28 @@ func ReadPost(ctx context.Context, in ReadInput) (*platform.Content, error) {
 	} else if attempt != nil {
 		apiAttempt = attempt
 		apiLatency = latency
-		if re, stop := platform.ShouldStopStrategy(apiErr); stop && !canFallbackAfterAPIError(cfg, attempt) {
+		if re, stop := platform.ShouldStopStrategy(apiErr); stop && !canFallbackAfterAPIError(cfg, attempt) && !canRSSFallbackAfterAPIError(attempt) {
 			return nil, re
 		}
 	}
+	if content, rssLatency, err := readPostViaRSS(ctx, in, norm, opts, apiAttempt); err == nil && content != nil {
+		platform.MergeContentMetrics(content, platform.ReadMetrics{
+			Platform:         PlatformName,
+			Channel:          "rss",
+			ExtractionSource: "rss",
+			APILatencyMs:     apiLatency,
+			FeedLatencyMs:    rssLatency,
+		})
+		return content, nil
+	} else if err != nil {
+		rssErr = err
+	}
 	if !cfg.BrowserFallback.EnabledOrDefault() {
+		if rssErr != nil {
+			return nil, platform.NewReadError(platform.ErrPartialContent, "Reddit API/RSS failed and browser fallback is disabled: "+rssErr.Error(), PlatformName, map[string]any{
+				"rss_error": rssErr.Error(),
+			})
+		}
 		if apiAttempt != nil {
 			return nil, apiAttempt.Error()
 		}
@@ -63,6 +81,12 @@ func ReadPost(ctx context.Context, in ReadInput) (*platform.Content, error) {
 	}
 	content, browserLatency, err := readPostBrowser(ctx, in, norm, apiAttempt)
 	if err != nil {
+		if rssErr != nil {
+			return nil, platform.NewReadError(platform.ErrPartialContent, fmt.Sprintf("Reddit RSS fallback failed: %v; browser fallback failed: %v", rssErr, err), PlatformName, map[string]any{
+				"rss_error":     rssErr.Error(),
+				"browser_error": err.Error(),
+			})
+		}
 		return nil, err
 	}
 	platform.MergeContentMetrics(content, platform.ReadMetrics{
@@ -83,6 +107,18 @@ func canFallbackAfterAPIError(cfg config.RedditConfig, attempt *platform.APIAtte
 		return true
 	}
 	return attempt.FallbackBrowser && cfg.BrowserFallback.EnabledOrDefault()
+}
+
+func canRSSFallbackAfterAPIError(attempt *platform.APIAttempt) bool {
+	if attempt == nil {
+		return true
+	}
+	switch attempt.ErrorCode {
+	case "", platform.ErrLoginRequired, platform.ErrRateLimited, platform.ErrPartialContent:
+		return true
+	default:
+		return attempt.FallbackBrowser
+	}
 }
 
 func normalizePostOptions(cfg config.RedditConfig, in ReadInput) PostReadOptions {

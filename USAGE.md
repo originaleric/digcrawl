@@ -150,7 +150,9 @@ go install ./cmd/digcollect
 
 X 单帖读取默认先尝试官方 Tweet lookup API；当 API 读权限或套餐不足时，会尝试公开 oEmbed 端点，成功时 `platform_metadata.read_channel=api`、`platform_metadata.extraction_source=oembed`。Browser 仅作为最后兜底，登录墙、删除、不可见和空壳页会返回结构化错误。
 
-Reddit 读取默认先走官方 OAuth API，支持 `reddit.post.read`、`reddit.subreddit.read`、`reddit.user.read`。单帖工具会读取 selftext、外链、score、upvote ratio、评论数、评论树和 `more` 评论占位；评论读取受 `comment_limit`、`comment_depth`、`comment_sort` 控制。浏览器兜底只用于公开页面，401/403/429、私有社区、登录墙和受限内容不会通过浏览器绕过。
+Reddit 读取默认先走官方 OAuth API，支持 `reddit.post.read`、`reddit.subreddit.read`、`reddit.user.read`。单帖工具会读取 selftext、外链、score、upvote ratio、评论数、评论树和 `more` 评论占位；评论读取受 `comment_limit`、`comment_depth`、`comment_sort` 控制。API 不可用时会先尝试 Reddit `.rss` 公开 feed，RSS 不可用时才按配置进入浏览器兜底。浏览器兜底只用于公开页面，401/403/429、私有社区、登录墙和受限内容不会通过浏览器绕过。
+
+RSS / Atom 由通用 Feed service 提供，不再是 Watchlist 私有解析逻辑。`feed.read` 可直接读取 `.rss`、`.atom`、`.xml`、`/feed`、`/rss` URL，并输出 Markdown/JSON 条目列表；Watchlist 的 `Platform: rss`、Collect 的 RSS URL、Reddit RSS fallback 都复用同一实现。
 
 Reddit 配置字段位于 `Platform.Reddit`：
 
@@ -604,15 +606,17 @@ Collect 在**无云端宿主**的情况下，把链接抓取并导出到本地�
 | 抖音 | `douyin.com` 等 | `douyin.video.read` |
 | 今日头条 | `toutiao.com`、`m.toutiao.com` 等 | `toutiao.article.read` |
 | X / Twitter | `x.com`、`twitter.com` 等 | `x.post.read` |
+| RSS / Atom | `.rss`、`.atom`、`.xml`、`/feed`、`/rss` | `feed.read` |
 | 任意网页 | 其他 `http(s)` URL | `browser.browse`（通用网页） |
 
-小红书、抖音、头条采用 **API 优先 + Browser 兜底** 的 strategy chain：先尝试页面运行时 `fetch(credentials:"include")`，失败时回落到 hydration/meta/DOM 提取。X 采用 Tweet lookup API 优先、公开 oEmbed 次优先、Browser 最后兜底。输出 JSON 的 `platform_metadata` 会包含 `read_channel`、`extraction_source`、`api_http_status`、`api_error_code` 等诊断字段。`LOGIN_REQUIRED`、`CAPTCHA_REQUIRED`、`RATE_LIMITED`、内容删除/私密会作为结构化错误返回。
+小红书、抖音、头条采用 **API 优先 + Browser 兜底** 的 strategy chain：先尝试页面运行时 `fetch(credentials:"include")`，失败时回落到 hydration/meta/DOM 提取。X 采用 Tweet lookup API 优先、公开 oEmbed 次优先、Browser 最后兜底。Reddit 采用 OAuth API 优先、RSS 次优先、Browser 最后兜底。输出 JSON 的 `platform_metadata` 会包含 `read_channel`、`extraction_source`、`api_http_status`、`api_error_code` 等诊断字段。`LOGIN_REQUIRED`、`CAPTCHA_REQUIRED`、`RATE_LIMITED`、内容删除/私密会作为结构化错误返回。
 
 ### 单条 URL
 
 ```bash
 digcrawl collect "https://mp.weixin.qq.com/s/xxxx"
 digcrawl collect "https://www.toutiao.com/article/xxxx"
+digcrawl collect "https://www.reddit.com/r/artificial/.rss" --format md,json
 digcrawl collect "https://example.com/article" --format md,html,json --out ./my-output
 ```
 

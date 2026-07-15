@@ -84,6 +84,17 @@ func TestDetectRedditPost(t *testing.T) {
 	}
 }
 
+func TestDetectRedditPostRSSUsesFeedReader(t *testing.T) {
+	t.Parallel()
+	m, err := Detect("https://www.reddit.com/r/golang/comments/abc123/title/.rss")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.Platform != "feed" || m.Tool != platformprov.ToolFeedRead {
+		t.Fatalf("got %+v", m)
+	}
+}
+
 func TestDetectRedditListingFallsBackToWeb(t *testing.T) {
 	t.Parallel()
 	m, err := Detect("https://www.reddit.com/r/golang/new/")

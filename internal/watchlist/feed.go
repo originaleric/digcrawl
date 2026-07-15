@@ -4,9 +4,7 @@ import (
 	"context"
 	"crypto/sha1"
 	"encoding/hex"
-	"encoding/xml"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -14,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/originaleric/digcrawl/internal/feed"
 	"github.com/originaleric/digcrawl/internal/platform"
 	"github.com/originaleric/digcrawl/internal/platform/reddit"
 )
@@ -213,121 +212,55 @@ func (r FeedRegistry) httpClient() *http.Client {
 	return &http.Client{Timeout: 20 * time.Second}
 }
 
-func (r FeedRegistry) get(ctx context.Context, rawURL string) ([]byte, string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
-	if err != nil {
-		return nil, "", err
-	}
-	req.Header.Set("User-Agent", "Mozilla/5.0 DigCrawl Watchlist")
-	resp, err := r.httpClient().Do(req)
-	if err != nil {
-		return nil, "", err
-	}
-	defer resp.Body.Close()
-	data, err := io.ReadAll(io.LimitReader(resp.Body, 5*1024*1024))
-	if err != nil {
-		return nil, "", err
-	}
-	if resp.StatusCode == http.StatusTooManyRequests {
-		return nil, "", fmt.Errorf("RATE_LIMITED: feed request returned 429")
-	}
-	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-		return nil, "", fmt.Errorf("LOGIN_REQUIRED: feed request returned %d", resp.StatusCode)
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, "", fmt.Errorf("feed request returned %d", resp.StatusCode)
-	}
-	return data, resp.Header.Get("Content-Type"), nil
+func (r FeedRegistry) feedService() feed.Service {
+	return feed.Service{Client: r.httpClient(), UserAgent: "Mozilla/5.0 DigCrawl Watchlist"}
 }
 
 func (r FeedRegistry) readRSS(ctx context.Context, item WatchItem) ([]FeedItem, error) {
-	data, _, err := r.get(ctx, item.URL)
-	if err != nil {
-		return nil, err
-	}
-	var rss struct {
-		Channel struct {
-			Items []struct {
-				Title string `xml:"title"`
-				Link  string `xml:"link"`
-				GUID  string `xml:"guid"`
-				Date  string `xml:"pubDate"`
-			} `xml:"item"`
-		} `xml:"channel"`
-		Entries []struct {
-			Title string `xml:"title"`
-			ID    string `xml:"id"`
-			Link  []struct {
-				Href string `xml:"href,attr"`
-			} `xml:"link"`
-			Updated string `xml:"updated"`
-		} `xml:"entry"`
-	}
-	if err := xml.Unmarshal(data, &rss); err != nil {
-		return nil, fmt.Errorf("parse rss: %w", err)
-	}
-	var out []FeedItem
-	for _, it := range rss.Channel.Items {
-		link := strings.TrimSpace(it.Link)
-		if link == "" {
-			continue
-		}
-		out = append(out, FeedItem{
-			ID: it.GUID, ContentKey: firstNonEmpty(it.GUID, link), URL: link, CanonicalURL: link,
-			Title: strings.TrimSpace(it.Title), PublishedAt: parseTime(it.Date), ContentType: "article",
-		})
-	}
-	for _, it := range rss.Entries {
-		link := ""
-		if len(it.Link) > 0 {
-			link = strings.TrimSpace(it.Link[0].Href)
-		}
-		if link == "" {
-			continue
-		}
-		out = append(out, FeedItem{
-			ID: it.ID, ContentKey: firstNonEmpty(it.ID, link), URL: link, CanonicalURL: link,
-			Title: strings.TrimSpace(it.Title), PublishedAt: parseTime(it.Updated), ContentType: "article",
-		})
-	}
-	if len(out) == 0 {
-		return nil, fmt.Errorf("CONTENT_NOT_FOUND: no rss items found")
-	}
-	return out, nil
+	doc, err := r.feedService().Read(ctx, item.URL)
+	return watchFeedItemsFromDocument(doc, "article"), err
 }
 
 func (r FeedRegistry) readSitemap(ctx context.Context, item WatchItem) ([]FeedItem, error) {
-	data, _, err := r.get(ctx, item.URL)
-	if err != nil {
-		return nil, err
+	doc, err := r.feedService().ReadSitemap(ctx, item.URL)
+	return watchFeedItemsFromDocument(doc, "web"), err
+}
+
+func watchFeedItemsFromDocument(doc *feed.Document, contentType string) []FeedItem {
+	if doc == nil {
+		return nil
 	}
-	var sm struct {
-		URLs []struct {
-			Loc     string `xml:"loc"`
-			LastMod string `xml:"lastmod"`
-		} `xml:"url"`
-	}
-	if err := xml.Unmarshal(data, &sm); err != nil {
-		return nil, fmt.Errorf("parse sitemap: %w", err)
-	}
-	var out []FeedItem
-	for _, u := range sm.URLs {
-		link := strings.TrimSpace(u.Loc)
+	out := make([]FeedItem, 0, len(doc.Entries))
+	for _, entry := range doc.Entries {
+		link := strings.TrimSpace(entry.URL)
 		if link == "" {
 			continue
 		}
-		out = append(out, FeedItem{ContentKey: link, URL: link, CanonicalURL: link, PublishedAt: parseTime(u.LastMod), ContentType: "web"})
+		published := entry.PublishedAt
+		if published.IsZero() {
+			published = entry.UpdatedAt
+		}
+		out = append(out, FeedItem{
+			ID:           firstNonEmpty(entry.ID, link),
+			ContentKey:   firstNonEmpty(entry.ID, link),
+			URL:          link,
+			CanonicalURL: link,
+			Title:        entry.Title,
+			Author:       entry.Author,
+			PublishedAt:  published,
+			ContentType:  contentType,
+			Raw: map[string]any{
+				"summary": entry.SummaryHTML,
+			},
+		})
 	}
-	if len(out) == 0 {
-		return nil, fmt.Errorf("CONTENT_NOT_FOUND: no sitemap urls found")
-	}
-	return out, nil
+	return out
 }
 
 var hrefRe = regexp.MustCompile(`(?i)href=["']([^"']+)["']`)
 
 func (r FeedRegistry) readHTMLLinks(ctx context.Context, item WatchItem, platform string) ([]FeedItem, error) {
-	data, _, err := r.get(ctx, item.URL)
+	data, _, err := r.feedService().Fetch(ctx, item.URL)
 	if err != nil {
 		return nil, err
 	}

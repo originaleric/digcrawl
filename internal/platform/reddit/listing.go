@@ -2,6 +2,7 @@ package reddit
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/originaleric/digcrawl/config"
 )
@@ -13,7 +14,14 @@ func ReadSubreddit(ctx context.Context, opts ListingOptions) (*ListingResult, er
 		return nil, err
 	}
 	res, _, _, err := fetchListing(ctx, cfg, endpoint)
-	return res, err
+	if err == nil {
+		return res, nil
+	}
+	rssRes, rssErr := readSubredditViaRSS(ctx, opts)
+	if rssErr == nil {
+		return rssRes, nil
+	}
+	return nil, fmt.Errorf("reddit subreddit API failed: %v; RSS fallback failed: %w", err, rssErr)
 }
 
 func ReadUser(ctx context.Context, opts ListingOptions) (*ListingResult, error) {
@@ -23,5 +31,12 @@ func ReadUser(ctx context.Context, opts ListingOptions) (*ListingResult, error) 
 		return nil, err
 	}
 	res, _, _, err := fetchListing(ctx, cfg, endpoint)
-	return res, err
+	if err == nil {
+		return res, nil
+	}
+	rssRes, rssErr := readUserViaRSS(ctx, opts)
+	if rssErr == nil {
+		return rssRes, nil
+	}
+	return nil, fmt.Errorf("reddit user API failed: %v; RSS fallback failed: %w", err, rssErr)
 }

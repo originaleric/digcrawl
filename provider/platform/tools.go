@@ -10,4 +10,5 @@ const (
 	ToolRedditPostRead      = "reddit.post.read"
 	ToolRedditSubredditRead = "reddit.subreddit.read"
 	ToolRedditUserRead      = "reddit.user.read"
+	ToolFeedRead            = "feed.read"
 )

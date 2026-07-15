@@ -5,6 +5,7 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/originaleric/digcrawl/internal/feed"
 	"github.com/originaleric/digcrawl/internal/platform/reddit"
 	browserprov "github.com/originaleric/digcrawl/provider/browser"
 	platformprov "github.com/originaleric/digcrawl/provider/platform"
@@ -41,6 +42,9 @@ func Detect(rawURL string) (Match, error) {
 		return Match{}, fmt.Errorf("invalid url: %w", err)
 	}
 	host := strings.ToLower(u.Hostname())
+	if feed.IsFeedURL(rawURL) {
+		return Match{Platform: feed.PlatformName, Tool: platformprov.ToolFeedRead}, nil
+	}
 	if reddit.IsRedditHost(host) && reddit.IsPostURL(rawURL) {
 		return Match{Platform: reddit.PlatformName, Tool: platformprov.ToolRedditPostRead}, nil
 	}

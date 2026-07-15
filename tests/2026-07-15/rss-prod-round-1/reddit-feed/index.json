@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "updated_at": "2026-07-15T09:38:08Z",
+  "entries": [
+    {
+      "id": "dc82495e-3178-4439-96bd-72d1aea08d3c",
+      "url": "https://www.reddit.com/r/artificial/.rss",
+      "platform": "feed",
+      "title": "Artificial Intelligence (AI)",
+      "collected_at": "2026-07-15T09:38:08Z",
+      "base_name": "Artificial Intelligence (AI)",
+      "dir": "tests/2026-07-15/rss-prod-round-1/reddit-feed/2026-07-15",
+      "files": {
+        "json": "tests/2026-07-15/rss-prod-round-1/reddit-feed/2026-07-15/Artificial Intelligence (AI).assets/media.json",
+        "md": "tests/2026-07-15/rss-prod-round-1/reddit-feed/2026-07-15/Artificial Intelligence (AI).md"
+      },
+      "assets_dir": "tests/2026-07-15/rss-prod-round-1/reddit-feed/2026-07-15/Artificial Intelligence (AI).assets"
+    }
+  ]
+}
