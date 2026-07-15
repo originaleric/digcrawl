@@ -2,7 +2,7 @@
 
 **面向内容采集、平台读取和 Agent 自动化的数据采集引擎。**
 
-DigCrawl 的核心目标不是“提供一个网关”，而是把公众号、小红书、抖音、今日头条、X 和普通网页里的内容稳定采集下来，转成业务系统能直接消费的 Markdown、HTML、JSON、媒体文件和结构化元数据。Gateway、Collector、MCP、stdio、本地浏览器只是不同接入方式，业务主线始终是 **crawl / collect / normalize / export**。
+DigCrawl 的核心目标不是“提供一个网关”，而是把公众号、小红书、抖音、今日头条、X、Reddit 和普通网页里的内容稳定采集下来，转成业务系统能直接消费的 Markdown、HTML、JSON、媒体文件和结构化元数据。Gateway、Collector、MCP、stdio、本地浏览器只是不同接入方式，业务主线始终是 **crawl / collect / normalize / export**。
 
 它适合这些场景：
 
@@ -18,12 +18,12 @@ DigCrawl 的核心目标不是“提供一个网关”，而是把公众号、�
 
 | 能力 | 业务价值 |
 |------|----------|
-| 多平台内容读取 | 内置微信公众号、小红书、抖音、今日头条、X，以及任意 `http(s)` 网页读取 |
+| 多平台内容读取 | 内置微信公众号、小红书、抖音、今日头条、X、Reddit，以及任意 `http(s)` 网页读取 |
 | 结构化内容抽取 | 输出标题、正文、作者、发布时间、互动数据、媒体列表、规范化 URL、平台诊断信息 |
-| 静态解析/API 优先 + 浏览器兜底 | 微信公众号优先使用 HTTP HTML 静态解析；小红书、抖音、头条优先尝试页面上下文 API；X 优先尝试官方 Tweet lookup，再回落到公开 oEmbed 和浏览器 |
+| 静态解析/API 优先 + 浏览器兜底 | 微信公众号优先使用 HTTP HTML 静态解析；小红书、抖音、头条优先尝试页面上下文 API；X 优先尝试官方 Tweet lookup，再回落到公开 oEmbed 和浏览器；Reddit 优先官方 API，再按配置兜底公开页面 |
 | 登录态复用 | 支持通过有头浏览器完成平台登录，后续采集复用本机 Cookie |
 | 批量采集与收件箱 | 支持 URL 文件批处理、`collect-inbox` 收件箱和 `--watch` 轮询 |
-| Watchlist 定时监控 | 支持按配置定期检查 RSS/sitemap、头条作者页和平台主页的新增内容，并通过通知通道推送 |
+| Watchlist 定时监控 | 支持按配置定期检查 RSS/sitemap、头条作者页、平台主页和 Reddit subreddit/user/post comments 的新增内容，并通过通知通道推送 |
 | 多格式导出 | 同时导出 Markdown、HTML、JSON，可选下载媒体到 `.assets/` |
 | OCR 图片文字提取 | 可通过配置接入 OCR provider，对正文图片、截图、平台媒体和本地 assets 提取文字并写入结构化元数据 |
 | ASR 视频语音转写 | 通过 `ffmpeg` 抽音频后，支持 OpenAI-compatible API 或本地 `faster-whisper` 命令转写 |
@@ -36,7 +36,7 @@ OCR 目前支持 OpenAI-compatible 视觉模型、智谱 `zhipu_ocr` / `glm-ocr`
 
 ASR 能力通过 `digcrawl asr transcribe <video>` 或 Gateway 工具 `asr.transcribe` 调用：先用 `ffmpeg` 抽取 16k 单声道 wav，再按配置选择 API provider 或本地 provider。API provider 兼容 `/audio/transcriptions`；本地 provider 默认调用 `faster-whisper`，也可在 `ASR.LocalCommand` / `ASR.LocalArgs` 中替换为 whisper.cpp 等命令。
 
-Watchlist 能力通过 `digcrawl watchlist run --once` 或 `digcrawl watchlist run` 调用：先对配置的 RSS/sitemap、头条作者页或平台主页做最新内容发现，再复用 Collect 抓取详情，最后按 `Summary` 配置使用规则摘要、LLM 直连或 DigFlow Runtime 生成摘要，并通过 Feishu webhook 推送。状态、锁和投递结果写入 SQLite，避免重复通知。
+Watchlist 能力通过 `digcrawl watchlist run --once` 或 `digcrawl watchlist run` 调用：先对配置的 RSS/sitemap、头条作者页、平台主页或 Reddit 来源做最新内容发现，再复用 Collect 抓取详情，最后按 `Summary` 配置使用规则摘要、LLM 直连或 DigFlow Runtime 生成摘要，并通过 Feishu webhook 推送。状态、锁和投递结果写入 SQLite，避免重复通知。
 
 ## 更新概览
 
@@ -48,6 +48,7 @@ Watchlist 能力通过 `digcrawl watchlist run --once` 或 `digcrawl watchlist r
 - 2026-07-08：视频解析链路补齐 `ffmpeg` 音频抽取、ASR API provider、本地 `faster-whisper` provider、Gateway 工具 `asr.transcribe` 和 CLI 转写命令。
 - 2026-07-09：新增 Watchlist 定时监控、SQLite 状态/锁、Summary provider、DigFlow 内嵌 Runtime / HTTP 摘要 adapter、Feishu 通知模块、`df_` DigFlow DDL 和无密钥 GORM 示例配置。
 - 2026-07-10：补齐本机 Chromium headless shell 安装说明与 `LocalBrowser.ExtraArgs` 配置，解决 macOS sandbox 下系统 Chrome / Rod Chromium headless 启动不稳定问题，并完成头条文章 + DigFlow Runtime 摘要二轮验证。
+- 2026-07-15：新增 Reddit 官方 API 优先读取、单帖评论树、subreddit/user listing、watchlist `Options`、Reddit watchlist 来源和公开页面浏览器兜底边界。
 
 ## 支持的平台
 
@@ -58,6 +59,7 @@ Watchlist 能力通过 `digcrawl watchlist run --once` 或 `digcrawl watchlist r
 | 抖音 | `douyin.com` | `douyin.video.read` |
 | 今日头条文章 | `toutiao.com`、`m.toutiao.com` | `toutiao.article.read` |
 | X | `x.com`、`twitter.com` | `x.post.read` |
+| Reddit | `reddit.com`、`old.reddit.com`、`new.reddit.com`、`redd.it` | `reddit.post.read`、`reddit.subreddit.read`、`reddit.user.read` |
 | 普通网页 | 任意 `http(s)` URL | `browser.browse` |
 
 平台读取会返回结构化错误，便于业务系统判断是否需要人工登录、重试或跳过，例如 `LOGIN_REQUIRED`、`CAPTCHA_REQUIRED`、`RATE_LIMITED`、`CONTENT_TYPE_MISMATCH`、内容删除/私密、选择器失效等。
@@ -67,6 +69,8 @@ Watchlist 能力通过 `digcrawl watchlist run --once` 或 `digcrawl watchlist r
 今日头条读取面向公开文章页，先进行轻量 API 探测，再回落到浏览器 DOM / hydration / meta 提取；若 `toutiao.com/group/...` 实际跳转到西瓜、抖音或视频内容，会快速返回 `CONTENT_TYPE_MISMATCH`，不会作为文章导出。
 
 X 读取面向公开单帖，先尝试官方 Tweet lookup API；当账号套餐或权限不足时，会回落到公开 oEmbed 端点提取正文、作者、发布时间和 canonical URL；删除、不可见、登录墙壳页不会作为正常内容导出。
+
+Reddit 读取面向公开单帖、subreddit listing 和用户 submitted/comments。单帖优先使用 Reddit OAuth API 读取正文、元数据和可配置评论树；API 临时失败或 OAuth 未配置且显式允许时，可使用本机浏览器兜底公开页面。401/403/429、私有社区、登录墙、受限内容不会通过浏览器绕过。
 
 ## 快速开始
 
@@ -80,6 +84,7 @@ go build -o digcollect ./cmd/digcollect
 ```bash
 ./digcrawl collect "https://mp.weixin.qq.com/s/..." --format md,html,json
 ./digcrawl collect "https://www.toutiao.com/article/..." --format md,json
+./digcrawl collect "https://www.reddit.com/r/golang/comments/abc123/title/" --format md,json
 ./digcrawl collect "https://example.com/article" --out ./collect-output
 ```
 
@@ -124,6 +129,14 @@ export DIGCRAWL_MYSQL_DATABASE="dig_crawl"
 export DIGCRAWL_MYSQL_USER="root"
 export DIGCRAWL_MYSQL_PASSWORD="<password>"
 export DIGFLOW_SUMMARY_API_KEY="<openai-compatible-api-key>"
+```
+
+Reddit API 读取需要在 `config/config.yaml` 的 `Platform.Reddit` 中配置 Reddit app 凭证，或通过环境变量注入。默认 `BrowserFallback.AllowWithoutOAuth=false`，即未配置 OAuth 时不会自动用浏览器读取 Reddit；如只读取公开页面并接受兜底策略，可显式改为 `true`。
+
+```bash
+export REDDIT_CLIENT_ID="<client-id>"
+export REDDIT_CLIENT_SECRET="<client-secret>"
+export REDDIT_REFRESH_TOKEN="<optional-refresh-token>"
 ```
 
 新库初始化优先使用 `sqls/full/digcrawl_full_sql_ddl.sql`；只初始化 DigFlow `df_*` 表可使用 `sqls/full/digflow_embedded_runtime_full_ddl.sql`。根目录兼容文件 `sqls/digcrawl_full_sql_ddl.sql` 和 `sqls/2026-07-09_DigFlow内嵌Runtime初始化DDL.sql` 保持同口径。已执行过旧版 DigFlow DDL 的库，补跑 `sqls/2026-07-09_DigFlow最新Runtime增量DDL.sql`，其中包含最新 LoopRuntime `df_loop_*` 表和 `df_resource_asset.storage_key` 唯一约束迁移。
@@ -286,7 +299,7 @@ internal/summary/   Extractive、LLM direct、DigFlow Runtime/HTTP 摘要 provid
 internal/notify/    Feishu webhook 等通知 provider
 agents/             DigFlow 内嵌 Runtime 的宿主侧 agent manifest 与 YAML
 sqls/               DigCrawl `dc_*` 与 DigFlow `df_*` MySQL DDL
-internal/platform/  微信、小红书、抖音、头条、X 的平台读取实现
+internal/platform/  微信、小红书、抖音、头条、X、Reddit 的平台读取实现
 internal/browser/   本地 go-rod 浏览器、登录、快照、页面操作
 provider/           platform、browser、asr、example、stub 工具 Provider
 runtime/            registry、policy、audit、artifact、统一执行入口

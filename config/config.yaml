@@ -11,6 +11,9 @@ Gateway:
     - douyin.video.read
     - toutiao.article.read
     - x.post.read
+    - reddit.post.read
+    - reddit.subreddit.read
+    - reddit.user.read
     - asr.transcribe
   AllowedReadPaths: []
   AllowedDomains: []
@@ -43,6 +46,9 @@ Collector:
     - douyin.video.read
     - toutiao.article.read
     - x.post.read
+    - reddit.post.read
+    - reddit.subreddit.read
+    - reddit.user.read
     - asr.transcribe
 
 Collect:
@@ -63,6 +69,7 @@ Collect:
     xiaohongshu: 2000
     douyin: 2500
     toutiao: 2000
+    reddit: 2500
 
 LocalBrowser:
   Enabled: true
@@ -87,6 +94,11 @@ LocalBrowser:
     - x.com
     - twitter.com
     - www.twitter.com
+    - reddit.com
+    - www.reddit.com
+    - old.reddit.com
+    - new.reddit.com
+    - redd.it
   ChromePath: ""
   Headless: true
   CookieStoreDir: "storage/digcrawl/browser_cookies"
@@ -114,6 +126,31 @@ Platform:
     BearerToken: ""
     APITimeoutSec: 8
     APIMaxRetries: 1
+  Reddit:
+    APIEnabled: true
+    ClientID: "${REDDIT_CLIENT_ID}"
+    ClientSecret: "${REDDIT_CLIENT_SECRET}"
+    RefreshToken: "${REDDIT_REFRESH_TOKEN}"
+    UserAgent: "digcrawl/1.0"
+    OAuthMode: "client_credentials"
+    APIBaseURL: "https://oauth.reddit.com"
+    TokenURL: "https://www.reddit.com/api/v1/access_token"
+    APITimeoutSec: 10
+    APIMaxRetries: 1
+    RateLimit:
+      RequestsPerMinute: 60
+      HeaderDriven: true
+      BackoffOn429: true
+      MinRetryAfterSec: 30
+    Comments:
+      DefaultLimit: 50
+      DefaultDepth: 3
+      DefaultSort: "confidence"
+      ExpandMore: false
+      ExpandMoreLimit: 0
+    BrowserFallback:
+      Enabled: true
+      AllowWithoutOAuth: false
 
 OCR:
   Enabled: false
@@ -173,6 +210,18 @@ Watchlist:
   #     Interval: 6h
   #     NotifyTo: feishu-default
   #     Enabled: true
+  #   - ID: reddit-subreddit-example
+  #     Platform: reddit
+  #     Type: reddit_subreddit
+  #     URL: https://www.reddit.com/r/LocalLLaMA/new/
+  #     Name: r/LocalLLaMA
+  #     Interval: 6h
+  #     NotifyTo: feishu-default
+  #     Enabled: true
+  #     Options:
+  #       Sort: new
+  #       Limit: 25
+  #       IncludeComments: false
 
 Summary:
   Enabled: false

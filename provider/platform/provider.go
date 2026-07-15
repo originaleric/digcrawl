@@ -31,6 +31,9 @@ func (p *Provider) Register(_ context.Context, reg *registry.Registry) error {
 	reg.Register(DouyinVideoReadEntry(domains, store))
 	reg.Register(XPostReadEntry(domains, store))
 	reg.Register(ToutiaoArticleReadEntry(domains, store))
+	reg.Register(RedditPostReadEntry(domains, store))
+	reg.Register(RedditSubredditReadEntry(domains))
+	reg.Register(RedditUserReadEntry(domains))
 	return nil
 }
 

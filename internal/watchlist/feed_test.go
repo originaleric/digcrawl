@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/originaleric/digcrawl/internal/platform/reddit"
 )
 
 func TestFeedRegistryReadsRSS(t *testing.T) {
@@ -35,5 +37,37 @@ func TestFeedRegistryExtractsToutiaoLinks(t *testing.T) {
 	}
 	if items[0].URL != "https://www.toutiao.com/article/z/" {
 		t.Fatalf("feed reader should preserve source order, got %+v", items)
+	}
+}
+
+func TestFeedItemsFromRedditListingSupportsPostsAndComments(t *testing.T) {
+	items := feedItemsFromRedditListing(&reddit.ListingResult{Items: []reddit.ListingItem{
+		{Kind: "t3", Fullname: "t3_post", Title: "Post", CanonicalURL: "https://www.reddit.com/r/golang/comments/post/", CreatedUTC: 1783576800},
+		{Kind: "t1", Fullname: "t1_comment", Title: "Comment", CanonicalURL: "https://www.reddit.com/r/golang/comments/post/title/comment/", CreatedUTC: 1783576900},
+	}})
+	if len(items) != 2 {
+		t.Fatalf("unexpected items: %+v", items)
+	}
+	if items[0].ContentType != "reddit_post" || items[1].ContentType != "reddit_comment" {
+		t.Fatalf("unexpected content types: %+v", items)
+	}
+	if items[1].ContentKey != "reddit:t1_comment" {
+		t.Fatalf("unexpected comment key: %+v", items[1])
+	}
+}
+
+func TestRedditWatchlistURLParsers(t *testing.T) {
+	if got := redditSubredditFromURL("https://www.reddit.com/r/LocalLLaMA/new/"); got != "LocalLLaMA" {
+		t.Fatalf("subreddit = %q", got)
+	}
+	if got := redditUsernameFromURL("https://www.reddit.com/user/example/submitted/"); got != "example" {
+		t.Fatalf("username = %q", got)
+	}
+}
+
+func TestInferRedditWatchlistTypePrefersPostURL(t *testing.T) {
+	item := WatchItem{Platform: "reddit", URL: "https://www.reddit.com/r/golang/comments/abc123/title/"}
+	if got := inferRedditWatchlistType(item); got != "reddit_post_comments" {
+		t.Fatalf("type = %q", got)
 	}
 }

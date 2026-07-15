@@ -109,3 +109,20 @@ func TestNormalizeItemNormalizesIdentifiers(t *testing.T) {
 		t.Fatalf("item not normalized: %+v", item)
 	}
 }
+
+func TestNormalizeItemPreservesOptions(t *testing.T) {
+	svc := &Service{cfg: &config.Config{Watchlist: config.WatchlistConfig{DefaultInterval: "6h"}}}
+	item, err := svc.normalizeItem(config.WatchlistItem{
+		ID:       "reddit-local",
+		Platform: "reddit",
+		Type:     "reddit_subreddit",
+		URL:      "https://www.reddit.com/r/golang/new/",
+		Options:  map[string]any{"sort": "new", "limit": 10},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if item.Options["sort"] != "new" || item.Options["limit"] != 10 {
+		t.Fatalf("options not preserved: %+v", item.Options)
+	}
+}

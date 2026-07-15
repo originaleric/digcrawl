@@ -119,7 +119,7 @@ go install ./cmd/digcollect
 | `DBPath` | SQLite 库路径，默认 `storage/digcrawl/collect.db` |
 | `IndexEnabled` | `index`/`both` 模式下是否写 `index.json`（同 URL 覆盖更新） |
 | `RateLimitMs` | inbox 批处理时 URL 之间的间隔（毫秒） |
-| `PlatformRateLimits` | 按平台覆盖批处理间隔，如 `xiaohongshu`、`douyin`、`toutiao` |
+| `PlatformRateLimits` | 按平台覆盖批处理间隔，如 `xiaohongshu`、`douyin`、`toutiao`、`reddit` |
 | `InboxPollIntervalSec` | `inbox --watch` 轮询间隔 |
 
 ### LocalBrowser（本地浏览器）
@@ -149,6 +149,43 @@ go install ./cmd/digcollect
 微信公众号公开文章默认优先使用 HTTP HTML 静态解析，成功时会在 `platform_metadata` 中标记 `read_channel=http`、`extraction_source=html`。只有网络 transient 或解析状态不确定时才进入 Browser 兜底；验证码、频控、删除、私密、登录要求和最终 URL 跳出微信域名会直接返回结构化错误。
 
 X 单帖读取默认先尝试官方 Tweet lookup API；当 API 读权限或套餐不足时，会尝试公开 oEmbed 端点，成功时 `platform_metadata.read_channel=api`、`platform_metadata.extraction_source=oembed`。Browser 仅作为最后兜底，登录墙、删除、不可见和空壳页会返回结构化错误。
+
+Reddit 读取默认先走官方 OAuth API，支持 `reddit.post.read`、`reddit.subreddit.read`、`reddit.user.read`。单帖工具会读取 selftext、外链、score、upvote ratio、评论数、评论树和 `more` 评论占位；评论读取受 `comment_limit`、`comment_depth`、`comment_sort` 控制。浏览器兜底只用于公开页面，401/403/429、私有社区、登录墙和受限内容不会通过浏览器绕过。
+
+Reddit 配置字段位于 `Platform.Reddit`：
+
+| 字段 | 说明 |
+|------|------|
+| `APIEnabled` | 是否启用 Reddit API 读取，默认 `true` |
+| `ClientID` / `ClientSecret` | Reddit app 凭证，支持 `${ENV}` |
+| `RefreshToken` | refresh token 模式使用，支持 `${ENV}` |
+| `UserAgent` | Reddit API 要求的明确 User-Agent |
+| `OAuthMode` | `client_credentials` 或 `refresh_token` |
+| `APIBaseURL` | 默认 `https://oauth.reddit.com` |
+| `TokenURL` | 默认 `https://www.reddit.com/api/v1/access_token` |
+| `RateLimit.RequestsPerMinute` | 本地保底限速 |
+| `Comments.DefaultLimit` / `DefaultDepth` / `DefaultSort` | 单帖评论默认预算 |
+| `BrowserFallback.Enabled` | 是否允许 API 失败后兜底浏览器 |
+| `BrowserFallback.AllowWithoutOAuth` | 未配置 OAuth 时是否允许读取公开页面，默认 `false` |
+
+配置示例：
+
+```yaml
+Platform:
+  Reddit:
+    APIEnabled: true
+    ClientID: "${REDDIT_CLIENT_ID}"
+    ClientSecret: "${REDDIT_CLIENT_SECRET}"
+    OAuthMode: "client_credentials"
+    UserAgent: "digcrawl/1.0 by your-reddit-username"
+    Comments:
+      DefaultLimit: 50
+      DefaultDepth: 3
+      DefaultSort: "confidence"
+    BrowserFallback:
+      Enabled: true
+      AllowWithoutOAuth: false
+```
 
 ### OCR（图片文字提取）
 
@@ -245,6 +282,12 @@ Watchlist 用于按配置定期检查指定来源的新增内容，复用 Collec
 | `DBPath` | watchlist 状态库路径，默认复用 `Collect.DBPath` |
 | `Items` | 监控目标列表 |
 
+`Watchlist.Items[].Options` 可为不同平台提供扩展参数。Reddit 已支持：
+
+- `reddit_subreddit`：`subreddit`、`sort`、`time_range`、`limit`、`after`
+- `reddit_user`：`username`、`where`、`limit`、`after`
+- `reddit_post_comments`：`comment_limit`、`comment_depth`、`comment_sort`、`expand_more`、`expand_more_limit`
+
 `Summary` 字段：
 
 | 字段 | 说明 |
@@ -287,6 +330,27 @@ Watchlist:
       Name: Example Feed
       NotifyTo: feishu-default
       Enabled: true
+    - ID: reddit-local-llama
+      Platform: reddit
+      Type: reddit_subreddit
+      URL: https://www.reddit.com/r/LocalLLaMA/new/
+      Name: r/LocalLLaMA
+      Interval: 6h
+      NotifyTo: feishu-default
+      Enabled: true
+      Options:
+        sort: new
+        limit: 25
+    - ID: reddit-post-comments
+      Platform: reddit
+      Type: reddit_post_comments
+      URL: https://www.reddit.com/r/golang/comments/abc123/title/
+      Interval: 6h
+      NotifyTo: feishu-default
+      Enabled: true
+      Options:
+        comment_sort: new
+        comment_limit: 1
 
 Summary:
   Enabled: true

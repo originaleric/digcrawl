@@ -30,6 +30,7 @@ type WatchItem struct {
 	Interval time.Duration
 	NotifyTo string
 	Enabled  bool
+	Options  map[string]any
 }
 
 type FeedItem struct {

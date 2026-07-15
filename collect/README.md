@@ -31,6 +31,8 @@ digcrawl collect migrate-index           # 从 index.json 导入 SQLite
 
 Collect 会先按 URL 检测平台并调用对应读取工具。微信公众号公开文章优先使用 HTTP HTML 静态解析，成功时输出 `read_channel=http`、`extraction_source=html`；网络 transient 或解析状态不确定时才进入浏览器兜底。验证码、频控、删除、私密、登录要求和跳出微信域名会作为结构化错误返回，避免把平台壳页或风控页写成正常文章。
 
+Reddit 单帖 URL 会路由到 `reddit.post.read`，包括 `https://www.reddit.com/r/{sub}/comments/{id}/...`、`https://www.reddit.com/comments/{id}/...` 和 `https://redd.it/{id}`。subreddit/user/listing URL 不会误路由到单帖工具；这些来源应通过 `reddit.subreddit.read`、`reddit.user.read` 或 watchlist `reddit_subreddit` / `reddit_user` 使用。
+
 ## 输出布局
 
 ```text

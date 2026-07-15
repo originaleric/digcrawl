@@ -109,6 +109,7 @@ type PlatformConfig struct {
 	ReadMetricsEnabled     *bool             `yaml:"ReadMetricsEnabled" json:"ReadMetricsEnabled,omitempty"`
 	HealthProbes           map[string]string `yaml:"HealthProbes" json:"HealthProbes,omitempty"`
 	X                      XAPIConfig        `yaml:"X" json:"X,omitempty"`
+	Reddit                 RedditConfig      `yaml:"Reddit" json:"Reddit,omitempty"`
 }
 
 // OCRConfig controls optional image OCR enrichment.
@@ -352,14 +353,15 @@ type WatchlistConfig struct {
 
 // WatchlistItem is one monitored source.
 type WatchlistItem struct {
-	ID       string `yaml:"ID" json:"ID,omitempty"`
-	Platform string `yaml:"Platform" json:"Platform,omitempty"`
-	Type     string `yaml:"Type" json:"Type,omitempty"`
-	URL      string `yaml:"URL" json:"URL,omitempty"`
-	Name     string `yaml:"Name" json:"Name,omitempty"`
-	Interval string `yaml:"Interval" json:"Interval,omitempty"`
-	NotifyTo string `yaml:"NotifyTo" json:"NotifyTo,omitempty"`
-	Enabled  *bool  `yaml:"Enabled" json:"Enabled,omitempty"`
+	ID       string         `yaml:"ID" json:"ID,omitempty"`
+	Platform string         `yaml:"Platform" json:"Platform,omitempty"`
+	Type     string         `yaml:"Type" json:"Type,omitempty"`
+	URL      string         `yaml:"URL" json:"URL,omitempty"`
+	Name     string         `yaml:"Name" json:"Name,omitempty"`
+	Interval string         `yaml:"Interval" json:"Interval,omitempty"`
+	NotifyTo string         `yaml:"NotifyTo" json:"NotifyTo,omitempty"`
+	Enabled  *bool          `yaml:"Enabled" json:"Enabled,omitempty"`
+	Options  map[string]any `yaml:"Options" json:"Options,omitempty"`
 }
 
 func (c WatchlistConfig) EnabledOrDefault() bool {
@@ -647,6 +649,143 @@ func (c XAPIConfig) APIMaxRetriesOrDefault() int {
 	return 1
 }
 
+// RedditConfig controls Reddit API and browser fallback reads.
+type RedditConfig struct {
+	APIEnabled      *bool                       `yaml:"APIEnabled" json:"APIEnabled,omitempty"`
+	ClientID        string                      `yaml:"ClientID" json:"ClientID,omitempty"`
+	ClientSecret    string                      `yaml:"ClientSecret" json:"ClientSecret,omitempty"`
+	RefreshToken    string                      `yaml:"RefreshToken" json:"RefreshToken,omitempty"`
+	UserAgent       string                      `yaml:"UserAgent" json:"UserAgent,omitempty"`
+	OAuthMode       string                      `yaml:"OAuthMode" json:"OAuthMode,omitempty"` // client_credentials | refresh_token
+	APIBaseURL      string                      `yaml:"APIBaseURL" json:"APIBaseURL,omitempty"`
+	TokenURL        string                      `yaml:"TokenURL" json:"TokenURL,omitempty"`
+	APITimeoutSec   int                         `yaml:"APITimeoutSec" json:"APITimeoutSec,omitempty"`
+	APIMaxRetries   int                         `yaml:"APIMaxRetries" json:"APIMaxRetries,omitempty"`
+	RateLimit       RedditRateLimitConfig       `yaml:"RateLimit" json:"RateLimit,omitempty"`
+	Comments        RedditCommentsConfig        `yaml:"Comments" json:"Comments,omitempty"`
+	BrowserFallback RedditBrowserFallbackConfig `yaml:"BrowserFallback" json:"BrowserFallback,omitempty"`
+}
+
+type RedditRateLimitConfig struct {
+	RequestsPerMinute int   `yaml:"RequestsPerMinute" json:"RequestsPerMinute,omitempty"`
+	HeaderDriven      *bool `yaml:"HeaderDriven" json:"HeaderDriven,omitempty"`
+	BackoffOn429      *bool `yaml:"BackoffOn429" json:"BackoffOn429,omitempty"`
+	MinRetryAfterSec  int   `yaml:"MinRetryAfterSec" json:"MinRetryAfterSec,omitempty"`
+}
+
+type RedditCommentsConfig struct {
+	DefaultLimit    int    `yaml:"DefaultLimit" json:"DefaultLimit,omitempty"`
+	DefaultDepth    int    `yaml:"DefaultDepth" json:"DefaultDepth,omitempty"`
+	DefaultSort     string `yaml:"DefaultSort" json:"DefaultSort,omitempty"`
+	ExpandMore      *bool  `yaml:"ExpandMore" json:"ExpandMore,omitempty"`
+	ExpandMoreLimit int    `yaml:"ExpandMoreLimit" json:"ExpandMoreLimit,omitempty"`
+}
+
+type RedditBrowserFallbackConfig struct {
+	Enabled           *bool `yaml:"Enabled" json:"Enabled,omitempty"`
+	AllowWithoutOAuth *bool `yaml:"AllowWithoutOAuth" json:"AllowWithoutOAuth,omitempty"`
+}
+
+func (c RedditConfig) EnabledOrDefault() bool {
+	if c.APIEnabled == nil {
+		return true
+	}
+	return *c.APIEnabled
+}
+
+func (c RedditConfig) OAuthModeOrDefault() string {
+	mode := strings.ToLower(strings.TrimSpace(c.OAuthMode))
+	switch mode {
+	case "refresh_token", "client_credentials":
+		return mode
+	default:
+		if strings.TrimSpace(c.RefreshToken) != "" {
+			return "refresh_token"
+		}
+		return "client_credentials"
+	}
+}
+
+func (c RedditConfig) APIBaseURLOrDefault() string {
+	if strings.TrimSpace(c.APIBaseURL) != "" {
+		return strings.TrimRight(strings.TrimSpace(c.APIBaseURL), "/")
+	}
+	return "https://oauth.reddit.com"
+}
+
+func (c RedditConfig) TokenURLOrDefault() string {
+	if strings.TrimSpace(c.TokenURL) != "" {
+		return strings.TrimSpace(c.TokenURL)
+	}
+	return "https://www.reddit.com/api/v1/access_token"
+}
+
+func (c RedditConfig) UserAgentOrDefault() string {
+	if strings.TrimSpace(c.UserAgent) != "" {
+		return strings.TrimSpace(c.UserAgent)
+	}
+	return "digcrawl/1.0"
+}
+
+func (c RedditConfig) APITimeoutSecOrDefault() int {
+	if c.APITimeoutSec > 0 {
+		return c.APITimeoutSec
+	}
+	return 10
+}
+
+func (c RedditConfig) APIMaxRetriesOrDefault() int {
+	if c.APIMaxRetries > 0 {
+		return c.APIMaxRetries
+	}
+	return 1
+}
+
+func (c RedditCommentsConfig) LimitOrDefault() int {
+	if c.DefaultLimit > 0 {
+		return c.DefaultLimit
+	}
+	return 50
+}
+
+func (c RedditCommentsConfig) DepthOrDefault() int {
+	if c.DefaultDepth > 0 {
+		return c.DefaultDepth
+	}
+	return 3
+}
+
+func (c RedditCommentsConfig) SortOrDefault() string {
+	sort := strings.ToLower(strings.TrimSpace(c.DefaultSort))
+	switch sort {
+	case "confidence", "top", "new", "controversial", "old", "qa":
+		return sort
+	default:
+		return "confidence"
+	}
+}
+
+func (c RedditCommentsConfig) ExpandMoreOrDefault() bool {
+	if c.ExpandMore == nil {
+		return false
+	}
+	return *c.ExpandMore
+}
+
+func (c RedditBrowserFallbackConfig) EnabledOrDefault() bool {
+	if c.Enabled == nil {
+		return true
+	}
+	return *c.Enabled
+}
+
+func (c RedditBrowserFallbackConfig) AllowWithoutOAuthOrDefault() bool {
+	if c.AllowWithoutOAuth == nil {
+		return false
+	}
+	return *c.AllowWithoutOAuth
+}
+
 // GatewayConfig HTTP Tool Gateway settings.
 type GatewayConfig struct {
 	Enabled            *bool    `yaml:"Enabled" json:"Enabled,omitempty"`
@@ -711,6 +850,9 @@ func init() {
 					"douyin.video.read",
 					"toutiao.article.read",
 					"x.post.read",
+					"reddit.post.read",
+					"reddit.subreddit.read",
+					"reddit.user.read",
 					"asr.transcribe",
 				},
 				ArtifactDir:        "storage/digcrawl/artifacts",
@@ -739,6 +881,9 @@ func init() {
 					"douyin.video.read",
 					"toutiao.article.read",
 					"x.post.read",
+					"reddit.post.read",
+					"reddit.subreddit.read",
+					"reddit.user.read",
 					"asr.transcribe",
 				},
 			},
@@ -759,6 +904,7 @@ func init() {
 					"xiaohongshu": 2000,
 					"douyin":      2500,
 					"toutiao":     2000,
+					"reddit":      2500,
 				},
 			},
 			LocalBrowser: LocalBrowserConfig{
@@ -773,6 +919,7 @@ func init() {
 					"douyin.com", "www.douyin.com", "iesdouyin.com", "v.douyin.com",
 					"toutiao.com", "www.toutiao.com", "m.toutiao.com",
 					"x.com", "twitter.com", "www.twitter.com",
+					"reddit.com", "www.reddit.com", "old.reddit.com", "new.reddit.com", "redd.it",
 				},
 				Headless:       &enabled,
 				CookieStoreDir: "storage/digcrawl/browser_cookies",
@@ -793,6 +940,32 @@ func init() {
 					ConsumerKeySecret: "DdQgNA7LVBByIAlQTMniEwH4r42dFIfCtpOTxPyWjhTIZe21WI",
 					APITimeoutSec:     8,
 					APIMaxRetries:     1,
+				},
+				Reddit: RedditConfig{
+					APIEnabled:    &enabled,
+					OAuthMode:     "client_credentials",
+					APIBaseURL:    "https://oauth.reddit.com",
+					TokenURL:      "https://www.reddit.com/api/v1/access_token",
+					UserAgent:     "digcrawl/1.0",
+					APITimeoutSec: 10,
+					APIMaxRetries: 1,
+					RateLimit: RedditRateLimitConfig{
+						RequestsPerMinute: 60,
+						HeaderDriven:      &enabled,
+						BackoffOn429:      &enabled,
+						MinRetryAfterSec:  30,
+					},
+					Comments: RedditCommentsConfig{
+						DefaultLimit:    50,
+						DefaultDepth:    3,
+						DefaultSort:     "confidence",
+						ExpandMore:      nil,
+						ExpandMoreLimit: 0,
+					},
+					BrowserFallback: RedditBrowserFallbackConfig{
+						Enabled:           &enabled,
+						AllowWithoutOAuth: nil,
+					},
 				},
 			},
 			OCR: OCRConfig{
@@ -1061,6 +1234,57 @@ func mergeDefaults(cfg *Config) {
 	}
 	if cfg.Platform.X.APIMaxRetries == 0 {
 		cfg.Platform.X.APIMaxRetries = defaultCfg.Platform.X.APIMaxRetries
+	}
+	if cfg.Platform.Reddit.APIEnabled == nil {
+		cfg.Platform.Reddit.APIEnabled = defaultCfg.Platform.Reddit.APIEnabled
+	}
+	if cfg.Platform.Reddit.OAuthMode == "" {
+		cfg.Platform.Reddit.OAuthMode = defaultCfg.Platform.Reddit.OAuthMode
+	}
+	if cfg.Platform.Reddit.APIBaseURL == "" {
+		cfg.Platform.Reddit.APIBaseURL = defaultCfg.Platform.Reddit.APIBaseURL
+	}
+	if cfg.Platform.Reddit.TokenURL == "" {
+		cfg.Platform.Reddit.TokenURL = defaultCfg.Platform.Reddit.TokenURL
+	}
+	if cfg.Platform.Reddit.UserAgent == "" {
+		cfg.Platform.Reddit.UserAgent = defaultCfg.Platform.Reddit.UserAgent
+	}
+	if cfg.Platform.Reddit.APITimeoutSec == 0 {
+		cfg.Platform.Reddit.APITimeoutSec = defaultCfg.Platform.Reddit.APITimeoutSec
+	}
+	if cfg.Platform.Reddit.APIMaxRetries == 0 {
+		cfg.Platform.Reddit.APIMaxRetries = defaultCfg.Platform.Reddit.APIMaxRetries
+	}
+	if cfg.Platform.Reddit.RateLimit.RequestsPerMinute == 0 {
+		cfg.Platform.Reddit.RateLimit.RequestsPerMinute = defaultCfg.Platform.Reddit.RateLimit.RequestsPerMinute
+	}
+	if cfg.Platform.Reddit.RateLimit.HeaderDriven == nil {
+		cfg.Platform.Reddit.RateLimit.HeaderDriven = defaultCfg.Platform.Reddit.RateLimit.HeaderDriven
+	}
+	if cfg.Platform.Reddit.RateLimit.BackoffOn429 == nil {
+		cfg.Platform.Reddit.RateLimit.BackoffOn429 = defaultCfg.Platform.Reddit.RateLimit.BackoffOn429
+	}
+	if cfg.Platform.Reddit.RateLimit.MinRetryAfterSec == 0 {
+		cfg.Platform.Reddit.RateLimit.MinRetryAfterSec = defaultCfg.Platform.Reddit.RateLimit.MinRetryAfterSec
+	}
+	if cfg.Platform.Reddit.Comments.DefaultLimit == 0 {
+		cfg.Platform.Reddit.Comments.DefaultLimit = defaultCfg.Platform.Reddit.Comments.DefaultLimit
+	}
+	if cfg.Platform.Reddit.Comments.DefaultDepth == 0 {
+		cfg.Platform.Reddit.Comments.DefaultDepth = defaultCfg.Platform.Reddit.Comments.DefaultDepth
+	}
+	if cfg.Platform.Reddit.Comments.DefaultSort == "" {
+		cfg.Platform.Reddit.Comments.DefaultSort = defaultCfg.Platform.Reddit.Comments.DefaultSort
+	}
+	if cfg.Platform.Reddit.Comments.ExpandMore == nil {
+		cfg.Platform.Reddit.Comments.ExpandMore = defaultCfg.Platform.Reddit.Comments.ExpandMore
+	}
+	if cfg.Platform.Reddit.BrowserFallback.Enabled == nil {
+		cfg.Platform.Reddit.BrowserFallback.Enabled = defaultCfg.Platform.Reddit.BrowserFallback.Enabled
+	}
+	if cfg.Platform.Reddit.BrowserFallback.AllowWithoutOAuth == nil {
+		cfg.Platform.Reddit.BrowserFallback.AllowWithoutOAuth = defaultCfg.Platform.Reddit.BrowserFallback.AllowWithoutOAuth
 	}
 	if cfg.OCR.Enabled == nil {
 		cfg.OCR.Enabled = defaultCfg.OCR.Enabled

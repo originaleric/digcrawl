@@ -363,6 +363,7 @@ func (s *Service) normalizeItem(raw config.WatchlistItem) (WatchItem, error) {
 		ID: strings.TrimSpace(raw.ID), Platform: strings.ToLower(strings.TrimSpace(raw.Platform)),
 		Type: strings.ToLower(strings.TrimSpace(raw.Type)), URL: strings.TrimSpace(raw.URL),
 		Name: strings.TrimSpace(raw.Name), Interval: d, NotifyTo: strings.TrimSpace(raw.NotifyTo), Enabled: raw.EnabledOrDefault(),
+		Options: raw.Options,
 	}, nil
 }
 
