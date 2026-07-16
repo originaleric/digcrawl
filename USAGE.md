@@ -300,7 +300,7 @@ Watchlist 用于按配置定期检查指定来源的新增内容，复用 Collec
 | `watchlist.collect` | 按 Source 拉取最新内容，复用 Collect、Summary 和 Notifications |
 | `feed.digest` | `watchlist.collect` 的兼容别名，适合 RSS/Feed 摘要场景 |
 
-`Tasks[].Schedule.Mode` 当前支持 `interval`；`Every` 使用 Go duration，例如 `6h`、`24h`、`30m`。调度状态复用 watchlist 运行记录：没有运行历史的任务会立即执行一次，之后按 `Every` 判断是否到期。
+`Tasks[].Schedule.Mode` 当前支持 `interval`；`Every` 使用 Go duration，例如 `6h`、`24h`、`30m`。调度状态写入通用 `dc_tasks_runtime` / `dc_task_runs` / `dc_task_locks` / `dc_task_events`：没有 runtime 状态的任务会立即执行一次，之后按 `Every` 更新 `next_run_at` 并判断是否到期。
 
 `Watchlist.Items[].Options` 可为不同平台提供扩展参数。Reddit 已支持：
 
@@ -449,6 +449,7 @@ DigFlow 内嵌 Runtime 需要额外准备：
 - 新库只初始化 DigFlow runtime 表：`sqls/full/digflow_embedded_runtime_full_ddl.sql`
 - 根目录兼容全量：`sqls/digcrawl_full_sql_ddl.sql`、`sqls/2026-07-09_DigFlow内嵌Runtime初始化DDL.sql`
 - 已执行旧版 DigFlow DDL 的库补跑：`sqls/2026-07-09_DigFlow最新Runtime增量DDL.sql`
+- 已执行旧版 DigCrawl DDL 且要启用通用 Tasks 调度的库补跑：`sqls/2026-07-16_通用Task调度RuntimeDDL.sql`
 
 最新增量包含：
 

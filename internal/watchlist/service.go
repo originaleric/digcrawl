@@ -2,6 +2,8 @@ package watchlist
 
 import (
 	"context"
+	"crypto/sha1"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -206,6 +208,7 @@ func (s *Service) RunDue(ctx context.Context, now time.Time) ([]RunSummary, erro
 	}
 	var summaries []RunSummary
 	var firstErr error
+	activeTaskIDs := []string{}
 	for _, raw := range configuredWatchlistItems(s.cfg) {
 		item, err := s.normalizeItem(raw)
 		if err != nil {
@@ -214,10 +217,18 @@ func (s *Service) RunDue(ctx context.Context, now time.Time) ([]RunSummary, erro
 			}
 			continue
 		}
+		def := taskDefinition(item)
+		activeTaskIDs = append(activeTaskIDs, def.ID)
+		if err := s.store.UpsertTaskDefinition(ctx, def, now); err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
 		if !item.Enabled {
 			continue
 		}
-		due, err := s.isDue(ctx, item, now)
+		due, err := s.store.IsTaskDue(ctx, def.ID, now)
 		if err != nil {
 			if firstErr == nil {
 				firstErr = err
@@ -227,32 +238,16 @@ func (s *Service) RunDue(ctx context.Context, now time.Time) ([]RunSummary, erro
 		if !due {
 			continue
 		}
-		sum, err := s.RunItem(ctx, item)
+		sum, err := s.runScheduledTask(ctx, item, def)
 		summaries = append(summaries, sum)
 		if err != nil && firstErr == nil {
 			firstErr = err
 		}
 	}
+	if err := s.store.DisableMissingTaskDefinitions(ctx, "watchlist.collect", activeTaskIDs, now); err != nil && firstErr == nil {
+		firstErr = err
+	}
 	return summaries, firstErr
-}
-
-func (s *Service) isDue(ctx context.Context, item WatchItem, now time.Time) (bool, error) {
-	last, ok, err := s.store.LastRunStartedAt(ctx, item.ID)
-	if err != nil {
-		return false, err
-	}
-	if !ok {
-		return true, nil
-	}
-	interval := item.Interval
-	if interval <= 0 {
-		parsed, err := time.ParseDuration(s.cfg.Watchlist.DefaultIntervalOrDefault())
-		if err != nil || parsed <= 0 {
-			parsed = 6 * time.Hour
-		}
-		interval = parsed
-	}
-	return !last.Add(interval).After(now), nil
 }
 
 func (s *Service) RunItem(ctx context.Context, item WatchItem) (RunSummary, error) {
@@ -373,6 +368,57 @@ func (s *Service) RunItem(ctx context.Context, item WatchItem) (RunSummary, erro
 	return sum, nil
 }
 
+func (s *Service) runScheduledTask(ctx context.Context, item WatchItem, def TaskDefinition) (RunSummary, error) {
+	sum := RunSummary{WatchID: item.ID}
+	lockTTL, _ := time.ParseDuration(s.cfg.Watchlist.LockTTLOrDefault())
+	locked, err := s.store.AcquireTaskLock(ctx, def.ID, s.owner, lockTTL)
+	if err != nil {
+		return sum, err
+	}
+	if !locked {
+		sum.SkippedLocked = true
+		return sum, s.store.InsertTaskEvent(ctx, def.ID, "", "run_skipped", StatusSkippedLocked, "task lock is held", "")
+	}
+	defer s.store.ReleaseTaskLock(context.Background(), def.ID, s.owner)
+	taskRunID, err := s.store.StartTaskRun(ctx, def, s.owner)
+	if err != nil {
+		return sum, err
+	}
+	status := "success"
+	errText := ""
+	defer func() {
+		metadata := map[string]any{
+			"watch_id":       sum.WatchID,
+			"watch_run_id":   sum.RunID,
+			"discovered":     sum.Discovered,
+			"new_items":      sum.NewItems,
+			"collected":      sum.Collected,
+			"summarized":     sum.Summarized,
+			"notified":       sum.Notified,
+			"skipped_locked": sum.SkippedLocked,
+			"errors":         sum.Errors,
+		}
+		data, _ := json.Marshal(metadata)
+		_ = s.store.FinishTaskRun(context.Background(), taskRunID, def, status, errText, string(data), time.Now())
+	}()
+	sum, err = s.RunItem(ctx, item)
+	if sum.SkippedLocked {
+		status = "skipped_locked"
+		errText = "watchlist lock is held"
+		return sum, err
+	}
+	if err != nil {
+		status = "failed"
+		errText = err.Error()
+		return sum, err
+	}
+	if len(sum.Errors) > 0 {
+		status = "partial"
+		errText = strings.Join(sum.Errors, "; ")
+	}
+	return sum, nil
+}
+
 func (s *Service) retryPendingDeliveries(ctx context.Context, item WatchItem) (int, error) {
 	pending, err := s.store.ListPendingDeliveries(ctx, item.ID, s.cfg.Watchlist.MaxItemsPerRunOrDefault())
 	if err != nil {
@@ -480,6 +526,37 @@ func watchlistItemFromTask(task config.TaskConfig) config.WatchlistItem {
 		Enabled:  &enabled,
 		Options:  options,
 	}
+}
+
+func taskDefinition(item WatchItem) TaskDefinition {
+	mode := "interval"
+	def := TaskDefinition{
+		ID:             item.ID,
+		Type:           "watchlist.collect",
+		Enabled:        item.Enabled,
+		ScheduleMode:   mode,
+		ScheduleEvery:  item.Interval,
+		SourcePlatform: item.Platform,
+		SourceKind:     item.Type,
+		SourceURL:      item.URL,
+		NotifyChannel:  item.NotifyTo,
+	}
+	payload := map[string]any{
+		"id":              def.ID,
+		"type":            def.Type,
+		"enabled":         def.Enabled,
+		"schedule_mode":   def.ScheduleMode,
+		"schedule_every":  def.ScheduleEvery.String(),
+		"source_platform": def.SourcePlatform,
+		"source_kind":     def.SourceKind,
+		"source_url":      def.SourceURL,
+		"notify_channel":  def.NotifyChannel,
+		"options":         item.Options,
+	}
+	data, _ := json.Marshal(payload)
+	sum := sha1.Sum(data)
+	def.ConfigHash = hex.EncodeToString(sum[:])
+	return def
 }
 
 func (s *Service) collectFeedItem(ctx context.Context, feed FeedItem) (CollectedItem, error) {

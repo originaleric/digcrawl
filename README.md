@@ -36,7 +36,7 @@ OCR 目前支持 OpenAI-compatible 视觉模型、智谱 `zhipu_ocr` / `glm-ocr`
 
 ASR 能力通过 `digcrawl asr transcribe <video>` 或 Gateway 工具 `asr.transcribe` 调用：先用 `ffmpeg` 抽取 16k 单声道 wav，再按配置选择 API provider 或本地 provider。API provider 兼容 `/audio/transcriptions`；本地 provider 默认调用 `faster-whisper`，也可在 `ASR.LocalCommand` / `ASR.LocalArgs` 中替换为 whisper.cpp 等命令。
 
-Watchlist 能力通过 `digcrawl watchlist run --once`、`digcrawl watchlist run` 或 `digcrawl watchlist serve` 调用：先对配置的 RSS/sitemap、头条作者页、平台主页或 Reddit 来源做最新内容发现，再复用 Collect 抓取详情，最后按 `Summary` 配置使用规则摘要、LLM 直连或 DigFlow Runtime 生成摘要，并通过 Feishu webhook 推送。状态、锁和投递结果写入 SQLite，避免重复通知。新配置推荐使用根级 `Tasks` 描述定时任务，`watchlist.collect` 可为不同来源配置不同扫描周期；旧 `Watchlist.Items` 继续兼容。
+Watchlist 能力通过 `digcrawl watchlist run --once`、`digcrawl watchlist run` 或 `digcrawl watchlist serve` 调用：先对配置的 RSS/sitemap、头条作者页、平台主页或 Reddit 来源做最新内容发现，再复用 Collect 抓取详情，最后按 `Summary` 配置使用规则摘要、LLM 直连或 DigFlow Runtime 生成摘要，并通过 Feishu webhook 推送。新配置推荐使用根级 `Tasks` 描述定时任务，`watchlist.collect` 可为不同来源配置不同扫描周期；旧 `Watchlist.Items` 继续兼容。调度状态写入通用 `dc_task_*` runtime 表，内容去重、摘要和投递状态继续写入 watchlist 领域表。
 
 ## 更新概览
 
@@ -123,7 +123,7 @@ Watchlist 常驻调度：
 ./digcrawl watchlist serve --config config/config.yaml
 ```
 
-`watchlist serve` 会按 `Watchlist.Scheduler.TickInterval` 扫描到期任务，没有运行历史的 task 会立即执行一次，之后按 `Tasks[].Schedule.Every` 或旧 `Watchlist.Items[].Interval` 判断是否到期。`watchlist run` 保留为整轮执行入口，适合手动触发或外部 cron。
+`watchlist serve` 会按 `Watchlist.Scheduler.TickInterval` 扫描到期任务，没有 runtime 状态的 task 会立即执行一次，之后按 `Tasks[].Schedule.Every` 或旧 `Watchlist.Items[].Interval` 写入 `dc_tasks_runtime.next_run_at` 并判断是否到期。`watchlist run` 保留为整轮执行入口，适合手动触发或外部 cron。
 
 DigFlow 内嵌 Runtime 摘要需要先准备数据库与模型配置。真实数据库连接写入本地 `config/gorm.yml`，该文件已被 `.gitignore` 忽略；仓库提供无密钥模板 `config/gorm.example.yml`。DigFlow 自身表保持 `df_` 前缀，配置入口为 `config/digflow-gorm.yml`、`config/digflow.yml`、`config/eino.yml` 和 `agents/watchlist/agents.yml`。
 
@@ -145,7 +145,7 @@ export REDDIT_CLIENT_SECRET="<client-secret>"
 export REDDIT_REFRESH_TOKEN="<optional-refresh-token>"
 ```
 
-新库初始化优先使用 `sqls/full/digcrawl_full_sql_ddl.sql`；只初始化 DigFlow `df_*` 表可使用 `sqls/full/digflow_embedded_runtime_full_ddl.sql`。根目录兼容文件 `sqls/digcrawl_full_sql_ddl.sql` 和 `sqls/2026-07-09_DigFlow内嵌Runtime初始化DDL.sql` 保持同口径。已执行过旧版 DigFlow DDL 的库，补跑 `sqls/2026-07-09_DigFlow最新Runtime增量DDL.sql`，其中包含最新 LoopRuntime `df_loop_*` 表和 `df_resource_asset.storage_key` 唯一约束迁移。
+新库初始化优先使用 `sqls/full/digcrawl_full_sql_ddl.sql`；只初始化 DigFlow `df_*` 表可使用 `sqls/full/digflow_embedded_runtime_full_ddl.sql`。根目录兼容文件 `sqls/digcrawl_full_sql_ddl.sql` 和 `sqls/2026-07-09_DigFlow内嵌Runtime初始化DDL.sql` 保持同口径。已执行过旧版 DigFlow DDL 的库，补跑 `sqls/2026-07-09_DigFlow最新Runtime增量DDL.sql`，其中包含最新 LoopRuntime `df_loop_*` 表和 `df_resource_asset.storage_key` 唯一约束迁移。启用通用 Tasks 调度还需要补跑 `sqls/2026-07-16_通用Task调度RuntimeDDL.sql`。
 
 本地 ASR 依赖 `ffmpeg` 和 `faster-whisper`。`ffmpeg` 需能在 `PATH` 中直接调用；`faster-whisper` 建议安装到隔离 venv，再把可执行命令加入 `PATH` 或通过 `--local-command` / `ASR.LocalCommand` 显式指定。
 

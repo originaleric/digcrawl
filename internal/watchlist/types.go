@@ -61,6 +61,19 @@ type RunSummary struct {
 	Errors        []string
 }
 
+type TaskDefinition struct {
+	ID             string
+	Type           string
+	Enabled        bool
+	ScheduleMode   string
+	ScheduleEvery  time.Duration
+	SourcePlatform string
+	SourceKind     string
+	SourceURL      string
+	NotifyChannel  string
+	ConfigHash     string
+}
+
 type CollectedItem struct {
 	Feed     FeedItem
 	Title    string

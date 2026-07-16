@@ -97,6 +97,60 @@ func (s *Store) migrate() error {
 	  message_text TEXT,
 	  PRIMARY KEY (watch_id, content_key, channel_id)
 )`,
+		`CREATE TABLE IF NOT EXISTS dc_tasks_runtime (
+  task_id TEXT PRIMARY KEY,
+  task_type TEXT NOT NULL,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  schedule_mode TEXT NOT NULL,
+  schedule_every_sec INTEGER NOT NULL DEFAULT 0,
+  source_platform TEXT,
+  source_kind TEXT,
+  source_url TEXT,
+  notify_channel TEXT,
+  config_hash TEXT NOT NULL,
+  last_run_id TEXT,
+  last_run_at TEXT,
+  next_run_at TEXT NOT NULL,
+  last_status TEXT,
+  consecutive_failures INTEGER NOT NULL DEFAULT 0,
+  updated_at TEXT NOT NULL
+)`,
+		`CREATE TABLE IF NOT EXISTS dc_task_runs (
+  run_id TEXT PRIMARY KEY,
+  task_id TEXT NOT NULL,
+  task_type TEXT NOT NULL,
+  owner TEXT NOT NULL,
+  started_at TEXT NOT NULL,
+  finished_at TEXT,
+  status TEXT NOT NULL,
+  error TEXT,
+  metadata_json TEXT
+)`,
+		`CREATE TABLE IF NOT EXISTS dc_task_locks (
+  task_id TEXT PRIMARY KEY,
+  owner TEXT NOT NULL,
+  acquired_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL
+)`,
+		`CREATE TABLE IF NOT EXISTS dc_task_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  task_id TEXT NOT NULL,
+  run_id TEXT,
+  event_type TEXT NOT NULL,
+  status TEXT NOT NULL,
+  message TEXT,
+  payload_json TEXT,
+  created_at TEXT NOT NULL
+)`,
+		`CREATE INDEX IF NOT EXISTS idx_dc_tasks_runtime_next_run_at ON dc_tasks_runtime(next_run_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_dc_tasks_runtime_type_enabled ON dc_tasks_runtime(task_type, enabled)`,
+		`CREATE INDEX IF NOT EXISTS idx_dc_task_runs_task_id ON dc_task_runs(task_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_dc_task_runs_started_at ON dc_task_runs(started_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_dc_task_runs_status ON dc_task_runs(status)`,
+		`CREATE INDEX IF NOT EXISTS idx_dc_task_locks_expires_at ON dc_task_locks(expires_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_dc_task_events_task_id ON dc_task_events(task_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_dc_task_events_run_id ON dc_task_events(run_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_dc_task_events_created_at ON dc_task_events(created_at)`,
 	}
 	for _, stmt := range stmts {
 		if _, err := s.db.Exec(stmt); err != nil {
@@ -181,20 +235,178 @@ func (s *Store) FinishRun(ctx context.Context, runID string, summary RunSummary,
 	return err
 }
 
-func (s *Store) LastRunStartedAt(ctx context.Context, watchID string) (time.Time, bool, error) {
-	var started string
-	err := s.db.QueryRowContext(ctx, `SELECT started_at FROM watchlist_runs WHERE watch_id = ? ORDER BY started_at DESC LIMIT 1`, watchID).Scan(&started)
+func (s *Store) UpsertTaskDefinition(ctx context.Context, def TaskDefinition, now time.Time) error {
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	nowText := now.UTC().Format(time.RFC3339)
+	nextText := nowText
+	_, err := s.db.ExecContext(ctx, `INSERT INTO dc_tasks_runtime (
+  task_id, task_type, enabled, schedule_mode, schedule_every_sec, source_platform, source_kind, source_url,
+  notify_channel, config_hash, next_run_at, updated_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(task_id) DO UPDATE SET
+  task_type = excluded.task_type,
+  enabled = excluded.enabled,
+  schedule_mode = excluded.schedule_mode,
+  schedule_every_sec = excluded.schedule_every_sec,
+  source_platform = excluded.source_platform,
+  source_kind = excluded.source_kind,
+  source_url = excluded.source_url,
+  notify_channel = excluded.notify_channel,
+  next_run_at = CASE WHEN config_hash != excluded.config_hash THEN excluded.next_run_at ELSE next_run_at END,
+  config_hash = excluded.config_hash,
+  updated_at = excluded.updated_at`,
+		def.ID, def.Type, boolInt(def.Enabled), def.ScheduleMode, int64(def.ScheduleEvery.Seconds()),
+		nullStr(def.SourcePlatform), nullStr(def.SourceKind), nullStr(def.SourceURL), nullStr(def.NotifyChannel),
+		def.ConfigHash, nextText, nowText)
+	return err
+}
+
+func (s *Store) IsTaskDue(ctx context.Context, taskID string, now time.Time) (bool, error) {
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	var next string
+	err := s.db.QueryRowContext(ctx, `SELECT next_run_at FROM dc_tasks_runtime WHERE task_id = ?`, taskID).Scan(&next)
 	if err == sql.ErrNoRows {
-		return time.Time{}, false, nil
+		return true, nil
 	}
 	if err != nil {
-		return time.Time{}, false, err
+		return false, err
 	}
-	t, err := time.Parse(time.RFC3339, started)
+	t, err := time.Parse(time.RFC3339, next)
 	if err != nil {
-		return time.Time{}, false, err
+		return false, err
 	}
-	return t, true, nil
+	return !t.After(now.UTC()), nil
+}
+
+func (s *Store) DisableMissingTaskDefinitions(ctx context.Context, taskType string, activeIDs []string, now time.Time) error {
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	updated := now.UTC().Format(time.RFC3339)
+	taskType = strings.TrimSpace(taskType)
+	if taskType == "" {
+		return nil
+	}
+	if len(activeIDs) == 0 {
+		_, err := s.db.ExecContext(ctx, `UPDATE dc_tasks_runtime SET enabled = 0, updated_at = ? WHERE task_type = ?`, updated, taskType)
+		return err
+	}
+	placeholders := make([]string, 0, len(activeIDs))
+	args := []any{updated, taskType}
+	for _, id := range activeIDs {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		placeholders = append(placeholders, "?")
+		args = append(args, id)
+	}
+	if len(placeholders) == 0 {
+		_, err := s.db.ExecContext(ctx, `UPDATE dc_tasks_runtime SET enabled = 0, updated_at = ? WHERE task_type = ?`, updated, taskType)
+		return err
+	}
+	query := `UPDATE dc_tasks_runtime SET enabled = 0, updated_at = ? WHERE task_type = ? AND task_id NOT IN (` + strings.Join(placeholders, ",") + `)`
+	_, err := s.db.ExecContext(ctx, query, args...)
+	return err
+}
+
+func (s *Store) AcquireTaskLock(ctx context.Context, taskID, owner string, ttl time.Duration) (bool, error) {
+	now := time.Now().UTC()
+	if ttl <= 0 {
+		ttl = 30 * time.Minute
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	var expires string
+	err = tx.QueryRowContext(ctx, `SELECT expires_at FROM dc_task_locks WHERE task_id = ?`, taskID).Scan(&expires)
+	if err != nil && err != sql.ErrNoRows {
+		return false, err
+	}
+	if err == nil {
+		t, parseErr := time.Parse(time.RFC3339, expires)
+		if parseErr == nil && t.After(now) {
+			return false, tx.Commit()
+		}
+		_, err = tx.ExecContext(ctx, `UPDATE dc_task_locks SET owner = ?, acquired_at = ?, expires_at = ? WHERE task_id = ?`,
+			owner, now.Format(time.RFC3339), now.Add(ttl).Format(time.RFC3339), taskID)
+	} else {
+		_, err = tx.ExecContext(ctx, `INSERT INTO dc_task_locks (task_id, owner, acquired_at, expires_at) VALUES (?, ?, ?, ?)`,
+			taskID, owner, now.Format(time.RFC3339), now.Add(ttl).Format(time.RFC3339))
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, tx.Commit()
+}
+
+func (s *Store) ReleaseTaskLock(ctx context.Context, taskID, owner string) {
+	_, _ = s.db.ExecContext(ctx, `DELETE FROM dc_task_locks WHERE task_id = ? AND owner = ?`, taskID, owner)
+}
+
+func (s *Store) StartTaskRun(ctx context.Context, def TaskDefinition, owner string) (string, error) {
+	runID := uuid.NewString()
+	now := time.Now().UTC().Format(time.RFC3339)
+	_, err := s.db.ExecContext(ctx, `INSERT INTO dc_task_runs (run_id, task_id, task_type, owner, started_at, status) VALUES (?, ?, ?, ?, ?, ?)`,
+		runID, def.ID, def.Type, owner, now, "running")
+	if err != nil {
+		return "", err
+	}
+	_ = s.InsertTaskEvent(ctx, def.ID, runID, "run_started", "running", "", "")
+	return runID, nil
+}
+
+func (s *Store) FinishTaskRun(ctx context.Context, runID string, def TaskDefinition, status, errText, metadataJSON string, finishedAt time.Time) error {
+	if finishedAt.IsZero() {
+		finishedAt = time.Now().UTC()
+	}
+	nextRunAt := finishedAt.UTC().Add(def.ScheduleEvery)
+	if def.ScheduleEvery <= 0 {
+		nextRunAt = finishedAt.UTC()
+	}
+	finishedText := finishedAt.UTC().Format(time.RFC3339)
+	nextText := nextRunAt.Format(time.RFC3339)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	_, err = tx.ExecContext(ctx, `UPDATE dc_task_runs SET finished_at = ?, status = ?, error = ?, metadata_json = ? WHERE run_id = ?`,
+		finishedText, status, nullStr(errText), nullStr(metadataJSON), runID)
+	if err != nil {
+		return err
+	}
+	failDelta := 0
+	if status == "success" || status == "skipped_locked" {
+		failDelta = -1
+	}
+	if failDelta < 0 {
+		_, err = tx.ExecContext(ctx, `UPDATE dc_tasks_runtime SET last_run_id = ?, last_run_at = ?, next_run_at = ?, last_status = ?, consecutive_failures = 0, updated_at = ? WHERE task_id = ?`,
+			runID, finishedText, nextText, status, finishedText, def.ID)
+	} else {
+		_, err = tx.ExecContext(ctx, `UPDATE dc_tasks_runtime SET last_run_id = ?, last_run_at = ?, next_run_at = ?, last_status = ?, consecutive_failures = consecutive_failures + 1, updated_at = ? WHERE task_id = ?`,
+			runID, finishedText, nextText, status, finishedText, def.ID)
+	}
+	if err != nil {
+		return err
+	}
+	if err = tx.Commit(); err != nil {
+		return err
+	}
+	_ = s.InsertTaskEvent(context.Background(), def.ID, runID, "run_finished", status, errText, metadataJSON)
+	return nil
+}
+
+func (s *Store) InsertTaskEvent(ctx context.Context, taskID, runID, eventType, status, message, payloadJSON string) error {
+	_, err := s.db.ExecContext(ctx, `INSERT INTO dc_task_events (task_id, run_id, event_type, status, message, payload_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		taskID, nullStr(runID), eventType, status, nullStr(message), nullStr(payloadJSON), time.Now().UTC().Format(time.RFC3339))
+	return err
 }
 
 func (s *Store) UpsertDiscovered(ctx context.Context, watchID string, item FeedItem, baseline bool) (bool, error) {
