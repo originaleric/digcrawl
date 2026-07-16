@@ -282,7 +282,9 @@ Watchlist 用于按配置定期检查指定来源的新增内容，复用 Collec
 | `NotifyOnFirstRun` | 首次运行是否通知历史内容，默认 `false`，即只建基线 |
 | `MaxItemsPerRun` | 单个 watch item 每轮最多处理的新内容数 |
 | `LockTTL` | per-watch 锁过期时间，避免 cron / 常驻进程重入 |
-| `DBPath` | watchlist 状态库路径，默认复用 `Collect.DBPath` |
+| `Persistence.Driver` | watchlist 状态持久化 driver，当前支持 `sqlite`，默认 `sqlite` |
+| `Persistence.SQLitePath` | watchlist 状态库路径，默认复用 `Collect.DBPath` |
+| `DBPath` | 旧版兼容字段；新配置建议使用 `Persistence.SQLitePath` |
 | `Items` | 监控目标列表 |
 
 `Watchlist.Scheduler` 字段：
@@ -346,6 +348,9 @@ Watchlist:
   NotifyOnFirstRun: false
   MaxItemsPerRun: 20
   LockTTL: "30m"
+  Persistence:
+    Driver: sqlite
+    SQLitePath: "storage/digcrawl/collect.db"
   Items:
     - ID: rss-example
       Platform: rss
@@ -443,9 +448,10 @@ DigFlow 内嵌 Runtime 需要额外准备：
 - `agents/watchlist/agents.yml`：宿主侧 agent manifest。
 - `agents/watchlist/summary-agent.yml`：watchlist 摘要 agent。
 
-数据库 DDL 已对齐 DigFlow commit `8e77addb892c8f71ae24890733d5ca587ec168da`：
+数据库 DDL 已对齐 DigFlow commit `8e77addb892c8f71ae24890733d5ca587ec168da`。本地单机运行推荐使用 SQLite，远端 MySQL 部署使用 MySQL DDL：
 
-- 新库完整初始化：`sqls/full/digcrawl_full_sql_ddl.sql`
+- 新库完整初始化 MySQL：`sqls/full/digcrawl_full_sql_ddl.sql`
+- 新库完整初始化 SQLite：`sqls/full/digcrawl_full_sqlite_ddl.sql`，包含 Collect、Watchlist/Tasks runtime 和 DigFlow `df_*` embedded runtime 表
 - 新库只初始化 DigFlow runtime 表：`sqls/full/digflow_embedded_runtime_full_ddl.sql`
 - 根目录兼容全量：`sqls/digcrawl_full_sql_ddl.sql`、`sqls/2026-07-09_DigFlow内嵌Runtime初始化DDL.sql`
 - 已执行旧版 DigFlow DDL 的库补跑：`sqls/2026-07-09_DigFlow最新Runtime增量DDL.sql`
@@ -456,9 +462,42 @@ DigFlow 内嵌 Runtime 需要额外准备：
 - LoopRuntime 持久化表：`df_loop_instance`、`df_loop_iteration`、`df_loop_active`
 - ResourceAsset 存储键迁移：将 `df_resource_asset.storage_key` 调整为 nullable，并创建 `uidx_resource_asset_storage_key`
 
+如果 DigFlow embedded runtime 也要完全本地化，需要同时调整三个配置入口；只改 `config/digflow-gorm.yml` 不够：
+
+```yaml
+# config/digflow-gorm.yml
+Gorm:
+  UseDbType: "sqlite"
+  Mysql:
+    IsInitGolobalGormMysql: 0
+  Sqlite:
+    IsInitGolobalGormSqlite: 1
+    Write:
+      Path: "./storage/sqlite/digflow.db"
+
+# config/digflow.yml
+ChatHistoryStore:
+  Enabled: false
+  Type: "memory"
+sql_lite:
+  Path: "./storage/sqlite/digflow-memory.db"
+
+# config/eino.yml
+context:
+  ChatHistory:
+    Enabled: false
+    Type: "memory"
+    ReuseGlobalMySQL: false
+  LongTerm:
+    Enabled: false
+    Store: "auto"
+```
+
+`config/digflow-gorm.yml` 控制 DigFlow 平台表连接；`config/digflow.yml` 的 `ChatHistoryStore` 目前常用持久化实现是 MySQL/PGSQL/sql_mapping，纯本地模式建议禁用或使用 memory；`config/eino.yml` 的 `context.ChatHistory` 也要关闭 `ReuseGlobalMySQL`，否则仍会尝试复用 MySQL。若后续启用长期记忆本地索引，再把 `context.LongTerm.Store` 调整为 `local_sqlite`，并确保 `config/digflow.yml` 的 `sql_lite.Path` 非空。DigCrawl 自身的 Watchlist runtime 通过 `Watchlist.Persistence.SQLitePath` 控制，二者可以共用一个 SQLite 文件，也可以按运行边界拆成两个文件。
+
 表前缀约定：
 
-- DigCrawl 业务表：`dc_*`
+- DigCrawl 业务表：`dc_*`，MySQL 与 SQLite 保持一致
 - DigFlow runtime 表：`df_*`
 
 ### Providers（内置 Provider 开关）

@@ -4,7 +4,7 @@ import (
 	"context"
 )
 
-// CollectRecord is one row in the collects table.
+// CollectRecord is one row in the dc_collects table.
 type CollectRecord struct {
 	ID           string
 	SourceURL    string

@@ -37,6 +37,10 @@ func OpenSQLite(path string) (*SQLiteStore, error) {
 		return nil, err
 	}
 	db.SetMaxOpenConns(1)
+	if _, err := db.Exec("PRAGMA foreign_keys = ON"); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("enable foreign keys: %w", err)
+	}
 	s := &SQLiteStore{db: db}
 	if err := s.migrate(); err != nil {
 		_ = db.Close()
@@ -49,7 +53,90 @@ func (s *SQLiteStore) migrate() error {
 	if _, err := s.db.Exec(migrationSQL); err != nil {
 		return fmt.Errorf("migrate: %w", err)
 	}
+	if err := s.migrateLegacyTables(); err != nil {
+		return fmt.Errorf("migrate legacy tables: %w", err)
+	}
 	return nil
+}
+
+func (s *SQLiteStore) migrateLegacyTables() error {
+	legacyCollects, err := s.tableExists("collects")
+	if err != nil {
+		return err
+	}
+	if legacyCollects {
+		if _, err := s.db.Exec(`INSERT OR IGNORE INTO dc_collects (
+  id, source_url, canonical_url, platform, tool_name, title, content_type,
+  status, error_code, captured_at, output_root, base_name, created_at
+) SELECT
+  id, source_url, canonical_url, platform, tool_name, title, content_type,
+  status, error_code, captured_at, output_root, base_name, created_at
+FROM collects`); err != nil {
+			return err
+		}
+	}
+	legacyFiles, err := s.tableExists("collect_files")
+	if err != nil {
+		return err
+	}
+	if legacyFiles {
+		if _, err := s.db.Exec(`INSERT INTO dc_collect_files (collect_id, kind, path)
+SELECT f.collect_id, f.kind, f.path
+FROM collect_files f
+WHERE EXISTS (
+  SELECT 1 FROM dc_collects c WHERE c.id = f.collect_id
+)
+AND NOT EXISTS (
+  SELECT 1 FROM dc_collect_files d
+  WHERE d.collect_id = f.collect_id
+    AND d.kind = f.kind
+    AND d.path = f.path
+)`); err != nil {
+			return err
+		}
+	}
+	legacyMedia, err := s.tableExists("collect_media")
+	if err != nil {
+		return err
+	}
+	if legacyMedia {
+		if _, err := s.db.Exec(`INSERT INTO dc_collect_media (
+  collect_id, media_type, remote_url, local_path, download_error, sort_order
+)
+SELECT m.collect_id, m.media_type, m.remote_url, m.local_path, m.download_error, m.sort_order
+FROM collect_media m
+WHERE EXISTS (
+  SELECT 1 FROM dc_collects c WHERE c.id = m.collect_id
+)
+AND NOT EXISTS (
+  SELECT 1 FROM dc_collect_media d
+  WHERE d.collect_id = m.collect_id
+    AND d.media_type = m.media_type
+    AND d.remote_url IS m.remote_url
+    AND d.local_path IS m.local_path
+    AND d.download_error IS m.download_error
+    AND d.sort_order = m.sort_order
+)`); err != nil {
+			return err
+		}
+	}
+	legacyToolRuns, err := s.tableExists("tool_runs")
+	if err != nil {
+		return err
+	}
+	if legacyToolRuns {
+		if _, err := s.db.Exec(`INSERT OR IGNORE INTO dc_tool_runs (id, tool_name, source_url, status, output_json, created_at)
+SELECT id, tool_name, source_url, status, output_json, created_at FROM tool_runs`); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *SQLiteStore) tableExists(name string) (bool, error) {
+	var n int
+	err := s.db.QueryRow(`SELECT COUNT(1) FROM sqlite_master WHERE type = 'table' AND name = ?`, name).Scan(&n)
+	return n > 0, err
 }
 
 func (s *SQLiteStore) Close() error {
@@ -85,7 +172,7 @@ func (s *SQLiteStore) Upsert(ctx context.Context, in UpsertInput) (string, error
 	if id == "" {
 		id = uuid.NewString()
 		_, err = tx.ExecContext(ctx, `
-INSERT INTO collects (
+INSERT INTO dc_collects (
   id, source_url, canonical_url, platform, tool_name, title, content_type,
   status, error_code, captured_at, output_root, base_name, created_at
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -95,7 +182,7 @@ INSERT INTO collects (
 		)
 	} else {
 		_, err = tx.ExecContext(ctx, `
-UPDATE collects SET
+UPDATE dc_collects SET
   canonical_url = ?, platform = ?, tool_name = ?, title = ?, content_type = ?,
   status = ?, error_code = ?, captured_at = ?, output_root = ?, base_name = ?
 WHERE id = ?`,
@@ -108,16 +195,16 @@ WHERE id = ?`,
 		return "", err
 	}
 
-	if _, err := tx.ExecContext(ctx, `DELETE FROM collect_files WHERE collect_id = ?`, id); err != nil {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM dc_collect_files WHERE collect_id = ?`, id); err != nil {
 		return "", err
 	}
-	if _, err := tx.ExecContext(ctx, `DELETE FROM collect_media WHERE collect_id = ?`, id); err != nil {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM dc_collect_media WHERE collect_id = ?`, id); err != nil {
 		return "", err
 	}
 
 	for _, f := range in.Files {
 		if _, err := tx.ExecContext(ctx,
-			`INSERT INTO collect_files (collect_id, kind, path) VALUES (?, ?, ?)`,
+			`INSERT INTO dc_collect_files (collect_id, kind, path) VALUES (?, ?, ?)`,
 			id, f.Kind, f.Path,
 		); err != nil {
 			return "", err
@@ -125,7 +212,7 @@ WHERE id = ?`,
 	}
 	for _, m := range in.Media {
 		if _, err := tx.ExecContext(ctx, `
-INSERT INTO collect_media (collect_id, media_type, remote_url, local_path, download_error, sort_order)
+INSERT INTO dc_collect_media (collect_id, media_type, remote_url, local_path, download_error, sort_order)
 VALUES (?, ?, ?, ?, ?, ?)`,
 			id, m.MediaType, nullStr(m.RemoteURL), nullStr(m.LocalPath),
 			nullStr(m.DownloadError), m.SortOrder,
@@ -143,7 +230,7 @@ VALUES (?, ?, ?, ?, ?, ?)`,
 func findCollectID(ctx context.Context, tx *sql.Tx, sourceURL string) (string, error) {
 	key := normalizeURLKey(sourceURL)
 	var id string
-	err := tx.QueryRowContext(ctx, `SELECT id FROM collects WHERE source_url = ?`, key).Scan(&id)
+	err := tx.QueryRowContext(ctx, `SELECT id FROM dc_collects WHERE source_url = ?`, key).Scan(&id)
 	if err == sql.ErrNoRows {
 		return "", nil
 	}
@@ -163,7 +250,7 @@ func (s *SQLiteStore) List(ctx context.Context, limit, offset int) ([]CollectRec
 	rows, err := s.db.QueryContext(ctx, `
 SELECT id, source_url, canonical_url, platform, tool_name, title, content_type,
        status, error_code, captured_at, output_root, base_name, created_at
-FROM collects
+FROM dc_collects
 ORDER BY captured_at DESC
 LIMIT ? OFFSET ?`, limit, offset)
 	if err != nil {
@@ -185,7 +272,7 @@ func (s *SQLiteStore) Search(ctx context.Context, query string, limit int) ([]Co
 	rows, err := s.db.QueryContext(ctx, `
 SELECT id, source_url, canonical_url, platform, tool_name, title, content_type,
        status, error_code, captured_at, output_root, base_name, created_at
-FROM collects
+FROM dc_collects
 WHERE lower(source_url) LIKE ? OR lower(title) LIKE ? OR lower(platform) LIKE ?
 ORDER BY captured_at DESC
 LIMIT ?`, pattern, pattern, pattern, limit)
@@ -200,7 +287,7 @@ func (s *SQLiteStore) GetByID(ctx context.Context, id string) (*CollectDetail, e
 	row := s.db.QueryRowContext(ctx, `
 SELECT id, source_url, canonical_url, platform, tool_name, title, content_type,
        status, error_code, captured_at, output_root, base_name, created_at
-FROM collects WHERE id = ?`, id)
+FROM dc_collects WHERE id = ?`, id)
 	rec, err := scanCollectRow(row)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -216,7 +303,7 @@ func (s *SQLiteStore) GetByURL(ctx context.Context, sourceURL string) (*CollectD
 	row := s.db.QueryRowContext(ctx, `
 SELECT id, source_url, canonical_url, platform, tool_name, title, content_type,
        status, error_code, captured_at, output_root, base_name, created_at
-FROM collects WHERE source_url = ?`, key)
+FROM dc_collects WHERE source_url = ?`, key)
 	rec, err := scanCollectRow(row)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -231,7 +318,7 @@ func (s *SQLiteStore) loadDetail(ctx context.Context, rec CollectRecord) (*Colle
 	detail := &CollectDetail{Collect: rec}
 
 	fileRows, err := s.db.QueryContext(ctx,
-		`SELECT kind, path FROM collect_files WHERE collect_id = ? ORDER BY id`, rec.ID)
+		`SELECT kind, path FROM dc_collect_files WHERE collect_id = ? ORDER BY id`, rec.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -249,7 +336,7 @@ func (s *SQLiteStore) loadDetail(ctx context.Context, rec CollectRecord) (*Colle
 
 	mediaRows, err := s.db.QueryContext(ctx, `
 SELECT media_type, remote_url, local_path, download_error, sort_order
-FROM collect_media WHERE collect_id = ? ORDER BY sort_order, id`, rec.ID)
+FROM dc_collect_media WHERE collect_id = ? ORDER BY sort_order, id`, rec.ID)
 	if err != nil {
 		return nil, err
 	}

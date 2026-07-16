@@ -42,6 +42,31 @@ func TestCollectPersistModeHelpers(t *testing.T) {
 	}
 }
 
+func TestWatchlistPersistenceDefaults(t *testing.T) {
+	t.Parallel()
+
+	empty := WatchlistConfig{}
+	if got := empty.PersistenceDriverOrDefault(); got != "sqlite" {
+		t.Fatalf("PersistenceDriverOrDefault=%q", got)
+	}
+	if got := empty.StateDBPathOrDefault("storage/custom/collect.db"); got != "storage/custom/collect.db" {
+		t.Fatalf("StateDBPathOrDefault collect fallback=%q", got)
+	}
+	if got := (WatchlistConfig{DBPath: "legacy.db"}).StateDBPathOrDefault("collect.db"); got != "legacy.db" {
+		t.Fatalf("StateDBPathOrDefault legacy=%q", got)
+	}
+	cfg := WatchlistConfig{
+		Persistence: WatchlistPersistenceConfig{Driver: "SQLite", SQLitePath: "watchlist.db"},
+		DBPath:      "legacy.db",
+	}
+	if got := cfg.PersistenceDriverOrDefault(); got != "sqlite" {
+		t.Fatalf("normalized driver=%q", got)
+	}
+	if got := cfg.StateDBPathOrDefault("collect.db"); got != "watchlist.db" {
+		t.Fatalf("StateDBPathOrDefault persistence path=%q", got)
+	}
+}
+
 func TestXAPIConfigHelpers(t *testing.T) {
 	t.Parallel()
 
@@ -170,6 +195,9 @@ func TestLoadParsesScheduledTasks(t *testing.T) {
 	data := []byte(`
 Watchlist:
   Enabled: true
+  Persistence:
+    Driver: sqlite
+    SQLitePath: storage/digcrawl/watchlist-test.db
   Scheduler:
     TickInterval: 2m
     Jitter: 10s
@@ -202,6 +230,12 @@ Tasks:
 	}
 	if got := cfg.Watchlist.Scheduler.JitterOrDefault(); got != "10s" {
 		t.Fatalf("Jitter=%q", got)
+	}
+	if got := cfg.Watchlist.PersistenceDriverOrDefault(); got != "sqlite" {
+		t.Fatalf("Watchlist persistence driver=%q", got)
+	}
+	if got := cfg.Watchlist.StateDBPathOrDefault(cfg.Collect.DBPathOrDefault()); got != "storage/digcrawl/watchlist-test.db" {
+		t.Fatalf("Watchlist state db=%q", got)
 	}
 	if len(cfg.Tasks) != 1 {
 		t.Fatalf("tasks len=%d", len(cfg.Tasks))

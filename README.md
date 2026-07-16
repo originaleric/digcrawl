@@ -145,7 +145,7 @@ export REDDIT_CLIENT_SECRET="<client-secret>"
 export REDDIT_REFRESH_TOKEN="<optional-refresh-token>"
 ```
 
-新库初始化优先使用 `sqls/full/digcrawl_full_sql_ddl.sql`；只初始化 DigFlow `df_*` 表可使用 `sqls/full/digflow_embedded_runtime_full_ddl.sql`。根目录兼容文件 `sqls/digcrawl_full_sql_ddl.sql` 和 `sqls/2026-07-09_DigFlow内嵌Runtime初始化DDL.sql` 保持同口径。已执行过旧版 DigFlow DDL 的库，补跑 `sqls/2026-07-09_DigFlow最新Runtime增量DDL.sql`，其中包含最新 LoopRuntime `df_loop_*` 表和 `df_resource_asset.storage_key` 唯一约束迁移。启用通用 Tasks 调度还需要补跑 `sqls/2026-07-16_通用Task调度RuntimeDDL.sql`。
+新库初始化 MySQL 使用 `sqls/full/digcrawl_full_sql_ddl.sql`；本地单机 SQLite 使用 `sqls/full/digcrawl_full_sqlite_ddl.sql`，覆盖 Collect、Watchlist/Tasks runtime 和 DigFlow `df_*` embedded runtime 表。默认 DigCrawl 本地状态库路径为 `storage/digcrawl/collect.db`，可通过 `Watchlist.Persistence.SQLitePath` 调整；DigFlow 本地 SQLite 还需要同步调整 `config/digflow-gorm.yml`、`config/digflow.yml` 和 `config/eino.yml`，完整 profile 见 `USAGE.md`。只初始化 DigFlow `df_*` MySQL 表可使用 `sqls/full/digflow_embedded_runtime_full_ddl.sql`。根目录兼容文件 `sqls/digcrawl_full_sql_ddl.sql` 和 `sqls/2026-07-09_DigFlow内嵌Runtime初始化DDL.sql` 保持同口径。已执行过旧版 DigFlow DDL 的库，补跑 `sqls/2026-07-09_DigFlow最新Runtime增量DDL.sql`，其中包含最新 LoopRuntime `df_loop_*` 表和 `df_resource_asset.storage_key` 唯一约束迁移。启用通用 Tasks 调度还需要补跑 `sqls/2026-07-16_通用Task调度RuntimeDDL.sql`。
 
 本地 ASR 依赖 `ffmpeg` 和 `faster-whisper`。`ffmpeg` 需能在 `PATH` 中直接调用；`faster-whisper` 建议安装到隔离 venv，再把可执行命令加入 `PATH` 或通过 `--local-command` / `ASR.LocalCommand` 显式指定。
 
@@ -305,7 +305,7 @@ internal/watchlist/ Watchlist 发现、锁、状态机、调度和通知编排
 internal/summary/   Extractive、LLM direct、DigFlow Runtime/HTTP 摘要 provider
 internal/notify/    Feishu webhook 等通知 provider
 agents/             DigFlow 内嵌 Runtime 的宿主侧 agent manifest 与 YAML
-sqls/               DigCrawl `dc_*` 与 DigFlow `df_*` MySQL DDL
+sqls/               DigCrawl `dc_*` 与 DigFlow `df_*` MySQL / SQLite DDL
 internal/platform/  微信、小红书、抖音、头条、X、Reddit 的平台读取实现
 internal/browser/   本地 go-rod 浏览器、登录、快照、页面操作
 provider/           platform、browser、asr、example、stub 工具 Provider

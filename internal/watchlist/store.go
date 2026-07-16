@@ -30,6 +30,10 @@ func OpenStore(path string) (*Store, error) {
 		return nil, err
 	}
 	db.SetMaxOpenConns(1)
+	if _, err := db.Exec("PRAGMA foreign_keys = ON"); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("enable foreign keys: %w", err)
+	}
 	s := &Store{db: db}
 	if err := s.migrate(); err != nil {
 		_ = db.Close()
@@ -47,13 +51,13 @@ func (s *Store) Close() error {
 
 func (s *Store) migrate() error {
 	stmts := []string{
-		`CREATE TABLE IF NOT EXISTS watchlist_locks (
+		`CREATE TABLE IF NOT EXISTS dc_watchlist_locks (
   watch_id TEXT PRIMARY KEY,
   owner TEXT NOT NULL,
   acquired_at TEXT NOT NULL,
   expires_at TEXT NOT NULL
 )`,
-		`CREATE TABLE IF NOT EXISTS watchlist_runs (
+		`CREATE TABLE IF NOT EXISTS dc_watchlist_runs (
   run_id TEXT PRIMARY KEY,
   watch_id TEXT NOT NULL,
   owner TEXT NOT NULL,
@@ -65,7 +69,7 @@ func (s *Store) migrate() error {
   notified_count INTEGER DEFAULT 0,
   error TEXT
 )`,
-		`CREATE TABLE IF NOT EXISTS watchlist_items (
+		`CREATE TABLE IF NOT EXISTS dc_watchlist_items (
   watch_id TEXT NOT NULL,
   content_key TEXT NOT NULL,
   platform_item_id TEXT,
@@ -84,7 +88,7 @@ func (s *Store) migrate() error {
   summary_error TEXT,
   PRIMARY KEY (watch_id, content_key)
 )`,
-		`CREATE TABLE IF NOT EXISTS watchlist_delivery (
+		`CREATE TABLE IF NOT EXISTS dc_watchlist_delivery (
   watch_id TEXT NOT NULL,
   content_key TEXT NOT NULL,
   channel_id TEXT NOT NULL,
@@ -157,9 +161,69 @@ func (s *Store) migrate() error {
 			return err
 		}
 	}
-	_ = s.addColumnIfMissing("watchlist_delivery", "message_title", "TEXT")
-	_ = s.addColumnIfMissing("watchlist_delivery", "message_text", "TEXT")
+	_ = s.addColumnIfMissing("dc_watchlist_delivery", "message_title", "TEXT")
+	_ = s.addColumnIfMissing("dc_watchlist_delivery", "message_text", "TEXT")
+	if err := s.migrateLegacyTables(); err != nil {
+		return err
+	}
 	return nil
+}
+
+func (s *Store) migrateLegacyTables() error {
+	if ok, err := s.tableExists("watchlist_locks"); err != nil {
+		return err
+	} else if ok {
+		if _, err := s.db.Exec(`INSERT OR IGNORE INTO dc_watchlist_locks (watch_id, owner, acquired_at, expires_at)
+SELECT watch_id, owner, acquired_at, expires_at FROM watchlist_locks`); err != nil {
+			return err
+		}
+	}
+	if ok, err := s.tableExists("watchlist_runs"); err != nil {
+		return err
+	} else if ok {
+		if _, err := s.db.Exec(`INSERT OR IGNORE INTO dc_watchlist_runs (
+  run_id, watch_id, owner, started_at, finished_at, status, discovered_count, new_count, notified_count, error
+) SELECT run_id, watch_id, owner, started_at, finished_at, status, discovered_count, new_count, notified_count, error
+FROM watchlist_runs`); err != nil {
+			return err
+		}
+	}
+	if ok, err := s.tableExists("watchlist_items"); err != nil {
+		return err
+	} else if ok {
+		if _, err := s.db.Exec(`INSERT OR IGNORE INTO dc_watchlist_items (
+  watch_id, content_key, platform_item_id, url, canonical_url, title, published_at, content_type,
+  content_hash, summary_hash, first_seen_at, last_seen_at, baseline_only, status, collect_error, summary_error
+) SELECT
+  watch_id, content_key, platform_item_id, url, canonical_url, title, published_at, content_type,
+  content_hash, summary_hash, first_seen_at, last_seen_at, baseline_only, status, collect_error, summary_error
+FROM watchlist_items`); err != nil {
+			return err
+		}
+	}
+	if ok, err := s.tableExists("watchlist_delivery"); err != nil {
+		return err
+	} else if ok {
+		if err := s.addColumnIfMissing("watchlist_delivery", "message_title", "TEXT"); err != nil {
+			return err
+		}
+		if err := s.addColumnIfMissing("watchlist_delivery", "message_text", "TEXT"); err != nil {
+			return err
+		}
+		if _, err := s.db.Exec(`INSERT OR IGNORE INTO dc_watchlist_delivery (
+  watch_id, content_key, channel_id, status, notified_at, retry_count, next_retry_at, notify_error, message_title, message_text
+) SELECT watch_id, content_key, channel_id, status, notified_at, retry_count, next_retry_at, notify_error, message_title, message_text
+FROM watchlist_delivery`); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Store) tableExists(name string) (bool, error) {
+	var n int
+	err := s.db.QueryRow(`SELECT COUNT(1) FROM sqlite_master WHERE type = 'table' AND name = ?`, name).Scan(&n)
+	return n > 0, err
 }
 
 func (s *Store) addColumnIfMissing(table, column, typ string) error {
@@ -196,7 +260,7 @@ func (s *Store) AcquireLock(ctx context.Context, watchID, owner string, ttl time
 	}
 	defer func() { _ = tx.Rollback() }()
 	var expires string
-	err = tx.QueryRowContext(ctx, `SELECT expires_at FROM watchlist_locks WHERE watch_id = ?`, watchID).Scan(&expires)
+	err = tx.QueryRowContext(ctx, `SELECT expires_at FROM dc_watchlist_locks WHERE watch_id = ?`, watchID).Scan(&expires)
 	if err != nil && err != sql.ErrNoRows {
 		return false, err
 	}
@@ -205,10 +269,10 @@ func (s *Store) AcquireLock(ctx context.Context, watchID, owner string, ttl time
 		if parseErr == nil && t.After(now) {
 			return false, tx.Commit()
 		}
-		_, err = tx.ExecContext(ctx, `UPDATE watchlist_locks SET owner = ?, acquired_at = ?, expires_at = ? WHERE watch_id = ?`,
+		_, err = tx.ExecContext(ctx, `UPDATE dc_watchlist_locks SET owner = ?, acquired_at = ?, expires_at = ? WHERE watch_id = ?`,
 			owner, now.Format(time.RFC3339), now.Add(ttl).Format(time.RFC3339), watchID)
 	} else {
-		_, err = tx.ExecContext(ctx, `INSERT INTO watchlist_locks (watch_id, owner, acquired_at, expires_at) VALUES (?, ?, ?, ?)`,
+		_, err = tx.ExecContext(ctx, `INSERT INTO dc_watchlist_locks (watch_id, owner, acquired_at, expires_at) VALUES (?, ?, ?, ?)`,
 			watchID, owner, now.Format(time.RFC3339), now.Add(ttl).Format(time.RFC3339))
 	}
 	if err != nil {
@@ -218,19 +282,19 @@ func (s *Store) AcquireLock(ctx context.Context, watchID, owner string, ttl time
 }
 
 func (s *Store) ReleaseLock(ctx context.Context, watchID, owner string) {
-	_, _ = s.db.ExecContext(ctx, `DELETE FROM watchlist_locks WHERE watch_id = ? AND owner = ?`, watchID, owner)
+	_, _ = s.db.ExecContext(ctx, `DELETE FROM dc_watchlist_locks WHERE watch_id = ? AND owner = ?`, watchID, owner)
 }
 
 func (s *Store) StartRun(ctx context.Context, watchID, owner string) (string, error) {
 	runID := uuid.NewString()
 	now := time.Now().UTC().Format(time.RFC3339)
-	_, err := s.db.ExecContext(ctx, `INSERT INTO watchlist_runs (run_id, watch_id, owner, started_at, status) VALUES (?, ?, ?, ?, ?)`,
+	_, err := s.db.ExecContext(ctx, `INSERT INTO dc_watchlist_runs (run_id, watch_id, owner, started_at, status) VALUES (?, ?, ?, ?, ?)`,
 		runID, watchID, owner, now, "running")
 	return runID, err
 }
 
 func (s *Store) FinishRun(ctx context.Context, runID string, summary RunSummary, status string, errText string) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE watchlist_runs SET finished_at = ?, status = ?, discovered_count = ?, new_count = ?, notified_count = ?, error = ? WHERE run_id = ?`,
+	_, err := s.db.ExecContext(ctx, `UPDATE dc_watchlist_runs SET finished_at = ?, status = ?, discovered_count = ?, new_count = ?, notified_count = ?, error = ? WHERE run_id = ?`,
 		time.Now().UTC().Format(time.RFC3339), status, summary.Discovered, summary.NewItems, summary.Notified, nullStr(errText), runID)
 	return err
 }
@@ -413,12 +477,12 @@ func (s *Store) UpsertDiscovered(ctx context.Context, watchID string, item FeedI
 	now := time.Now().UTC().Format(time.RFC3339)
 	key := contentKey(item)
 	var existing string
-	err := s.db.QueryRowContext(ctx, `SELECT content_key FROM watchlist_items WHERE watch_id = ? AND content_key = ?`, watchID, key).Scan(&existing)
+	err := s.db.QueryRowContext(ctx, `SELECT content_key FROM dc_watchlist_items WHERE watch_id = ? AND content_key = ?`, watchID, key).Scan(&existing)
 	if err != nil && err != sql.ErrNoRows {
 		return false, err
 	}
 	if err == nil {
-		_, err = s.db.ExecContext(ctx, `UPDATE watchlist_items SET last_seen_at = ?, title = ?, url = ?, canonical_url = ?, published_at = ?, content_type = ? WHERE watch_id = ? AND content_key = ?`,
+		_, err = s.db.ExecContext(ctx, `UPDATE dc_watchlist_items SET last_seen_at = ?, title = ?, url = ?, canonical_url = ?, published_at = ?, content_type = ? WHERE watch_id = ? AND content_key = ?`,
 			now, nullStr(item.Title), item.URL, nullStr(item.CanonicalURL), timeStr(item.PublishedAt), nullStr(item.ContentType), watchID, key)
 		return false, err
 	}
@@ -426,7 +490,7 @@ func (s *Store) UpsertDiscovered(ctx context.Context, watchID string, item FeedI
 	if baseline {
 		status = StatusSkippedBaseline
 	}
-	_, err = s.db.ExecContext(ctx, `INSERT INTO watchlist_items (
+	_, err = s.db.ExecContext(ctx, `INSERT INTO dc_watchlist_items (
   watch_id, content_key, platform_item_id, url, canonical_url, title, published_at, content_type,
   first_seen_at, last_seen_at, baseline_only, status
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -436,14 +500,14 @@ func (s *Store) UpsertDiscovered(ctx context.Context, watchID string, item FeedI
 }
 
 func (s *Store) UpdateItemStatus(ctx context.Context, watchID, contentKey, status, collectErr, summaryErr string) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE watchlist_items SET status = ?, collect_error = ?, summary_error = ? WHERE watch_id = ? AND content_key = ?`,
+	_, err := s.db.ExecContext(ctx, `UPDATE dc_watchlist_items SET status = ?, collect_error = ?, summary_error = ? WHERE watch_id = ? AND content_key = ?`,
 		status, nullStr(collectErr), nullStr(summaryErr), watchID, contentKey)
 	return err
 }
 
 func (s *Store) ItemStatus(ctx context.Context, watchID, key string) (string, error) {
 	var status string
-	err := s.db.QueryRowContext(ctx, `SELECT status FROM watchlist_items WHERE watch_id = ? AND content_key = ?`, watchID, key).Scan(&status)
+	err := s.db.QueryRowContext(ctx, `SELECT status FROM dc_watchlist_items WHERE watch_id = ? AND content_key = ?`, watchID, key).Scan(&status)
 	if err == sql.ErrNoRows {
 		return "", nil
 	}
@@ -471,17 +535,17 @@ func (s *Store) UpsertDelivery(ctx context.Context, watchID, contentKey, channel
 	} else if status == StatusNotifyFailed {
 		status = StatusNotifyFinalFail
 	}
-	_, err := s.db.ExecContext(ctx, `INSERT INTO watchlist_delivery (
+	_, err := s.db.ExecContext(ctx, `INSERT INTO dc_watchlist_delivery (
   watch_id, content_key, channel_id, status, notified_at, retry_count, next_retry_at, notify_error, message_title, message_text
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(watch_id, content_key, channel_id) DO UPDATE SET
   status = excluded.status,
-  notified_at = COALESCE(excluded.notified_at, watchlist_delivery.notified_at),
-  retry_count = watchlist_delivery.retry_count + CASE WHEN excluded.status = ? THEN 1 ELSE 0 END,
+  notified_at = COALESCE(excluded.notified_at, dc_watchlist_delivery.notified_at),
+  retry_count = dc_watchlist_delivery.retry_count + CASE WHEN excluded.status = ? THEN 1 ELSE 0 END,
   next_retry_at = excluded.next_retry_at,
   notify_error = excluded.notify_error,
-  message_title = COALESCE(excluded.message_title, watchlist_delivery.message_title),
-  message_text = COALESCE(excluded.message_text, watchlist_delivery.message_text)`,
+  message_title = COALESCE(excluded.message_title, dc_watchlist_delivery.message_title),
+  message_text = COALESCE(excluded.message_text, dc_watchlist_delivery.message_text)`,
 		watchID, contentKey, channelID, status, notified, 0, nullStr(nextRetry), nullStr(errText), nullStr(messageTitle), nullStr(messageText), StatusNotifyFailed)
 	return err
 }
@@ -493,7 +557,7 @@ func (s *Store) ListPendingDeliveries(ctx context.Context, watchID string, limit
 	now := time.Now().UTC().Format(time.RFC3339)
 	rows, err := s.db.QueryContext(ctx, `
 SELECT watch_id, content_key, channel_id, COALESCE(message_title, ''), COALESCE(message_text, '')
-FROM watchlist_delivery
+FROM dc_watchlist_delivery
 WHERE watch_id = ? AND status = ? AND next_retry_at IS NOT NULL AND next_retry_at != '' AND next_retry_at <= ?
 ORDER BY next_retry_at, content_key
 LIMIT ?`, watchID, StatusNotifyFailed, now, limit)
@@ -514,7 +578,7 @@ LIMIT ?`, watchID, StatusNotifyFailed, now, limit)
 
 func (s *Store) HasAnyItem(ctx context.Context, watchID string) (bool, error) {
 	var n int
-	err := s.db.QueryRowContext(ctx, `SELECT COUNT(1) FROM watchlist_items WHERE watch_id = ?`, watchID).Scan(&n)
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(1) FROM dc_watchlist_items WHERE watch_id = ?`, watchID).Scan(&n)
 	return n > 0, err
 }
 

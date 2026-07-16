@@ -30,7 +30,10 @@ func NewService(cfg *config.Config) (*Service, error) {
 	if err := validateNotificationConfig(cfg); err != nil {
 		return nil, err
 	}
-	st, err := OpenStore(cfg.Watchlist.DBPathOrDefault(cfg.Collect.DBPathOrDefault()))
+	if driver := cfg.Watchlist.PersistenceDriverOrDefault(); driver != "sqlite" {
+		return nil, fmt.Errorf("unsupported watchlist persistence driver %q; only sqlite is supported", driver)
+	}
+	st, err := OpenStore(cfg.Watchlist.StateDBPathOrDefault(cfg.Collect.DBPathOrDefault()))
 	if err != nil {
 		return nil, err
 	}

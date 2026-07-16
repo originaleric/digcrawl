@@ -342,15 +342,30 @@ func (c ASRConfig) LocalCommandOrDefault() string {
 
 // WatchlistConfig controls periodic source monitoring.
 type WatchlistConfig struct {
-	Enabled          *bool           `yaml:"Enabled" json:"Enabled,omitempty"`
-	DryRun           *bool           `yaml:"DryRun" json:"DryRun,omitempty"`
-	DefaultInterval  string          `yaml:"DefaultInterval" json:"DefaultInterval,omitempty"`
-	Scheduler        SchedulerConfig `yaml:"Scheduler" json:"Scheduler,omitempty"`
-	NotifyOnFirstRun *bool           `yaml:"NotifyOnFirstRun" json:"NotifyOnFirstRun,omitempty"`
-	MaxItemsPerRun   int             `yaml:"MaxItemsPerRun" json:"MaxItemsPerRun,omitempty"`
-	LockTTL          string          `yaml:"LockTTL" json:"LockTTL,omitempty"`
-	DBPath           string          `yaml:"DBPath" json:"DBPath,omitempty"`
-	Items            []WatchlistItem `yaml:"Items" json:"Items,omitempty"`
+	Enabled          *bool                      `yaml:"Enabled" json:"Enabled,omitempty"`
+	DryRun           *bool                      `yaml:"DryRun" json:"DryRun,omitempty"`
+	DefaultInterval  string                     `yaml:"DefaultInterval" json:"DefaultInterval,omitempty"`
+	Scheduler        SchedulerConfig            `yaml:"Scheduler" json:"Scheduler,omitempty"`
+	NotifyOnFirstRun *bool                      `yaml:"NotifyOnFirstRun" json:"NotifyOnFirstRun,omitempty"`
+	MaxItemsPerRun   int                        `yaml:"MaxItemsPerRun" json:"MaxItemsPerRun,omitempty"`
+	LockTTL          string                     `yaml:"LockTTL" json:"LockTTL,omitempty"`
+	Persistence      WatchlistPersistenceConfig `yaml:"Persistence" json:"Persistence,omitempty"`
+	DBPath           string                     `yaml:"DBPath" json:"DBPath,omitempty"` // Deprecated: use Persistence.SQLitePath.
+	Items            []WatchlistItem            `yaml:"Items" json:"Items,omitempty"`
+}
+
+// WatchlistPersistenceConfig controls local watchlist runtime persistence.
+type WatchlistPersistenceConfig struct {
+	Driver     string `yaml:"Driver" json:"Driver,omitempty"`
+	SQLitePath string `yaml:"SQLitePath" json:"SQLitePath,omitempty"`
+}
+
+func (c WatchlistPersistenceConfig) DriverOrDefault() string {
+	driver := strings.ToLower(strings.TrimSpace(c.Driver))
+	if driver == "" {
+		return "sqlite"
+	}
+	return driver
 }
 
 // SchedulerConfig controls the in-process periodic scheduler.
@@ -434,6 +449,17 @@ func (c WatchlistConfig) NotifyOnFirstRunOrDefault() bool {
 }
 
 func (c WatchlistConfig) DBPathOrDefault(collectDB string) string {
+	return c.StateDBPathOrDefault(collectDB)
+}
+
+func (c WatchlistConfig) PersistenceDriverOrDefault() string {
+	return c.Persistence.DriverOrDefault()
+}
+
+func (c WatchlistConfig) StateDBPathOrDefault(collectDB string) string {
+	if strings.TrimSpace(c.Persistence.SQLitePath) != "" {
+		return strings.TrimSpace(c.Persistence.SQLitePath)
+	}
 	if strings.TrimSpace(c.DBPath) != "" {
 		return strings.TrimSpace(c.DBPath)
 	}
@@ -1056,6 +1082,7 @@ func init() {
 				Scheduler:        SchedulerConfig{TickInterval: "5m"},
 				MaxItemsPerRun:   20,
 				LockTTL:          "30m",
+				Persistence:      WatchlistPersistenceConfig{Driver: "sqlite", SQLitePath: "storage/digcrawl/collect.db"},
 				DBPath:           "storage/digcrawl/collect.db",
 				NotifyOnFirstRun: nil,
 			},
@@ -1424,8 +1451,14 @@ func mergeDefaults(cfg *Config) {
 	if cfg.Watchlist.LockTTL == "" {
 		cfg.Watchlist.LockTTL = defaultCfg.Watchlist.LockTTL
 	}
+	if cfg.Watchlist.Persistence.Driver == "" {
+		cfg.Watchlist.Persistence.Driver = defaultCfg.Watchlist.Persistence.Driver
+	}
+	if cfg.Watchlist.Persistence.SQLitePath == "" {
+		cfg.Watchlist.Persistence.SQLitePath = cfg.Watchlist.DBPathOrDefault(cfg.Collect.DBPathOrDefault())
+	}
 	if cfg.Watchlist.DBPath == "" {
-		cfg.Watchlist.DBPath = cfg.Collect.DBPathOrDefault()
+		cfg.Watchlist.DBPath = cfg.Watchlist.StateDBPathOrDefault(cfg.Collect.DBPathOrDefault())
 	}
 	if cfg.Summary.Provider == "" {
 		cfg.Summary.Provider = defaultCfg.Summary.Provider
