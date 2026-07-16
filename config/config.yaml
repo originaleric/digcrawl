@@ -195,6 +195,10 @@ Watchlist:
   Enabled: false
   DryRun: false
   DefaultInterval: "6h"
+  Scheduler:
+    Enabled: true
+    TickInterval: "5m"
+    Jitter: "30s"
   NotifyOnFirstRun: false
   MaxItemsPerRun: 20
   LockTTL: "30m"
@@ -222,6 +226,28 @@ Watchlist:
   #       Sort: new
   #       Limit: 25
   #       IncludeComments: false
+
+# Tasks 是新的通用定时任务描述。watchlist.collect 会被映射为 Watchlist item 执行；
+# 旧 Watchlist.Items 仍兼容，后续任务类型会继续复用该结构。
+Tasks: []
+# 示例：
+# Tasks:
+#   - ID: reddit-ai-watch
+#     Name: Reddit AI 社区监控
+#     Type: watchlist.collect
+#     Enabled: true
+#     Schedule:
+#       Mode: interval
+#       Every: 6h
+#     Source:
+#       Platform: reddit
+#       Kind: reddit_subreddit
+#       URL: https://www.reddit.com/r/artificial/new/
+#       Options:
+#         sort: new
+#         limit: 25
+#     Notify:
+#       Channel: feishu-default
 
 Summary:
   Enabled: false

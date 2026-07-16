@@ -1,6 +1,10 @@
 package config
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
 
 func TestCollectPersistModeHelpers(t *testing.T) {
 	t.Parallel()
@@ -158,5 +162,52 @@ func TestASRConfigProviderAwareModelDefault(t *testing.T) {
 	}
 	if got := cfg.ASR.ModelOrDefault(); got != "small" {
 		t.Fatalf("merged local ModelOrDefault=%q", got)
+	}
+}
+
+func TestLoadParsesScheduledTasks(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	data := []byte(`
+Watchlist:
+  Enabled: true
+  Scheduler:
+    TickInterval: 2m
+    Jitter: 10s
+Tasks:
+  - ID: reddit-ai-watch
+    Name: Reddit AI
+    Type: watchlist.collect
+    Schedule:
+      Mode: interval
+      Every: 6h
+    Source:
+      Platform: reddit
+      Kind: reddit_subreddit
+      URL: https://www.reddit.com/r/artificial/new/
+      Options:
+        sort: new
+        limit: 25
+    Notify:
+      Channel: feishu-default
+`)
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.Watchlist.Scheduler.TickIntervalOrDefault(); got != "2m" {
+		t.Fatalf("TickInterval=%q", got)
+	}
+	if got := cfg.Watchlist.Scheduler.JitterOrDefault(); got != "10s" {
+		t.Fatalf("Jitter=%q", got)
+	}
+	if len(cfg.Tasks) != 1 {
+		t.Fatalf("tasks len=%d", len(cfg.Tasks))
+	}
+	task := cfg.Tasks[0]
+	if task.ID != "reddit-ai-watch" || task.Schedule.Every != "6h" || task.Source.Options["sort"] != "new" {
+		t.Fatalf("task not parsed: %+v", task)
 	}
 }

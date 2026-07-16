@@ -278,11 +278,29 @@ Watchlist 用于按配置定期检查指定来源的新增内容，复用 Collec
 | `Enabled` | 是否启用 watchlist，默认 `false` |
 | `DryRun` | 是否允许不配置真实通知通道时仅记录运行，默认 `false` |
 | `DefaultInterval` | 常驻模式默认检查间隔，默认 `6h` |
+| `Scheduler` | `watchlist serve` 使用的内置调度器配置 |
 | `NotifyOnFirstRun` | 首次运行是否通知历史内容，默认 `false`，即只建基线 |
 | `MaxItemsPerRun` | 单个 watch item 每轮最多处理的新内容数 |
 | `LockTTL` | per-watch 锁过期时间，避免 cron / 常驻进程重入 |
 | `DBPath` | watchlist 状态库路径，默认复用 `Collect.DBPath` |
 | `Items` | 监控目标列表 |
+
+`Watchlist.Scheduler` 字段：
+
+| 字段 | 说明 |
+|------|------|
+| `Enabled` | 是否启用内置调度器，默认 `true` |
+| `TickInterval` | 到期扫描频率，默认 `5m` |
+| `Jitter` | 每轮执行前随机抖动，避免多实例同时触发 |
+
+`Tasks` 是新的通用定时任务描述，推荐新配置优先使用 `Tasks`，旧 `Watchlist.Items` 继续兼容。当前已落地的任务类型：
+
+| Type | 说明 |
+|------|------|
+| `watchlist.collect` | 按 Source 拉取最新内容，复用 Collect、Summary 和 Notifications |
+| `feed.digest` | `watchlist.collect` 的兼容别名，适合 RSS/Feed 摘要场景 |
+
+`Tasks[].Schedule.Mode` 当前支持 `interval`；`Every` 使用 Go duration，例如 `6h`、`24h`、`30m`。调度状态复用 watchlist 运行记录：没有运行历史的任务会立即执行一次，之后按 `Every` 判断是否到期。
 
 `Watchlist.Items[].Options` 可为不同平台提供扩展参数。Reddit 已支持：
 
@@ -321,6 +339,10 @@ Watchlist:
   Enabled: true
   DryRun: false
   DefaultInterval: "6h"
+  Scheduler:
+    Enabled: true
+    TickInterval: "5m"
+    Jitter: "30s"
   NotifyOnFirstRun: false
   MaxItemsPerRun: 20
   LockTTL: "30m"
@@ -353,6 +375,24 @@ Watchlist:
       Options:
         comment_sort: new
         comment_limit: 1
+
+Tasks:
+  - ID: reddit-ai-watch
+    Name: Reddit AI 社区监控
+    Type: watchlist.collect
+    Enabled: true
+    Schedule:
+      Mode: interval
+      Every: 6h
+    Source:
+      Platform: reddit
+      Kind: reddit_subreddit
+      URL: https://www.reddit.com/r/artificial/new/
+      Options:
+        sort: new
+        limit: 25
+    Notify:
+      Channel: feishu-default
 
 Summary:
   Enabled: true
@@ -448,6 +488,7 @@ digcrawl browser login         # 平台扫码/交互登录并保存 Cookie
 digcrawl browser check         # 检查平台会话，可选试读
 digcrawl asr transcribe        # ffmpeg 抽音频并转写
 digcrawl watchlist run         # 执行 watchlist 监控、摘要和通知
+digcrawl watchlist serve       # 常驻调度，到期执行不同周期的 Tasks / Watchlist items
 digcollect <url>              # 轻量采集入口，等价于 digcrawl collect <url>
 digcrawl help
 ```

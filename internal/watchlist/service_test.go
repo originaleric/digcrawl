@@ -1,8 +1,10 @@
 package watchlist
 
 import (
+	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/originaleric/digcrawl/config"
 	"github.com/originaleric/digcrawl/internal/notify"
@@ -124,5 +126,126 @@ func TestNormalizeItemPreservesOptions(t *testing.T) {
 	}
 	if item.Options["sort"] != "new" || item.Options["limit"] != 10 {
 		t.Fatalf("options not preserved: %+v", item.Options)
+	}
+}
+
+func TestConfiguredWatchlistItemsIncludesTasks(t *testing.T) {
+	cfg := &config.Config{
+		Watchlist: config.WatchlistConfig{
+			Items: []config.WatchlistItem{{
+				ID:       "legacy",
+				Platform: "rss",
+				Type:     "rss",
+				URL:      "https://example.com/feed.xml",
+			}},
+		},
+		Tasks: []config.TaskConfig{{
+			ID:      "reddit-ai",
+			Name:    "Reddit AI",
+			Type:    "watchlist.collect",
+			Enabled: boolPtr(true),
+			Schedule: config.TaskScheduleConfig{
+				Mode:  "interval",
+				Every: "6h",
+			},
+			Source: config.TaskSourceConfig{
+				Platform: "reddit",
+				Kind:     "reddit_subreddit",
+				URL:      "https://www.reddit.com/r/artificial/new/",
+				Options:  map[string]any{"sort": "new"},
+			},
+			Notify:  config.TaskNotifyConfig{Channel: "feishu-default"},
+			Options: map[string]any{"limit": 25},
+		}},
+	}
+	items := configuredWatchlistItems(cfg)
+	if len(items) != 2 {
+		t.Fatalf("expected legacy item plus task item, got %d", len(items))
+	}
+	task := items[1]
+	if task.ID != "reddit-ai" || task.Platform != "reddit" || task.Type != "reddit_subreddit" || task.Interval != "6h" || task.NotifyTo != "feishu-default" {
+		t.Fatalf("task mapping mismatch: %+v", task)
+	}
+	if task.Options["sort"] != "new" || task.Options["limit"] != 25 {
+		t.Fatalf("task options not merged: %+v", task.Options)
+	}
+}
+
+func TestNormalizeTaskRejectsUnsupportedScheduleMode(t *testing.T) {
+	cfg := &config.Config{
+		Watchlist: config.WatchlistConfig{DefaultInterval: "6h"},
+		Tasks: []config.TaskConfig{{
+			ID:   "daily",
+			Type: "watchlist.collect",
+			Schedule: config.TaskScheduleConfig{
+				Mode: "cron",
+			},
+			Source: config.TaskSourceConfig{Platform: "rss", Kind: "rss", URL: "https://example.com/feed.xml"},
+		}},
+	}
+	items := configuredWatchlistItems(cfg)
+	if len(items) != 1 {
+		t.Fatalf("items len=%d", len(items))
+	}
+	svc := &Service{cfg: cfg}
+	_, err := svc.normalizeItem(items[0])
+	if err == nil || !strings.Contains(err.Error(), "unsupported mode") {
+		t.Fatalf("expected unsupported schedule error, got %v", err)
+	}
+}
+
+func TestNormalizeTaskRejectsUnsupportedTaskType(t *testing.T) {
+	cfg := &config.Config{
+		Watchlist: config.WatchlistConfig{DefaultInterval: "6h"},
+		Tasks: []config.TaskConfig{{
+			ID:     "unknown",
+			Type:   "unknown.task",
+			Source: config.TaskSourceConfig{Platform: "rss", URL: "https://example.com/feed.xml"},
+		}},
+	}
+	items := configuredWatchlistItems(cfg)
+	if len(items) != 1 {
+		t.Fatalf("items len=%d", len(items))
+	}
+	svc := &Service{cfg: cfg}
+	_, err := svc.normalizeItem(items[0])
+	if err == nil || !strings.Contains(err.Error(), "unsupported task type") {
+		t.Fatalf("expected unsupported task type error, got %v", err)
+	}
+}
+
+func TestIsDueUsesPersistedRunHistory(t *testing.T) {
+	st, err := OpenStore(t.TempDir() + "/watchlist.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	svc := &Service{
+		cfg:   &config.Config{Watchlist: config.WatchlistConfig{DefaultInterval: "6h"}},
+		store: st,
+	}
+	item := WatchItem{ID: "source-1", Interval: 6 * time.Hour, Enabled: true}
+	now := time.Date(2026, 7, 16, 10, 0, 0, 0, time.UTC)
+	ctx := context.Background()
+	due, err := svc.isDue(ctx, item, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !due {
+		t.Fatal("item with no run history should be due")
+	}
+	runID, err := st.StartRun(ctx, item.ID, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.FinishRun(ctx, runID, RunSummary{WatchID: item.ID}, "success", ""); err != nil {
+		t.Fatal(err)
+	}
+	due, err = svc.isDue(ctx, item, time.Now().UTC().Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if due {
+		t.Fatal("item should not be due before its interval has elapsed")
 	}
 }

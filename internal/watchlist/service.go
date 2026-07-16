@@ -150,7 +150,7 @@ func validateNotificationConfig(cfg *config.Config) error {
 	if err := validateFeishuChannel(channels, defaultID, "default channel"); err != nil {
 		return err
 	}
-	for _, item := range cfg.Watchlist.Items {
+	for _, item := range configuredWatchlistItems(cfg) {
 		if !item.EnabledOrDefault() {
 			continue
 		}
@@ -180,7 +180,7 @@ func validateFeishuChannel(channels map[string]config.FeishuChannel, id, context
 func (s *Service) RunOnce(ctx context.Context) ([]RunSummary, error) {
 	var summaries []RunSummary
 	var firstErr error
-	for _, raw := range s.cfg.Watchlist.Items {
+	for _, raw := range configuredWatchlistItems(s.cfg) {
 		item, err := s.normalizeItem(raw)
 		if err != nil {
 			if firstErr == nil {
@@ -198,6 +198,61 @@ func (s *Service) RunOnce(ctx context.Context) ([]RunSummary, error) {
 		}
 	}
 	return summaries, firstErr
+}
+
+func (s *Service) RunDue(ctx context.Context, now time.Time) ([]RunSummary, error) {
+	if now.IsZero() {
+		now = time.Now()
+	}
+	var summaries []RunSummary
+	var firstErr error
+	for _, raw := range configuredWatchlistItems(s.cfg) {
+		item, err := s.normalizeItem(raw)
+		if err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		if !item.Enabled {
+			continue
+		}
+		due, err := s.isDue(ctx, item, now)
+		if err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		if !due {
+			continue
+		}
+		sum, err := s.RunItem(ctx, item)
+		summaries = append(summaries, sum)
+		if err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return summaries, firstErr
+}
+
+func (s *Service) isDue(ctx context.Context, item WatchItem, now time.Time) (bool, error) {
+	last, ok, err := s.store.LastRunStartedAt(ctx, item.ID)
+	if err != nil {
+		return false, err
+	}
+	if !ok {
+		return true, nil
+	}
+	interval := item.Interval
+	if interval <= 0 {
+		parsed, err := time.ParseDuration(s.cfg.Watchlist.DefaultIntervalOrDefault())
+		if err != nil || parsed <= 0 {
+			parsed = 6 * time.Hour
+		}
+		interval = parsed
+	}
+	return !last.Add(interval).After(now), nil
 }
 
 func (s *Service) RunItem(ctx context.Context, item WatchItem) (RunSummary, error) {
@@ -351,6 +406,12 @@ func (s *Service) normalizeItem(raw config.WatchlistItem) (WatchItem, error) {
 	if strings.TrimSpace(raw.ID) == "" {
 		return WatchItem{}, fmt.Errorf("watchlist item id is required")
 	}
+	if errText := optionString(raw.Options, "_task_config_error"); errText != "" {
+		return WatchItem{}, fmt.Errorf("watchlist item %s invalid task config: %s", raw.ID, errText)
+	}
+	if errText := optionString(raw.Options, "_task_schedule_error"); errText != "" {
+		return WatchItem{}, fmt.Errorf("watchlist item %s invalid schedule: %s", raw.ID, errText)
+	}
 	interval := s.cfg.Watchlist.DefaultIntervalOrDefault()
 	if strings.TrimSpace(raw.Interval) != "" {
 		interval = raw.Interval
@@ -365,6 +426,60 @@ func (s *Service) normalizeItem(raw config.WatchlistItem) (WatchItem, error) {
 		Name: strings.TrimSpace(raw.Name), Interval: d, NotifyTo: strings.TrimSpace(raw.NotifyTo), Enabled: raw.EnabledOrDefault(),
 		Options: raw.Options,
 	}, nil
+}
+
+func ConfiguredItemCount(cfg *config.Config) int {
+	return len(configuredWatchlistItems(cfg))
+}
+
+func configuredWatchlistItems(cfg *config.Config) []config.WatchlistItem {
+	if cfg == nil {
+		return nil
+	}
+	items := make([]config.WatchlistItem, 0, len(cfg.Watchlist.Items)+len(cfg.Tasks))
+	items = append(items, cfg.Watchlist.Items...)
+	for _, task := range cfg.Tasks {
+		items = append(items, watchlistItemFromTask(task))
+	}
+	return items
+}
+
+func watchlistItemFromTask(task config.TaskConfig) config.WatchlistItem {
+	typ := strings.ToLower(strings.TrimSpace(task.Type))
+	if typ == "" {
+		typ = "watchlist.collect"
+	}
+	options := map[string]any{}
+	for k, v := range task.Source.Options {
+		options[k] = v
+	}
+	for k, v := range task.Options {
+		options[k] = v
+	}
+	switch typ {
+	case "watchlist.collect", "feed.digest":
+	default:
+		options["_task_config_error"] = fmt.Sprintf("unsupported task type %q", task.Type)
+	}
+	mode := strings.ToLower(strings.TrimSpace(task.Schedule.Mode))
+	switch mode {
+	case "", "interval":
+	default:
+		options["_task_schedule_error"] = fmt.Sprintf("unsupported mode %q; only interval is supported", task.Schedule.Mode)
+	}
+	enabled := task.EnabledOrDefault()
+	interval := strings.TrimSpace(task.Schedule.Every)
+	return config.WatchlistItem{
+		ID:       strings.TrimSpace(task.ID),
+		Platform: strings.TrimSpace(task.Source.Platform),
+		Type:     strings.TrimSpace(task.Source.Kind),
+		URL:      strings.TrimSpace(task.Source.URL),
+		Name:     strings.TrimSpace(task.Name),
+		Interval: interval,
+		NotifyTo: strings.TrimSpace(task.Notify.Channel),
+		Enabled:  &enabled,
+		Options:  options,
+	}
 }
 
 func (s *Service) collectFeedItem(ctx context.Context, feed FeedItem) (CollectedItem, error) {

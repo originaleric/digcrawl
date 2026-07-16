@@ -19,6 +19,7 @@ type Config struct {
 	OCR           OCRConfig           `yaml:"OCR" json:"OCR"`
 	ASR           ASRConfig           `yaml:"ASR" json:"ASR"`
 	Watchlist     WatchlistConfig     `yaml:"Watchlist" json:"Watchlist"`
+	Tasks         []TaskConfig        `yaml:"Tasks" json:"Tasks,omitempty"`
 	Summary       SummaryConfig       `yaml:"Summary" json:"Summary"`
 	Notifications NotificationsConfig `yaml:"Notifications" json:"Notifications"`
 	Providers     ProvidersConfig     `yaml:"Providers" json:"Providers"`
@@ -344,11 +345,37 @@ type WatchlistConfig struct {
 	Enabled          *bool           `yaml:"Enabled" json:"Enabled,omitempty"`
 	DryRun           *bool           `yaml:"DryRun" json:"DryRun,omitempty"`
 	DefaultInterval  string          `yaml:"DefaultInterval" json:"DefaultInterval,omitempty"`
+	Scheduler        SchedulerConfig `yaml:"Scheduler" json:"Scheduler,omitempty"`
 	NotifyOnFirstRun *bool           `yaml:"NotifyOnFirstRun" json:"NotifyOnFirstRun,omitempty"`
 	MaxItemsPerRun   int             `yaml:"MaxItemsPerRun" json:"MaxItemsPerRun,omitempty"`
 	LockTTL          string          `yaml:"LockTTL" json:"LockTTL,omitempty"`
 	DBPath           string          `yaml:"DBPath" json:"DBPath,omitempty"`
 	Items            []WatchlistItem `yaml:"Items" json:"Items,omitempty"`
+}
+
+// SchedulerConfig controls the in-process periodic scheduler.
+type SchedulerConfig struct {
+	Enabled      *bool  `yaml:"Enabled" json:"Enabled,omitempty"`
+	TickInterval string `yaml:"TickInterval" json:"TickInterval,omitempty"`
+	Jitter       string `yaml:"Jitter" json:"Jitter,omitempty"`
+}
+
+func (c SchedulerConfig) EnabledOrDefault() bool {
+	if c.Enabled == nil {
+		return true
+	}
+	return *c.Enabled
+}
+
+func (c SchedulerConfig) TickIntervalOrDefault() string {
+	if strings.TrimSpace(c.TickInterval) != "" {
+		return strings.TrimSpace(c.TickInterval)
+	}
+	return "5m"
+}
+
+func (c SchedulerConfig) JitterOrDefault() string {
+	return strings.TrimSpace(c.Jitter)
 }
 
 // WatchlistItem is one monitored source.
@@ -421,6 +448,42 @@ func (i WatchlistItem) EnabledOrDefault() bool {
 		return true
 	}
 	return *i.Enabled
+}
+
+// TaskConfig describes a scheduled task. The first supported task type is
+// watchlist.collect; the shape is intentionally generic for future task kinds.
+type TaskConfig struct {
+	ID       string             `yaml:"ID" json:"ID,omitempty"`
+	Name     string             `yaml:"Name" json:"Name,omitempty"`
+	Type     string             `yaml:"Type" json:"Type,omitempty"`
+	Enabled  *bool              `yaml:"Enabled" json:"Enabled,omitempty"`
+	Schedule TaskScheduleConfig `yaml:"Schedule" json:"Schedule,omitempty"`
+	Source   TaskSourceConfig   `yaml:"Source" json:"Source,omitempty"`
+	Notify   TaskNotifyConfig   `yaml:"Notify" json:"Notify,omitempty"`
+	Options  map[string]any     `yaml:"Options" json:"Options,omitempty"`
+}
+
+type TaskScheduleConfig struct {
+	Mode  string `yaml:"Mode" json:"Mode,omitempty"`
+	Every string `yaml:"Every" json:"Every,omitempty"`
+}
+
+type TaskSourceConfig struct {
+	Platform string         `yaml:"Platform" json:"Platform,omitempty"`
+	Kind     string         `yaml:"Kind" json:"Kind,omitempty"`
+	URL      string         `yaml:"URL" json:"URL,omitempty"`
+	Options  map[string]any `yaml:"Options" json:"Options,omitempty"`
+}
+
+type TaskNotifyConfig struct {
+	Channel string `yaml:"Channel" json:"Channel,omitempty"`
+}
+
+func (t TaskConfig) EnabledOrDefault() bool {
+	if t.Enabled == nil {
+		return true
+	}
+	return *t.Enabled
 }
 
 // SummaryConfig controls watchlist summary generation.
@@ -990,6 +1053,7 @@ func init() {
 			},
 			Watchlist: WatchlistConfig{
 				DefaultInterval:  "6h",
+				Scheduler:        SchedulerConfig{TickInterval: "5m"},
 				MaxItemsPerRun:   20,
 				LockTTL:          "30m",
 				DBPath:           "storage/digcrawl/collect.db",
@@ -1350,6 +1414,9 @@ func mergeDefaults(cfg *Config) {
 	}
 	if cfg.Watchlist.DefaultInterval == "" {
 		cfg.Watchlist.DefaultInterval = defaultCfg.Watchlist.DefaultInterval
+	}
+	if cfg.Watchlist.Scheduler.TickInterval == "" {
+		cfg.Watchlist.Scheduler.TickInterval = defaultCfg.Watchlist.Scheduler.TickInterval
 	}
 	if cfg.Watchlist.MaxItemsPerRun == 0 {
 		cfg.Watchlist.MaxItemsPerRun = defaultCfg.Watchlist.MaxItemsPerRun

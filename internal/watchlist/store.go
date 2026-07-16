@@ -181,6 +181,22 @@ func (s *Store) FinishRun(ctx context.Context, runID string, summary RunSummary,
 	return err
 }
 
+func (s *Store) LastRunStartedAt(ctx context.Context, watchID string) (time.Time, bool, error) {
+	var started string
+	err := s.db.QueryRowContext(ctx, `SELECT started_at FROM watchlist_runs WHERE watch_id = ? ORDER BY started_at DESC LIMIT 1`, watchID).Scan(&started)
+	if err == sql.ErrNoRows {
+		return time.Time{}, false, nil
+	}
+	if err != nil {
+		return time.Time{}, false, err
+	}
+	t, err := time.Parse(time.RFC3339, started)
+	if err != nil {
+		return time.Time{}, false, err
+	}
+	return t, true, nil
+}
+
 func (s *Store) UpsertDiscovered(ctx context.Context, watchID string, item FeedItem, baseline bool) (bool, error) {
 	now := time.Now().UTC().Format(time.RFC3339)
 	key := contentKey(item)
