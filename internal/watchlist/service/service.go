@@ -1,9 +1,7 @@
-package watchlist
+package service
 
 import (
 	"context"
-	"crypto/sha1"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -14,6 +12,27 @@ import (
 	"github.com/originaleric/digcrawl/config"
 	"github.com/originaleric/digcrawl/internal/notify"
 	"github.com/originaleric/digcrawl/internal/summary"
+	"github.com/originaleric/digcrawl/internal/watchlist"
+)
+
+type Store = watchlist.Store
+type WatchItem = watchlist.WatchItem
+type FeedItem = watchlist.FeedItem
+type RunSummary = watchlist.RunSummary
+type TaskDefinition = watchlist.TaskDefinition
+type CollectedItem = watchlist.CollectedItem
+
+const (
+	StatusDiscovered      = watchlist.StatusDiscovered
+	StatusCollected       = watchlist.StatusCollected
+	StatusSummarized      = watchlist.StatusSummarized
+	StatusNotifyPending   = watchlist.StatusNotifyPending
+	StatusNotified        = watchlist.StatusNotified
+	StatusCollectFailed   = watchlist.StatusCollectFailed
+	StatusSummaryFailed   = watchlist.StatusSummaryFailed
+	StatusNotifyFailed    = watchlist.StatusNotifyFailed
+	StatusNotifyFinalFail = watchlist.StatusNotifyFinalFail
+	StatusSkippedLocked   = watchlist.StatusSkippedLocked
 )
 
 type Service struct {
@@ -33,7 +52,7 @@ func NewService(cfg *config.Config) (*Service, error) {
 	if driver := cfg.Watchlist.PersistenceDriverOrDefault(); driver != "sqlite" {
 		return nil, fmt.Errorf("unsupported watchlist persistence driver %q; only sqlite is supported", driver)
 	}
-	st, err := OpenStore(cfg.Watchlist.StateDBPathOrDefault(cfg.Collect.DBPathOrDefault()))
+	st, err := watchlist.OpenStore(cfg.Watchlist.StateDBPathOrDefault(cfg.Collect.DBPathOrDefault()))
 	if err != nil {
 		return nil, err
 	}
@@ -302,7 +321,7 @@ func (s *Service) RunItem(ctx context.Context, item WatchItem) (RunSummary, erro
 	}
 	sum.Discovered = len(feeds)
 	for _, feed := range feeds {
-		key := contentKey(feed)
+		key := watchlist.ContentKey(feed)
 		isNew, err := s.store.UpsertDiscovered(ctx, item.ID, feed, baseline)
 		if err != nil {
 			sum.Errors = append(sum.Errors, err.Error())
@@ -348,7 +367,7 @@ func (s *Service) RunItem(ctx context.Context, item WatchItem) (RunSummary, erro
 		collected.Summary = res
 		sum.Summarized++
 		_ = s.store.UpdateItemStatus(ctx, item.ID, key, StatusSummarized, "", res.Error)
-		msg := RenderNotification(res)
+		msg := watchlist.RenderNotification(res)
 		notifyResult := s.notifier.Send(ctx, item.NotifyTo, msg)
 		if notifyResult.Status == "notified" || notifyResult.Status == StatusNotified {
 			sum.Notified++
@@ -532,34 +551,7 @@ func watchlistItemFromTask(task config.TaskConfig) config.WatchlistItem {
 }
 
 func taskDefinition(item WatchItem) TaskDefinition {
-	mode := "interval"
-	def := TaskDefinition{
-		ID:             item.ID,
-		Type:           "watchlist.collect",
-		Enabled:        item.Enabled,
-		ScheduleMode:   mode,
-		ScheduleEvery:  item.Interval,
-		SourcePlatform: item.Platform,
-		SourceKind:     item.Type,
-		SourceURL:      item.URL,
-		NotifyChannel:  item.NotifyTo,
-	}
-	payload := map[string]any{
-		"id":              def.ID,
-		"type":            def.Type,
-		"enabled":         def.Enabled,
-		"schedule_mode":   def.ScheduleMode,
-		"schedule_every":  def.ScheduleEvery.String(),
-		"source_platform": def.SourcePlatform,
-		"source_kind":     def.SourceKind,
-		"source_url":      def.SourceURL,
-		"notify_channel":  def.NotifyChannel,
-		"options":         item.Options,
-	}
-	data, _ := json.Marshal(payload)
-	sum := sha1.Sum(data)
-	def.ConfigHash = hex.EncodeToString(sum[:])
-	return def
+	return watchlist.TaskDefinitionForItem(item)
 }
 
 func (s *Service) collectFeedItem(ctx context.Context, feed FeedItem) (CollectedItem, error) {
@@ -597,6 +589,33 @@ func retryableItemStatus(status string) bool {
 func str(v any) string {
 	s, _ := v.(string)
 	return strings.TrimSpace(s)
+}
+
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if strings.TrimSpace(v) != "" {
+			return strings.TrimSpace(v)
+		}
+	}
+	return ""
+}
+
+func optionString(opts map[string]any, key string) string {
+	if opts == nil {
+		return ""
+	}
+	v, ok := opts[key]
+	if !ok {
+		return ""
+	}
+	switch value := v.(type) {
+	case string:
+		return strings.TrimSpace(value)
+	case fmt.Stringer:
+		return strings.TrimSpace(value.String())
+	default:
+		return strings.TrimSpace(fmt.Sprint(value))
+	}
 }
 
 func extractMetadata(out map[string]any) map[string]any {

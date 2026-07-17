@@ -95,7 +95,7 @@ func TestStoreDeliveryRetryState(t *testing.T) {
 func TestStoreMigratesLegacyTables(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "watch.db")
-	db, err := sql.Open("sqlite", path)
+	db, err := sql.Open("sqlite3", path)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -23,7 +23,7 @@ DigCrawl 的核心目标不是“提供一个网关”，而是把公众号、�
 | 静态解析/API/RSS 优先 + 浏览器兜底 | 微信公众号优先使用 HTTP HTML 静态解析；小红书、抖音、头条优先尝试页面上下文 API；X 优先尝试官方 Tweet lookup，再回落到公开 oEmbed 和浏览器；RSS/Atom 由通用 Feed service 读取；Reddit 优先官方 API，再兜底 RSS，最后按配置兜底公开页面 |
 | 登录态复用 | 支持通过有头浏览器完成平台登录，后续采集复用本机 Cookie |
 | 批量采集与收件箱 | 支持 URL 文件批处理、`collect-inbox` 收件箱和 `--watch` 轮询 |
-| Watchlist 定时监控 | 支持按配置定期检查 RSS/sitemap、头条作者页、平台主页和 Reddit subreddit/user/post comments 的新增内容，并通过通知通道推送 |
+| Watchlist 定时监控 | 复用 `internal/source` 定期检查 RSS/sitemap、头条固定文章/作者页、X/Twitter 单帖、平台主页和 Reddit subreddit/user/post comments 的新增内容，并通过通知通道推送 |
 | 多格式导出 | 同时导出 Markdown、HTML、JSON，可选下载媒体到 `.assets/` |
 | OCR 图片文字提取 | 可通过配置接入 OCR provider，对正文图片、截图、平台媒体和本地 assets 提取文字并写入结构化元数据 |
 | ASR 视频语音转写 | 通过 `ffmpeg` 抽音频后，支持 OpenAI-compatible API 或本地 `faster-whisper` 命令转写 |
@@ -36,7 +36,7 @@ OCR 目前支持 OpenAI-compatible 视觉模型、智谱 `zhipu_ocr` / `glm-ocr`
 
 ASR 能力通过 `digcrawl asr transcribe <video>` 或 Gateway 工具 `asr.transcribe` 调用：先用 `ffmpeg` 抽取 16k 单声道 wav，再按配置选择 API provider 或本地 provider。API provider 兼容 `/audio/transcriptions`；本地 provider 默认调用 `faster-whisper`，也可在 `ASR.LocalCommand` / `ASR.LocalArgs` 中替换为 whisper.cpp 等命令。
 
-Watchlist 能力通过 `digcrawl watchlist run --once`、`digcrawl watchlist run` 或 `digcrawl watchlist serve` 调用：先对配置的 RSS/sitemap、头条作者页、平台主页或 Reddit 来源做最新内容发现，再复用 Collect 抓取详情，最后按 `Summary` 配置使用规则摘要、LLM 直连或 DigFlow Runtime 生成摘要，并通过 Feishu webhook 推送。新配置推荐使用根级 `Tasks` 描述定时任务，`watchlist.collect` 可为不同来源配置不同扫描周期；旧 `Watchlist.Items` 继续兼容。调度状态写入通用 `dc_task_*` runtime 表，内容去重、摘要和投递状态继续写入 watchlist 领域表。
+Watchlist 能力通过 `digcrawl watchlist run --once`、`digcrawl watchlist run` 或 `digcrawl watchlist serve` 调用：先对配置的 RSS/sitemap、头条固定文章或作者页、平台主页、X/Twitter 单帖或 Reddit 来源做最新内容发现，再复用 Collect 抓取详情，最后按 `Summary` 配置使用规则摘要、LLM 直连或 DigFlow Runtime 生成摘要，并通过 Feishu webhook 推送。新配置推荐使用根级 `Tasks` 描述定时任务，`watchlist.collect` 可为不同来源配置不同扫描周期；旧 `Watchlist.Items` 继续兼容。调度状态写入通用 `dc_task_*` runtime 表，内容去重、摘要和投递状态继续写入 watchlist 领域表。
 
 ## 更新概览
 
@@ -125,7 +125,17 @@ Watchlist 常驻调度：
 
 `watchlist serve` 会按 `Watchlist.Scheduler.TickInterval` 扫描到期任务，没有 runtime 状态的 task 会立即执行一次，之后按 `Tasks[].Schedule.Every` 或旧 `Watchlist.Items[].Interval` 写入 `dc_tasks_runtime.next_run_at` 并判断是否到期。`watchlist run` 保留为整轮执行入口，适合手动触发或外部 cron。
 
-DigFlow 内嵌 Runtime 摘要需要先准备数据库与模型配置。真实数据库连接写入本地 `config/gorm.yml`，该文件已被 `.gitignore` 忽略；仓库提供无密钥模板 `config/gorm.example.yml`。DigFlow 自身表保持 `df_` 前缀，配置入口为 `config/digflow-gorm.yml`、`config/digflow.yml`、`config/eino.yml` 和 `agents/watchlist/agents.yml`。
+DigFlow HTTP 摘要不需要编译私有 DigFlow runtime；默认构建下 `digflow_runtime` 会使用 stub 并回退到 extractive 摘要，避免普通测试和本地运行被私有仓库下载阻断。需要启用 DigFlow 内嵌 Runtime 时，使用 `-tags digflow_embedded` 构建，并先准备 SSH/GOPRIVATE、数据库与模型配置。DigFlow `v1.1.3` 的轻量化主要面向 `pkg/digflowapi` / `pkg/digflowtypes` 公共 DTO；digcrawl 内嵌模式仍使用 `pkg/digflow` runtime，首次构建仍会拉取 runtime 依赖树。真实数据库连接写入本地 `config/gorm.yml`，该文件已被 `.gitignore` 忽略；仓库提供无密钥模板 `config/gorm.example.yml`。DigFlow 自身表保持 `df_` 前缀，配置入口为 `config/digflow-gorm.yml`、`config/digflow.yml`、`config/eino.yml` 和 `agents/watchlist/agents.yml`。
+
+```bash
+GOPRIVATE=github.com/originaleric/* \
+GONOSUMDB=github.com/originaleric/* \
+GOPATH=/private/tmp/digcrawl-gopath \
+GOMODCACHE=/private/tmp/digcrawl-gomodcache \
+GOCACHE=/private/tmp/digcrawl-go-cache \
+TMPDIR=/private/tmp \
+go test -tags digflow_embedded ./internal/summary
+```
 
 ```bash
 cp config/gorm.example.yml config/gorm.yml
@@ -145,7 +155,7 @@ export REDDIT_CLIENT_SECRET="<client-secret>"
 export REDDIT_REFRESH_TOKEN="<optional-refresh-token>"
 ```
 
-新库初始化 MySQL 使用 `sqls/full/digcrawl_full_sql_ddl.sql`；本地单机 SQLite 使用 `sqls/full/digcrawl_full_sqlite_ddl.sql`，覆盖 Collect、Watchlist/Tasks runtime 和 DigFlow `df_*` embedded runtime 表。默认 DigCrawl 本地状态库路径为 `storage/digcrawl/collect.db`，可通过 `Watchlist.Persistence.SQLitePath` 调整；DigFlow 本地 SQLite 还需要同步调整 `config/digflow-gorm.yml`、`config/digflow.yml` 和 `config/eino.yml`，完整 profile 见 `USAGE.md`。只初始化 DigFlow `df_*` MySQL 表可使用 `sqls/full/digflow_embedded_runtime_full_ddl.sql`。根目录兼容文件 `sqls/digcrawl_full_sql_ddl.sql` 和 `sqls/2026-07-09_DigFlow内嵌Runtime初始化DDL.sql` 保持同口径。已执行过旧版 DigFlow DDL 的库，补跑 `sqls/2026-07-09_DigFlow最新Runtime增量DDL.sql`，其中包含最新 LoopRuntime `df_loop_*` 表和 `df_resource_asset.storage_key` 唯一约束迁移。启用通用 Tasks 调度还需要补跑 `sqls/2026-07-16_通用Task调度RuntimeDDL.sql`。
+新库初始化 MySQL 使用 `sqls/full/digcrawl_full_sql_ddl.sql`；本地单机 SQLite 使用 `sqls/full/digcrawl_full_sqlite_ddl.sql`，覆盖 Collect、Watchlist/Tasks runtime 和 DigFlow `df_*` embedded runtime 表。DigCrawl 自身本地 SQLite driver 使用 `github.com/mattn/go-sqlite3`，需要 `CGO_ENABLED=1` 和本机 C 编译环境，macOS 可安装 Xcode Command Line Tools。默认 DigCrawl 本地状态库路径为 `storage/digcrawl/collect.db`，可通过 `Watchlist.Persistence.SQLitePath` 调整；DigFlow 本地 SQLite 还需要同步调整 `config/digflow-gorm.yml`、`config/digflow.yml` 和 `config/eino.yml`，完整 profile 见 `USAGE.md`。只初始化 DigFlow `df_*` MySQL 表可使用 `sqls/full/digflow_embedded_runtime_full_ddl.sql`。根目录兼容文件 `sqls/digcrawl_full_sql_ddl.sql` 和 `sqls/2026-07-09_DigFlow内嵌Runtime初始化DDL.sql` 保持同口径。已执行过旧版 DigFlow DDL 的库，补跑 `sqls/2026-07-09_DigFlow最新Runtime增量DDL.sql`，其中包含最新 LoopRuntime `df_loop_*` 表和 `df_resource_asset.storage_key` 唯一约束迁移。启用通用 Tasks 调度还需要补跑 `sqls/2026-07-16_通用Task调度RuntimeDDL.sql`。
 
 本地 ASR 依赖 `ffmpeg` 和 `faster-whisper`。`ffmpeg` 需能在 `PATH` 中直接调用；`faster-whisper` 建议安装到隔离 venv，再把可执行命令加入 `PATH` 或通过 `--local-command` / `ASR.LocalCommand` 显式指定。
 
@@ -301,7 +311,8 @@ curl -s http://127.0.0.1:8787/manifest
 
 ```text
 collect/            URL 检测、采集编排、导出、索引、收件箱
-internal/watchlist/ Watchlist 发现、锁、状态机、调度和通知编排
+internal/source/    RSS/sitemap、HTML link、头条、X、Reddit 等统一来源发现服务
+internal/watchlist/ Watchlist 锁、状态机、调度、摘要和通知编排
 internal/summary/   Extractive、LLM direct、DigFlow Runtime/HTTP 摘要 provider
 internal/notify/    Feishu webhook 等通知 provider
 agents/             DigFlow 内嵌 Runtime 的宿主侧 agent manifest 与 YAML

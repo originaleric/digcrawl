@@ -299,16 +299,28 @@ Watchlist 用于按配置定期检查指定来源的新增内容，复用 Collec
 
 | Type | 说明 |
 |------|------|
-| `watchlist.collect` | 按 Source 拉取最新内容，复用 Collect、Summary 和 Notifications |
+| `watchlist.collect` | 通过 `internal/source` 拉取最新内容，复用 Collect、Summary 和 Notifications |
 | `feed.digest` | `watchlist.collect` 的兼容别名，适合 RSS/Feed 摘要场景 |
 
 `Tasks[].Schedule.Mode` 当前支持 `interval`；`Every` 使用 Go duration，例如 `6h`、`24h`、`30m`。调度状态写入通用 `dc_tasks_runtime` / `dc_task_runs` / `dc_task_locks` / `dc_task_events`：没有 runtime 状态的任务会立即执行一次，之后按 `Every` 更新 `next_run_at` 并判断是否到期。
+
+Watchlist 的来源发现由 `internal/source.Service` 统一承载，当前覆盖 RSS/Atom、sitemap、HTML 链接发现、今日头条固定文章/作者页、X/Twitter 单帖/用户页链接发现和 Reddit listing/comment 来源。Watchlist 只负责调度、去重、详情采集、摘要和通知，因此后续新增渠道应优先接入 `internal/source`，再由 Watchlist、Tasks 或其他 domain 复用。
 
 `Watchlist.Items[].Options` 可为不同平台提供扩展参数。Reddit 已支持：
 
 - `reddit_subreddit`：`subreddit`、`sort`、`time_range`、`limit`、`after`
 - `reddit_user`：`username`、`where`、`limit`、`after`
 - `reddit_post_comments`：`comment_limit`、`comment_depth`、`comment_sort`、`expand_more`、`expand_more_limit`
+
+今日头条已支持：
+
+- `article` / `group` / `toutiao_article`：固定头条文章 URL 监控，例如 `https://www.toutiao.com/w/.../`、`https://www.toutiao.com/group/.../` 或 `https://www.toutiao.com/article/.../`。该模式复用已验证的 `toutiao.article.read` 抓取链路。
+- `author` / `user`：作者页链接发现；静态 `href`、hydration 中的转义 URL 和相对内容路径都会尝试解析，但头条作者页若完全依赖动态 API/登录态，仍可能需要后续专用 API 或 headless 渲染发现。
+
+X / Twitter 已支持：
+
+- `x_post`：固定单帖 URL 监控，例如 `https://x.com/elonmusk/status/...`。该模式复用已验证的 `x.post.read` 抓取链路。
+- `x_user`：用户主页静态 status 链接发现；X 主页内容通常依赖前端动态加载，未登录/未渲染 HTML 可能发现不到最新帖子，生产使用建议优先配置明确的 `x_post` 或后续接入 X API/浏览器渲染发现。
 
 `Summary` 字段：
 
@@ -398,6 +410,32 @@ Tasks:
         limit: 25
     Notify:
       Channel: feishu-default
+  - ID: toutiao-article-watch
+    Name: 头条指定文章监控
+    Type: watchlist.collect
+    Enabled: true
+    Schedule:
+      Mode: interval
+      Every: 6h
+    Source:
+      Platform: toutiao
+      Kind: article
+      URL: https://www.toutiao.com/w/1870280855070795/
+    Notify:
+      Channel: feishu-default
+  - ID: x-elon-post-watch
+    Name: Elon Musk 指定 X 帖子监控
+    Type: watchlist.collect
+    Enabled: true
+    Schedule:
+      Mode: interval
+      Every: 6h
+    Source:
+      Platform: x
+      Kind: x_post
+      URL: https://x.com/elonmusk/status/1234567890
+    Notify:
+      Channel: feishu-default
 
 Summary:
   Enabled: true
@@ -448,7 +486,19 @@ DigFlow 内嵌 Runtime 需要额外准备：
 - `agents/watchlist/agents.yml`：宿主侧 agent manifest。
 - `agents/watchlist/summary-agent.yml`：watchlist 摘要 agent。
 
-数据库 DDL 已对齐 DigFlow commit `8e77addb892c8f71ae24890733d5ca587ec168da`。本地单机运行推荐使用 SQLite，远端 MySQL 部署使用 MySQL DDL：
+默认构建不编译私有 DigFlow runtime 依赖，`digflow_runtime` provider 会使用 stub 并回退到 extractive 摘要。DigFlow 已固定到 `v1.1.3`；需要真正嵌入 DigFlow runtime 时，先配置 SSH/GOPRIVATE，然后使用 `-tags digflow_embedded` 构建或测试。内嵌 runtime 首次构建会拉取 runtime 依赖树，建议显式设置可写 Go cache，避免本机权限或冷缓存导致长时间无输出。
+
+```bash
+GOPRIVATE=github.com/originaleric/* \
+GONOSUMDB=github.com/originaleric/* \
+GOPATH=/private/tmp/digcrawl-gopath \
+GOMODCACHE=/private/tmp/digcrawl-gomodcache \
+GOCACHE=/private/tmp/digcrawl-go-cache \
+TMPDIR=/private/tmp \
+go test -tags digflow_embedded ./internal/summary
+```
+
+数据库 DDL 已对齐 DigFlow `v1.1.3`。该版本主要收口 `pkg/digflowapi` / `pkg/digflowtypes` 公共 DTO 轻量化，`pkg/digflow.NewRuntime`、`Invoke`、`Stream` 兼容既有宿主；digcrawl 当前内嵌路径仍直接使用 `pkg/digflow`，无需迁移 DTO import。本地单机运行推荐使用 SQLite，远端 MySQL 部署使用 MySQL DDL：
 
 - 新库完整初始化 MySQL：`sqls/full/digcrawl_full_sql_ddl.sql`
 - 新库完整初始化 SQLite：`sqls/full/digcrawl_full_sqlite_ddl.sql`，包含 Collect、Watchlist/Tasks runtime 和 DigFlow `df_*` embedded runtime 表
@@ -456,6 +506,8 @@ DigFlow 内嵌 Runtime 需要额外准备：
 - 根目录兼容全量：`sqls/digcrawl_full_sql_ddl.sql`、`sqls/2026-07-09_DigFlow内嵌Runtime初始化DDL.sql`
 - 已执行旧版 DigFlow DDL 的库补跑：`sqls/2026-07-09_DigFlow最新Runtime增量DDL.sql`
 - 已执行旧版 DigCrawl DDL 且要启用通用 Tasks 调度的库补跑：`sqls/2026-07-16_通用Task调度RuntimeDDL.sql`
+
+DigCrawl 自身本地 SQLite driver 使用 `github.com/mattn/go-sqlite3`，需要 `CGO_ENABLED=1` 和本机 C 编译环境；macOS 可通过 Xcode Command Line Tools 提供 `cc`。DigFlow 自身 SQLite 配置仍由 DigFlow / GORM 相关配置控制。
 
 最新增量包含：
 

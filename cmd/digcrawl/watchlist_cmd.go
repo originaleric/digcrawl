@@ -11,7 +11,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/originaleric/digcrawl/internal/watchlist"
+	watchlistservice "github.com/originaleric/digcrawl/internal/watchlist/service"
 )
 
 func runWatchlist(args []string) {
@@ -41,10 +41,10 @@ func runWatchlistRun(args []string) {
 	if !cfg.Watchlist.EnabledOrDefault() {
 		log.Fatal("watchlist: disabled; set Watchlist.Enabled=true")
 	}
-	if watchlist.ConfiguredItemCount(cfg) == 0 {
+	if watchlistservice.ConfiguredItemCount(cfg) == 0 {
 		log.Fatal("watchlist: no items configured")
 	}
-	svc, err := watchlist.NewService(cfg)
+	svc, err := watchlistservice.NewService(cfg)
 	if err != nil {
 		log.Fatalf("watchlist service: %v", err)
 	}
@@ -97,10 +97,10 @@ func runWatchlistServe(args []string) {
 	if !cfg.Watchlist.Scheduler.EnabledOrDefault() {
 		log.Fatal("watchlist scheduler: disabled; set Watchlist.Scheduler.Enabled=true")
 	}
-	if watchlist.ConfiguredItemCount(cfg) == 0 {
+	if watchlistservice.ConfiguredItemCount(cfg) == 0 {
 		log.Fatal("watchlist: no items configured")
 	}
-	svc, err := watchlist.NewService(cfg)
+	svc, err := watchlistservice.NewService(cfg)
 	if err != nil {
 		log.Fatalf("watchlist service: %v", err)
 	}

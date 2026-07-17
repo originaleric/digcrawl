@@ -1,3 +1,5 @@
+//go:build digflow_embedded
+
 package summary
 
 import (

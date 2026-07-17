@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	_ "github.com/glebarez/go-sqlite"
 	"github.com/google/uuid"
+	_ "github.com/mattn/go-sqlite3"
 )
 
 type Store struct {
@@ -25,7 +25,7 @@ func OpenStore(path string) (*Store, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 		return nil, err
 	}
-	db, err := sql.Open("sqlite", path)
+	db, err := sql.Open("sqlite3", path)
 	if err != nil {
 		return nil, err
 	}
@@ -589,6 +589,10 @@ func contentKey(item FeedItem) string {
 		}
 	}
 	return uuid.NewString()
+}
+
+func ContentKey(item FeedItem) string {
+	return contentKey(item)
 }
 
 func nullStr(s string) any {

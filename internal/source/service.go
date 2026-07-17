@@ -1,4 +1,4 @@
-package watchlist
+package source
 
 import (
 	"context"
@@ -15,13 +15,36 @@ import (
 	"github.com/originaleric/digcrawl/internal/feed"
 	"github.com/originaleric/digcrawl/internal/platform"
 	"github.com/originaleric/digcrawl/internal/platform/reddit"
+	toutiaoplatform "github.com/originaleric/digcrawl/internal/platform/toutiao"
+	xplatform "github.com/originaleric/digcrawl/internal/platform/x"
 )
 
-type FeedRegistry struct {
+type Service struct {
 	Client *http.Client
 }
 
-func (r FeedRegistry) ListLatest(ctx context.Context, item WatchItem) ([]FeedItem, error) {
+type Source struct {
+	ID       string
+	Platform string
+	Type     string
+	URL      string
+	Name     string
+	Options  map[string]any
+}
+
+type Item struct {
+	ID           string
+	ContentKey   string
+	URL          string
+	CanonicalURL string
+	Title        string
+	Author       string
+	PublishedAt  time.Time
+	ContentType  string
+	Raw          map[string]any
+}
+
+func (r Service) ListLatest(ctx context.Context, item Source) ([]Item, error) {
 	platform := strings.ToLower(strings.TrimSpace(item.Platform))
 	typ := strings.ToLower(strings.TrimSpace(item.Type))
 	switch {
@@ -30,22 +53,130 @@ func (r FeedRegistry) ListLatest(ctx context.Context, item WatchItem) ([]FeedIte
 	case typ == "sitemap" || platform == "sitemap":
 		return r.readSitemap(ctx, item)
 	case platform == "toutiao":
-		return r.readHTMLLinks(ctx, item, "toutiao")
+		return r.readToutiao(ctx, item)
 	case platform == "douyin":
 		return r.readHTMLLinks(ctx, item, "douyin")
 	case platform == "reddit":
 		return r.readReddit(ctx, item)
+	case platform == "x" || platform == "twitter":
+		return r.readX(ctx, item)
 	case platform == "web":
 		if strings.Contains(strings.ToLower(item.URL), "sitemap") {
 			return r.readSitemap(ctx, item)
 		}
 		return r.readRSS(ctx, item)
 	default:
-		return nil, fmt.Errorf("unsupported watchlist platform %q", item.Platform)
+		return nil, fmt.Errorf("unsupported source platform %q", item.Platform)
 	}
 }
 
-func (r FeedRegistry) readReddit(ctx context.Context, item WatchItem) ([]FeedItem, error) {
+func (r Service) readToutiao(ctx context.Context, item Source) ([]Item, error) {
+	switch inferToutiaoWatchlistType(ctx, item) {
+	case "article", "group", "post", "toutiao_article":
+		return feedItemFromToutiaoArticle(ctx, item)
+	case "author", "user", "profile":
+		return r.readHTMLLinks(ctx, item, "toutiao")
+	default:
+		if isToutiaoArticleURL(ctx, item.URL) {
+			return feedItemFromToutiaoArticle(ctx, item)
+		}
+		return r.readHTMLLinks(ctx, item, "toutiao")
+	}
+}
+
+func inferToutiaoWatchlistType(ctx context.Context, item Source) string {
+	typ := strings.ToLower(strings.TrimSpace(item.Type))
+	if typ != "" {
+		return typ
+	}
+	if isToutiaoArticleURL(ctx, item.URL) {
+		return "article"
+	}
+	return "author"
+}
+
+func isToutiaoArticleURL(ctx context.Context, rawURL string) bool {
+	norm, err := toutiaoplatform.NormalizeURL(ctx, rawURL)
+	return err == nil && norm.PlatformID != ""
+}
+
+func feedItemFromToutiaoArticle(ctx context.Context, item Source) ([]Item, error) {
+	norm, err := toutiaoplatform.NormalizeURL(ctx, item.URL)
+	if err != nil {
+		return nil, err
+	}
+	if norm.PlatformID == "" {
+		return nil, fmt.Errorf("toutiao article url is required")
+	}
+	link := firstNonEmpty(norm.CanonicalURL, item.URL)
+	return []Item{{
+		ID:           "toutiao:" + norm.PlatformID,
+		ContentKey:   link,
+		URL:          link,
+		CanonicalURL: link,
+		Title:        item.Name,
+		ContentType:  "article",
+		Raw: map[string]any{
+			"article_id": norm.PlatformID,
+			"source_url": item.URL,
+		},
+	}}, nil
+}
+
+func (r Service) readX(ctx context.Context, item Source) ([]Item, error) {
+	switch inferXWatchlistType(item) {
+	case "x_post", "post", "status", "tweet":
+		return feedItemFromXPost(item)
+	case "x_user", "user", "profile", "account":
+		return r.readHTMLLinks(ctx, item, "x")
+	default:
+		if isXStatusURL(item.URL) {
+			return feedItemFromXPost(item)
+		}
+		return r.readHTMLLinks(ctx, item, "x")
+	}
+}
+
+func inferXWatchlistType(item Source) string {
+	typ := strings.ToLower(strings.TrimSpace(item.Type))
+	if typ != "" {
+		return typ
+	}
+	if isXStatusURL(item.URL) {
+		return "x_post"
+	}
+	return "x_user"
+}
+
+func isXStatusURL(rawURL string) bool {
+	norm, err := xplatform.NormalizeURL(rawURL)
+	return err == nil && norm.PlatformID != ""
+}
+
+func feedItemFromXPost(item Source) ([]Item, error) {
+	norm, err := xplatform.NormalizeURL(item.URL)
+	if err != nil {
+		return nil, err
+	}
+	if norm.PlatformID == "" {
+		return nil, fmt.Errorf("x post url is required")
+	}
+	link := firstNonEmpty(norm.CanonicalURL, item.URL)
+	return []Item{{
+		ID:           "x:" + norm.PlatformID,
+		ContentKey:   link,
+		URL:          link,
+		CanonicalURL: link,
+		Title:        item.Name,
+		Author:       xUsernameFromURL(link),
+		ContentType:  "x_post",
+		Raw: map[string]any{
+			"platform_id": norm.PlatformID,
+		},
+	}}, nil
+}
+
+func (r Service) readReddit(ctx context.Context, item Source) ([]Item, error) {
 	switch inferRedditWatchlistType(item) {
 	case "reddit_subreddit", "subreddit", "community":
 		return r.readRedditSubreddit(ctx, item)
@@ -54,11 +185,11 @@ func (r FeedRegistry) readReddit(ctx context.Context, item WatchItem) ([]FeedIte
 	case "reddit_post_comments", "post_comments", "comments":
 		return r.readRedditPostComments(ctx, item)
 	default:
-		return nil, fmt.Errorf("unsupported reddit watchlist type %q", item.Type)
+		return nil, fmt.Errorf("unsupported reddit source type %q", item.Type)
 	}
 }
 
-func inferRedditWatchlistType(item WatchItem) string {
+func inferRedditWatchlistType(item Source) string {
 	typ := strings.ToLower(strings.TrimSpace(item.Type))
 	if typ != "" {
 		return typ
@@ -76,7 +207,7 @@ func inferRedditWatchlistType(item WatchItem) string {
 	}
 }
 
-func (r FeedRegistry) readRedditSubreddit(ctx context.Context, item WatchItem) ([]FeedItem, error) {
+func (r Service) readRedditSubreddit(ctx context.Context, item Source) ([]Item, error) {
 	sub := firstNonEmpty(optionString(item.Options, "subreddit"), redditSubredditFromURL(item.URL))
 	if sub == "" {
 		return nil, fmt.Errorf("subreddit or subreddit url is required")
@@ -94,7 +225,7 @@ func (r FeedRegistry) readRedditSubreddit(ctx context.Context, item WatchItem) (
 	return feedItemsFromRedditListing(res), nil
 }
 
-func (r FeedRegistry) readRedditUser(ctx context.Context, item WatchItem) ([]FeedItem, error) {
+func (r Service) readRedditUser(ctx context.Context, item Source) ([]Item, error) {
 	user := firstNonEmpty(optionString(item.Options, "username"), redditUsernameFromURL(item.URL))
 	if user == "" {
 		return nil, fmt.Errorf("username or reddit user url is required")
@@ -111,7 +242,7 @@ func (r FeedRegistry) readRedditUser(ctx context.Context, item WatchItem) ([]Fee
 	return feedItemsFromRedditListing(res), nil
 }
 
-func (r FeedRegistry) readRedditPostComments(ctx context.Context, item WatchItem) ([]FeedItem, error) {
+func (r Service) readRedditPostComments(ctx context.Context, item Source) ([]Item, error) {
 	if !reddit.IsPostURL(item.URL) {
 		return nil, fmt.Errorf("reddit post url is required")
 	}
@@ -143,7 +274,7 @@ func (r FeedRegistry) readRedditPostComments(ctx context.Context, item WatchItem
 	if latest.ID != "" {
 		key += ":t1_" + latest.ID
 	}
-	return []FeedItem{{
+	return []Item{{
 		ID:           key,
 		ContentKey:   key,
 		URL:          item.URL,
@@ -160,11 +291,11 @@ func (r FeedRegistry) readRedditPostComments(ctx context.Context, item WatchItem
 	}}, nil
 }
 
-func feedItemsFromRedditListing(res *reddit.ListingResult) []FeedItem {
+func feedItemsFromRedditListing(res *reddit.ListingResult) []Item {
 	if res == nil {
 		return nil
 	}
-	out := make([]FeedItem, 0, len(res.Items))
+	out := make([]Item, 0, len(res.Items))
 	for _, it := range res.Items {
 		link := firstNonEmpty(it.CanonicalURL, it.URL)
 		if link == "" {
@@ -174,7 +305,7 @@ func feedItemsFromRedditListing(res *reddit.ListingResult) []FeedItem {
 		if it.Kind == "t1" {
 			contentType = "reddit_comment"
 		}
-		out = append(out, FeedItem{
+		out = append(out, Item{
 			ID:           firstNonEmpty(it.Fullname, it.ID, hashKey(link)),
 			ContentKey:   redditListingContentKey(it, link),
 			URL:          link,
@@ -205,32 +336,32 @@ func redditListingContentKey(it reddit.ListingItem, link string) string {
 	return link
 }
 
-func (r FeedRegistry) httpClient() *http.Client {
+func (r Service) httpClient() *http.Client {
 	if r.Client != nil {
 		return r.Client
 	}
 	return &http.Client{Timeout: 20 * time.Second}
 }
 
-func (r FeedRegistry) feedService() feed.Service {
+func (r Service) feedService() feed.Service {
 	return feed.Service{Client: r.httpClient(), UserAgent: "Mozilla/5.0 DigCrawl Watchlist"}
 }
 
-func (r FeedRegistry) readRSS(ctx context.Context, item WatchItem) ([]FeedItem, error) {
+func (r Service) readRSS(ctx context.Context, item Source) ([]Item, error) {
 	doc, err := r.feedService().Read(ctx, item.URL)
-	return watchFeedItemsFromDocument(doc, "article"), err
+	return watchItemsFromDocument(doc, "article"), err
 }
 
-func (r FeedRegistry) readSitemap(ctx context.Context, item WatchItem) ([]FeedItem, error) {
+func (r Service) readSitemap(ctx context.Context, item Source) ([]Item, error) {
 	doc, err := r.feedService().ReadSitemap(ctx, item.URL)
-	return watchFeedItemsFromDocument(doc, "web"), err
+	return watchItemsFromDocument(doc, "web"), err
 }
 
-func watchFeedItemsFromDocument(doc *feed.Document, contentType string) []FeedItem {
+func watchItemsFromDocument(doc *feed.Document, contentType string) []Item {
 	if doc == nil {
 		return nil
 	}
-	out := make([]FeedItem, 0, len(doc.Entries))
+	out := make([]Item, 0, len(doc.Entries))
 	for _, entry := range doc.Entries {
 		link := strings.TrimSpace(entry.URL)
 		if link == "" {
@@ -240,7 +371,7 @@ func watchFeedItemsFromDocument(doc *feed.Document, contentType string) []FeedIt
 		if published.IsZero() {
 			published = entry.UpdatedAt
 		}
-		out = append(out, FeedItem{
+		out = append(out, Item{
 			ID:           firstNonEmpty(entry.ID, link),
 			ContentKey:   firstNonEmpty(entry.ID, link),
 			URL:          link,
@@ -258,8 +389,10 @@ func watchFeedItemsFromDocument(doc *feed.Document, contentType string) []FeedIt
 }
 
 var hrefRe = regexp.MustCompile(`(?i)href=["']([^"']+)["']`)
+var absoluteURLRe = regexp.MustCompile(`(?i)https?://[^"'<>\\\s]+`)
+var relativeContentPathRe = regexp.MustCompile(`(?i)/(?:article|group)/[0-9]+/?|/[A-Za-z0-9_]{1,32}/status/[0-9]+/?`)
 
-func (r FeedRegistry) readHTMLLinks(ctx context.Context, item WatchItem, platform string) ([]FeedItem, error) {
+func (r Service) readHTMLLinks(ctx context.Context, item Source, platform string) ([]Item, error) {
 	data, _, err := r.feedService().Fetch(ctx, item.URL)
 	if err != nil {
 		return nil, err
@@ -274,9 +407,9 @@ func (r FeedRegistry) readHTMLLinks(ctx context.Context, item WatchItem, platfor
 	}
 	base, _ := url.Parse(item.URL)
 	seen := map[string]bool{}
-	var out []FeedItem
-	for _, m := range hrefRe.FindAllStringSubmatch(html, -1) {
-		link := normalizeLink(base, m[1])
+	var out []Item
+	for _, candidate := range linkCandidates(html) {
+		link := normalizeLink(base, candidate)
 		if link == "" || seen[link] {
 			continue
 		}
@@ -284,7 +417,7 @@ func (r FeedRegistry) readHTMLLinks(ctx context.Context, item WatchItem, platfor
 			continue
 		}
 		seen[link] = true
-		out = append(out, FeedItem{
+		out = append(out, Item{
 			ID: hashKey(link), ContentKey: link, URL: link, CanonicalURL: link,
 			Title: item.Name, ContentType: contentTypeFor(platform, link),
 		})
@@ -293,6 +426,24 @@ func (r FeedRegistry) readHTMLLinks(ctx context.Context, item WatchItem, platfor
 		return nil, fmt.Errorf("CONTENT_NOT_FOUND: no %s content links found", platform)
 	}
 	return out, nil
+}
+
+func linkCandidates(html string) []string {
+	expanded := strings.NewReplacer(
+		`\\u002F`, "/",
+		`\u002F`, "/",
+		`\/`, "/",
+		`\\u0026`, "&",
+		`\u0026`, "&",
+		"&amp;", "&",
+	).Replace(html)
+	var out []string
+	for _, m := range hrefRe.FindAllStringSubmatch(expanded, -1) {
+		out = append(out, m[1])
+	}
+	out = append(out, absoluteURLRe.FindAllString(expanded, -1)...)
+	out = append(out, relativeContentPathRe.FindAllString(expanded, -1)...)
+	return out
 }
 
 func normalizeLink(base *url.URL, raw string) string {
@@ -323,6 +474,8 @@ func platformLink(platform, link string) bool {
 		return strings.Contains(host, "toutiao.com") && (strings.Contains(path, "/article/") || strings.Contains(path, "/group/"))
 	case "douyin":
 		return strings.Contains(host, "douyin.com") && strings.Contains(path, "/video/")
+	case "x", "twitter":
+		return (host == "x.com" || host == "www.x.com" || strings.HasSuffix(host, ".twitter.com") || host == "twitter.com" || host == "www.twitter.com") && strings.Contains(path, "/status/")
 	default:
 		return true
 	}
@@ -332,7 +485,22 @@ func contentTypeFor(platform, link string) string {
 	if platform == "douyin" || strings.Contains(link, "/video/") {
 		return "video"
 	}
+	if platform == "x" || platform == "twitter" || strings.Contains(link, "/status/") {
+		return "x_post"
+	}
 	return "article"
+}
+
+func xUsernameFromURL(rawURL string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return ""
+	}
+	parts := strings.Split(strings.Trim(u.Path, "/"), "/")
+	if len(parts) >= 1 && strings.TrimSpace(parts[0]) != "" {
+		return parts[0]
+	}
+	return ""
 }
 
 func parseTime(s string) time.Time {

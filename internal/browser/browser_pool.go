@@ -4,7 +4,10 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -102,7 +105,189 @@ func normalizeLocalBrowserConfig(cfg config.LocalBrowserConfig) config.LocalBrow
 		defaultHeadless := true
 		cfg.Headless = &defaultHeadless
 	}
+	if strings.TrimSpace(cfg.ChromePath) == "" {
+		cfg.ChromePath = discoverLocalChromePath()
+	}
+	if isHeadlessShellPath(cfg.ChromePath) {
+		cfg.ExtraArgs = appendMissingArgs(cfg.ExtraArgs, headlessShellCompatibilityArgs()...)
+	}
 	return cfg
+}
+
+func discoverLocalChromePath() string {
+	for _, key := range []string{"DIGCRAWL_CHROME_PATH", "CHROME_PATH", "CHROME_BIN"} {
+		if path := strings.TrimSpace(os.Getenv(key)); isExecutableFile(path) {
+			return path
+		}
+	}
+
+	for _, path := range playwrightHeadlessShellCandidates() {
+		if isExecutableFile(path) {
+			return path
+		}
+	}
+
+	for _, path := range localChromeCandidates() {
+		if isExecutableFile(path) {
+			return path
+		}
+	}
+
+	for _, name := range []string{
+		"google-chrome",
+		"google-chrome-stable",
+		"chromium",
+		"chromium-browser",
+		"chrome",
+		"microsoft-edge",
+		"brave-browser",
+	} {
+		if path, err := exec.LookPath(name); err == nil && isExecutableFile(path) {
+			return path
+		}
+	}
+	return ""
+}
+
+func playwrightHeadlessShellCandidates() []string {
+	roots := []string{}
+	for _, key := range []string{"DIGCRAWL_PLAYWRIGHT_BROWSERS_PATH", "PLAYWRIGHT_BROWSERS_PATH"} {
+		if root := strings.TrimSpace(os.Getenv(key)); root != "" {
+			roots = append(roots, root)
+		}
+	}
+	if home, _ := os.UserHomeDir(); home != "" {
+		roots = append(roots,
+			filepath.Join(home, "Library/Caches/ms-playwright"),
+			filepath.Join(home, ".cache/ms-playwright"),
+		)
+	}
+	roots = append(roots, "/Users/dig/projects/.cache/ms-playwright")
+
+	seen := map[string]struct{}{}
+	var candidates []string
+	for _, root := range roots {
+		root = strings.TrimSpace(root)
+		if root == "" {
+			continue
+		}
+		var rel string
+		switch runtime.GOOS {
+		case "darwin":
+			rel = "chromium_headless_shell-*/chrome-headless-shell-mac-*/chrome-headless-shell"
+		case "windows":
+			rel = "chromium_headless_shell-*/chrome-headless-shell-win*/chrome-headless-shell.exe"
+		default:
+			rel = "chromium_headless_shell-*/chrome-headless-shell-linux*/chrome-headless-shell"
+		}
+		matches, _ := filepath.Glob(filepath.Join(root, rel))
+		sort.Strings(matches)
+		for i := len(matches) - 1; i >= 0; i-- {
+			if _, ok := seen[matches[i]]; ok {
+				continue
+			}
+			seen[matches[i]] = struct{}{}
+			candidates = append(candidates, matches[i])
+		}
+	}
+	return candidates
+}
+
+func localChromeCandidates() []string {
+	switch runtime.GOOS {
+	case "darwin":
+		home, _ := os.UserHomeDir()
+		candidates := []string{
+			"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+			"/Applications/Chromium.app/Contents/MacOS/Chromium",
+			"/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary",
+			"/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+			"/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
+		}
+		if home != "" {
+			candidates = append(candidates,
+				filepath.Join(home, "Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
+				filepath.Join(home, "Applications/Chromium.app/Contents/MacOS/Chromium"),
+				filepath.Join(home, "Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge"),
+			)
+		}
+		return candidates
+	case "windows":
+		candidates := []string{}
+		for _, base := range []string{os.Getenv("PROGRAMFILES"), os.Getenv("PROGRAMFILES(X86)"), os.Getenv("LOCALAPPDATA")} {
+			base = strings.TrimSpace(base)
+			if base == "" {
+				continue
+			}
+			candidates = append(candidates,
+				filepath.Join(base, "Google/Chrome/Application/chrome.exe"),
+				filepath.Join(base, "Chromium/Application/chrome.exe"),
+				filepath.Join(base, "Microsoft/Edge/Application/msedge.exe"),
+				filepath.Join(base, "BraveSoftware/Brave-Browser/Application/brave.exe"),
+			)
+		}
+		return candidates
+	default:
+		return []string{
+			"/usr/bin/google-chrome",
+			"/usr/bin/google-chrome-stable",
+			"/usr/bin/chromium",
+			"/usr/bin/chromium-browser",
+			"/snap/bin/chromium",
+			"/usr/bin/microsoft-edge",
+			"/usr/bin/brave-browser",
+		}
+	}
+}
+
+func isExecutableFile(path string) bool {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return false
+	}
+	info, err := os.Stat(path)
+	if err != nil || info.IsDir() {
+		return false
+	}
+	return info.Mode()&0o111 != 0
+}
+
+func isHeadlessShellPath(path string) bool {
+	return strings.Contains(strings.ToLower(filepath.Base(strings.TrimSpace(path))), "chrome-headless-shell")
+}
+
+func headlessShellCompatibilityArgs() []string {
+	args := []string{"--disable-dev-shm-usage"}
+	if runtime.GOOS == "darwin" {
+		args = append(args,
+			"--single-process",
+			"--no-zygote",
+			"--disable-crash-reporter",
+			"--disable-crashpad",
+			"--disable-breakpad",
+			"--disable-features=Crashpad",
+		)
+	}
+	return args
+}
+
+func appendMissingArgs(existing []string, required ...string) []string {
+	seen := map[string]struct{}{}
+	for _, arg := range existing {
+		seen[strings.TrimSpace(arg)] = struct{}{}
+	}
+	for _, arg := range required {
+		arg = strings.TrimSpace(arg)
+		if arg == "" {
+			continue
+		}
+		if _, ok := seen[arg]; ok {
+			continue
+		}
+		existing = append(existing, arg)
+		seen[arg] = struct{}{}
+	}
+	return existing
 }
 
 func (m *browserManager) acquire(ctx context.Context) (*browserSession, error) {
