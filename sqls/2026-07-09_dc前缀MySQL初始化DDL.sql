@@ -66,7 +66,7 @@ CREATE TABLE IF NOT EXISTS `dc_tool_runs` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS `dc_watchlist_locks` (
-  `watch_id` varchar(128) NOT NULL,
+  `watch_id` varchar(191) NOT NULL,
   `owner` varchar(255) NOT NULL,
   `acquired_at` varchar(64) NOT NULL,
   `expires_at` varchar(64) NOT NULL,
@@ -75,7 +75,7 @@ CREATE TABLE IF NOT EXISTS `dc_watchlist_locks` (
 
 CREATE TABLE IF NOT EXISTS `dc_watchlist_runs` (
   `run_id` varchar(64) NOT NULL,
-  `watch_id` varchar(128) NOT NULL,
+  `watch_id` varchar(191) NOT NULL,
   `owner` varchar(255) NOT NULL,
   `started_at` varchar(64) NOT NULL,
   `finished_at` varchar(64) NULL,
@@ -89,7 +89,7 @@ CREATE TABLE IF NOT EXISTS `dc_watchlist_runs` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS `dc_watchlist_items` (
-  `watch_id` varchar(128) NOT NULL,
+  `watch_id` varchar(191) NOT NULL,
   `content_key` varchar(512) NOT NULL,
   `platform_item_id` varchar(255) NULL,
   `url` text NOT NULL,
@@ -109,7 +109,7 @@ CREATE TABLE IF NOT EXISTS `dc_watchlist_items` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS `dc_watchlist_delivery` (
-  `watch_id` varchar(128) NOT NULL,
+  `watch_id` varchar(191) NOT NULL,
   `content_key` varchar(512) NOT NULL,
   `channel_id` varchar(64) NOT NULL,
   `status` varchar(64) NOT NULL,

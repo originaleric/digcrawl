@@ -127,8 +127,26 @@ CREATE TABLE IF NOT EXISTS `dc_task_events` (
   KEY `idx_dc_task_events_created_at` (`created_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+CREATE TABLE IF NOT EXISTS `dc_watchlist_sources` (
+  `source_id` varchar(191) NOT NULL,
+  `name` varchar(255) NULL,
+  `platform` varchar(64) NOT NULL,
+  `source_kind` varchar(128) NOT NULL,
+  `source_url` text NOT NULL,
+  `enabled` tinyint NOT NULL DEFAULT 1,
+  `schedule_mode` varchar(64) NOT NULL DEFAULT 'interval',
+  `schedule_every_sec` bigint NOT NULL DEFAULT 21600,
+  `notify_channel` varchar(191) NULL,
+  `options_json` longtext NULL,
+  `created_at` varchar(64) NOT NULL,
+  `updated_at` varchar(64) NOT NULL,
+  PRIMARY KEY (`source_id`),
+  KEY `idx_dc_watchlist_sources_enabled` (`enabled`),
+  KEY `idx_dc_watchlist_sources_platform_kind` (`platform`, `source_kind`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 CREATE TABLE IF NOT EXISTS `dc_watchlist_locks` (
-  `watch_id` varchar(128) NOT NULL,
+  `watch_id` varchar(191) NOT NULL,
   `owner` varchar(255) NOT NULL,
   `acquired_at` varchar(64) NOT NULL,
   `expires_at` varchar(64) NOT NULL,
@@ -137,7 +155,7 @@ CREATE TABLE IF NOT EXISTS `dc_watchlist_locks` (
 
 CREATE TABLE IF NOT EXISTS `dc_watchlist_runs` (
   `run_id` varchar(64) NOT NULL,
-  `watch_id` varchar(128) NOT NULL,
+  `watch_id` varchar(191) NOT NULL,
   `owner` varchar(255) NOT NULL,
   `started_at` varchar(64) NOT NULL,
   `finished_at` varchar(64) NULL,
@@ -151,7 +169,7 @@ CREATE TABLE IF NOT EXISTS `dc_watchlist_runs` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS `dc_watchlist_items` (
-  `watch_id` varchar(128) NOT NULL,
+  `watch_id` varchar(191) NOT NULL,
   `content_key` varchar(512) NOT NULL,
   `platform_item_id` varchar(255) NULL,
   `url` text NOT NULL,
@@ -171,7 +189,7 @@ CREATE TABLE IF NOT EXISTS `dc_watchlist_items` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS `dc_watchlist_delivery` (
-  `watch_id` varchar(128) NOT NULL,
+  `watch_id` varchar(191) NOT NULL,
   `content_key` varchar(512) NOT NULL,
   `channel_id` varchar(64) NOT NULL,
   `status` varchar(64) NOT NULL,

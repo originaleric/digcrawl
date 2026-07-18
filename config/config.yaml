@@ -199,12 +199,22 @@ Watchlist:
     Enabled: true
     TickInterval: "5m"
     Jitter: "30s"
+  # Source.Mode:
+  #   yaml     - 从下方 Items 和根级 Tasks 读取，适合少量本地配置和兼容旧配置。
+  #   database - 从 dc_watchlist_sources 读取，适合长期维护的大清单。
+  #   mixed    - 同时读取 YAML 和数据库；同 ID 时数据库覆盖 YAML。
+  Source:
+    Mode: yaml
   NotifyOnFirstRun: false
   MaxItemsPerRun: 20
   LockTTL: "30m"
   Persistence:
+    # sqlite | mysql。source 清单和 runtime 状态共用该持久化后端。
     Driver: sqlite
     SQLitePath: "storage/digcrawl/collect.db"
+    # Driver=mysql 时可二选一：
+    # MySQLDSN: "${DIGCRAWL_MYSQL_DSN}"
+    # GormConfigPath: "config/gorm.yml"
   # Deprecated: kept for old configs; new configs should use Persistence.SQLitePath.
   DBPath: "storage/digcrawl/collect.db"
   Items: []

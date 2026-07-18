@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -162,5 +163,80 @@ VALUES ('w1', 'k1', 'c1', 'notify_failed', NULL, 0, '2000-01-01T00:00:00Z', 'htt
 	}
 	if len(pending) != 1 || pending[0].ContentKey != "k1" {
 		t.Fatalf("legacy delivery not migrated: %+v", pending)
+	}
+}
+
+func TestStoreSourceCRUD(t *testing.T) {
+	ctx := context.Background()
+	st, err := OpenStore(filepath.Join(t.TempDir(), "watch.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	if err := st.UpsertSource(ctx, WatchSource{
+		ID: "reddit-ai", Name: "Reddit AI", Platform: "Reddit", Type: "Reddit_Subreddit",
+		URL: "https://www.reddit.com/r/artificial/new/", Enabled: true, Interval: 30 * time.Minute,
+		NotifyTo: "feishu-default", Options: map[string]any{"sort": "new", "limit": float64(25)},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	sources, err := st.ListSources(ctx, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sources) != 1 {
+		t.Fatalf("sources len=%d", len(sources))
+	}
+	got := sources[0]
+	if got.ID != "reddit-ai" || got.Platform != "reddit" || got.Type != "reddit_subreddit" || got.Interval != 30*time.Minute || got.NotifyTo != "feishu-default" {
+		t.Fatalf("source mismatch: %+v", got)
+	}
+	if got.Options["sort"] != "new" {
+		t.Fatalf("options mismatch: %+v", got.Options)
+	}
+	got, err = st.GetSource(ctx, "reddit-ai")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Name != "Reddit AI" {
+		t.Fatalf("get source mismatch: %+v", got)
+	}
+	if err := st.SetSourceEnabled(ctx, "reddit-ai", false); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetSourceEnabled(ctx, "reddit-ai", false); err != nil {
+		t.Fatalf("setting the same enabled state should be idempotent: %v", err)
+	}
+	enabled, err := st.ListSources(ctx, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(enabled) != 0 {
+		t.Fatalf("disabled source returned in enabled list: %+v", enabled)
+	}
+	if err := st.DeleteSource(ctx, "reddit-ai"); err != nil {
+		t.Fatal(err)
+	}
+	all, err := st.ListSources(ctx, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != 0 {
+		t.Fatalf("source not deleted: %+v", all)
+	}
+}
+
+func TestMySQLMigrationKeepsWatchIDLengthAlignedWithSources(t *testing.T) {
+	sql := strings.Join(mysqlMigrationStatements(), "\n")
+	if strings.Contains(sql, "watch_id VARCHAR(128)") {
+		t.Fatal("mysql watch_id columns must stay aligned with source_id VARCHAR(191)")
+	}
+	for _, want := range []string{
+		"source_id VARCHAR(191)",
+		"watch_id VARCHAR(191)",
+	} {
+		if !strings.Contains(sql, want) {
+			t.Fatalf("mysql migration missing %q", want)
+		}
 	}
 }

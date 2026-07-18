@@ -346,6 +346,7 @@ type WatchlistConfig struct {
 	DryRun           *bool                      `yaml:"DryRun" json:"DryRun,omitempty"`
 	DefaultInterval  string                     `yaml:"DefaultInterval" json:"DefaultInterval,omitempty"`
 	Scheduler        SchedulerConfig            `yaml:"Scheduler" json:"Scheduler,omitempty"`
+	Source           WatchlistSourceConfig      `yaml:"Source" json:"Source,omitempty"`
 	NotifyOnFirstRun *bool                      `yaml:"NotifyOnFirstRun" json:"NotifyOnFirstRun,omitempty"`
 	MaxItemsPerRun   int                        `yaml:"MaxItemsPerRun" json:"MaxItemsPerRun,omitempty"`
 	LockTTL          string                     `yaml:"LockTTL" json:"LockTTL,omitempty"`
@@ -356,8 +357,10 @@ type WatchlistConfig struct {
 
 // WatchlistPersistenceConfig controls local watchlist runtime persistence.
 type WatchlistPersistenceConfig struct {
-	Driver     string `yaml:"Driver" json:"Driver,omitempty"`
-	SQLitePath string `yaml:"SQLitePath" json:"SQLitePath,omitempty"`
+	Driver         string `yaml:"Driver" json:"Driver,omitempty"`
+	SQLitePath     string `yaml:"SQLitePath" json:"SQLitePath,omitempty"`
+	MySQLDSN       string `yaml:"MySQLDSN" json:"MySQLDSN,omitempty"`
+	GormConfigPath string `yaml:"GormConfigPath" json:"GormConfigPath,omitempty"`
 }
 
 func (c WatchlistPersistenceConfig) DriverOrDefault() string {
@@ -366,6 +369,19 @@ func (c WatchlistPersistenceConfig) DriverOrDefault() string {
 		return "sqlite"
 	}
 	return driver
+}
+
+// WatchlistSourceConfig controls where watchlist source definitions are loaded from.
+type WatchlistSourceConfig struct {
+	Mode string `yaml:"Mode" json:"Mode,omitempty"` // yaml | database | mixed
+}
+
+func (c WatchlistSourceConfig) ModeOrDefault() string {
+	mode := strings.ToLower(strings.TrimSpace(c.Mode))
+	if mode == "" {
+		return "yaml"
+	}
+	return mode
 }
 
 // SchedulerConfig controls the in-process periodic scheduler.
@@ -454,6 +470,10 @@ func (c WatchlistConfig) DBPathOrDefault(collectDB string) string {
 
 func (c WatchlistConfig) PersistenceDriverOrDefault() string {
 	return c.Persistence.DriverOrDefault()
+}
+
+func (c WatchlistConfig) SourceModeOrDefault() string {
+	return c.Source.ModeOrDefault()
 }
 
 func (c WatchlistConfig) StateDBPathOrDefault(collectDB string) string {
@@ -1080,6 +1100,7 @@ func init() {
 			Watchlist: WatchlistConfig{
 				DefaultInterval:  "6h",
 				Scheduler:        SchedulerConfig{TickInterval: "5m"},
+				Source:           WatchlistSourceConfig{Mode: "yaml"},
 				MaxItemsPerRun:   20,
 				LockTTL:          "30m",
 				Persistence:      WatchlistPersistenceConfig{Driver: "sqlite", SQLitePath: "storage/digcrawl/collect.db"},

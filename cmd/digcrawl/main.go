@@ -145,6 +145,7 @@ func runGateway(args []string) {
 		log.Fatalf("runtime: %v", err)
 	}
 	srv := httpgw.NewServer(rt, rt.ArtifactStore(), cfg.Gateway.AuthToken)
+	srv.EnableWatchlistAdmin(cfg)
 	log.Printf("DigCrawl HTTP gateway listening on %s (instance=%s)", listen, cfg.Gateway.InstanceID)
 	if err := srv.ListenAndServe(listen); err != nil {
 		log.Fatalf("gateway server: %v", err)

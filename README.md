@@ -49,6 +49,9 @@ Watchlist 能力通过 `digcrawl watchlist run --once`、`digcrawl watchlist run
 - 2026-07-09：新增 Watchlist 定时监控、SQLite 状态/锁、Summary provider、DigFlow 内嵌 Runtime / HTTP 摘要 adapter、Feishu 通知模块、`df_` DigFlow DDL 和无密钥 GORM 示例配置。
 - 2026-07-10：补齐本机 Chromium headless shell 安装说明与 `LocalBrowser.ExtraArgs` 配置，解决 macOS sandbox 下系统 Chrome / Rod Chromium headless 启动不稳定问题，并完成头条文章 + DigFlow Runtime 摘要二轮验证。
 - 2026-07-15：新增 Reddit 官方 API 优先读取、单帖评论树、subreddit/user listing、watchlist `Options`、Reddit watchlist 来源和公开页面浏览器兜底边界；同日将 RSS/Atom 抽象为通用 Feed service，支持 `feed.read`、Collect RSS URL 采集和 Reddit RSS fallback。
+- 2026-07-16：新增通用 Tasks 调度 runtime，支持不同 watchlist task 配置独立扫描周期、到期判断、运行记录、锁和事件表。
+- 2026-07-17：将平台发现逻辑抽象到 `internal/source`，Watchlist 复用头条、X、Reddit、RSS 等来源发现；同时修复本机浏览器兜底路径，完成头条和 X 的 Watchlist dry-run 验证。
+- 2026-07-18：新增持久化 Watchlist 清单，支持 `yaml` / `database` / `mixed` 来源模式，清单可写入 SQLite 或 MySQL；补齐 `digcrawl watchlist source` CLI 和 `/admin/watchlist/*` HTTP 运维接口，并同步 MySQL / SQLite full DDL。
 
 ## 支持的平台
 
@@ -125,6 +128,34 @@ Watchlist 常驻调度：
 
 `watchlist serve` 会按 `Watchlist.Scheduler.TickInterval` 扫描到期任务，没有 runtime 状态的 task 会立即执行一次，之后按 `Tasks[].Schedule.Every` 或旧 `Watchlist.Items[].Interval` 写入 `dc_tasks_runtime.next_run_at` 并判断是否到期。`watchlist run` 保留为整轮执行入口，适合手动触发或外部 cron。
 
+Watchlist 清单支持 `Watchlist.Source.Mode` 选择来源：`yaml` 从 `Watchlist.Items` 和根级 `Tasks` 读取，`database` 从 `dc_watchlist_sources` 读取，`mixed` 同时读取且同 ID 时数据库覆盖 YAML。长清单建议使用 `database`，YAML 只保留调度、通知和持久化配置。持久化后端由 `Watchlist.Persistence.Driver` 决定，支持 `sqlite` 和 `mysql`；MySQL 可直接配置 `MySQLDSN`，也可通过 `GormConfigPath` 读取 `config/gorm.yml` 的写库配置。
+
+```bash
+./digcrawl watchlist source add --config config/config.yaml \
+  --id reddit-ai --name "Reddit AI" --platform reddit --kind reddit_subreddit \
+  --url https://www.reddit.com/r/artificial/new/ --every 6h \
+  --notify feishu-default --options '{"sort":"new","limit":25}'
+
+./digcrawl watchlist source list --config config/config.yaml
+./digcrawl watchlist source disable --config config/config.yaml --id reddit-ai
+./digcrawl watchlist source enable --config config/config.yaml --id reddit-ai
+./digcrawl watchlist source delete --config config/config.yaml --id reddit-ai
+```
+
+HTTP gateway 在配置了非空 `Gateway.AuthToken` 时提供 watchlist 运维接口，复用该 token 鉴权，适合本机或内网运维面调用：
+
+```bash
+curl -H "Authorization: Bearer $DIGCRAWL_GATEWAY_TOKEN" \
+  http://127.0.0.1:8787/admin/watchlist/sources
+
+curl -X POST -H "Authorization: Bearer $DIGCRAWL_GATEWAY_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"id":"reddit-ai","name":"Reddit AI","platform":"reddit","kind":"reddit_subreddit","url":"https://www.reddit.com/r/artificial/new/","every":"6h","notify_to":"feishu-default","options":{"sort":"new","limit":25}}' \
+  http://127.0.0.1:8787/admin/watchlist/sources
+```
+
+可用接口：`GET /admin/watchlist/sources`、`GET /admin/watchlist/sources/{id}`、`POST /admin/watchlist/sources`、`PUT /admin/watchlist/sources/{id}`、`PATCH /admin/watchlist/sources/{id}/enable`、`PATCH /admin/watchlist/sources/{id}/disable`、`DELETE /admin/watchlist/sources/{id}`、`POST /admin/watchlist/sources/{id}/run`、`POST /admin/watchlist/run-due`。
+
 DigFlow HTTP 摘要不需要编译私有 DigFlow runtime；默认构建下 `digflow_runtime` 会使用 stub 并回退到 extractive 摘要，避免普通测试和本地运行被私有仓库下载阻断。需要启用 DigFlow 内嵌 Runtime 时，使用 `-tags digflow_embedded` 构建，并先准备 SSH/GOPRIVATE、数据库与模型配置。DigFlow `v1.1.3` 的轻量化主要面向 `pkg/digflowapi` / `pkg/digflowtypes` 公共 DTO；digcrawl 内嵌模式仍使用 `pkg/digflow` runtime，首次构建仍会拉取 runtime 依赖树。真实数据库连接写入本地 `config/gorm.yml`，该文件已被 `.gitignore` 忽略；仓库提供无密钥模板 `config/gorm.example.yml`。DigFlow 自身表保持 `df_` 前缀，配置入口为 `config/digflow-gorm.yml`、`config/digflow.yml`、`config/eino.yml` 和 `agents/watchlist/agents.yml`。
 
 ```bash
@@ -155,7 +186,7 @@ export REDDIT_CLIENT_SECRET="<client-secret>"
 export REDDIT_REFRESH_TOKEN="<optional-refresh-token>"
 ```
 
-新库初始化 MySQL 使用 `sqls/full/digcrawl_full_sql_ddl.sql`；本地单机 SQLite 使用 `sqls/full/digcrawl_full_sqlite_ddl.sql`，覆盖 Collect、Watchlist/Tasks runtime 和 DigFlow `df_*` embedded runtime 表。DigCrawl 自身本地 SQLite driver 使用 `github.com/mattn/go-sqlite3`，需要 `CGO_ENABLED=1` 和本机 C 编译环境，macOS 可安装 Xcode Command Line Tools。默认 DigCrawl 本地状态库路径为 `storage/digcrawl/collect.db`，可通过 `Watchlist.Persistence.SQLitePath` 调整；DigFlow 本地 SQLite 还需要同步调整 `config/digflow-gorm.yml`、`config/digflow.yml` 和 `config/eino.yml`，完整 profile 见 `USAGE.md`。只初始化 DigFlow `df_*` MySQL 表可使用 `sqls/full/digflow_embedded_runtime_full_ddl.sql`。根目录兼容文件 `sqls/digcrawl_full_sql_ddl.sql` 和 `sqls/2026-07-09_DigFlow内嵌Runtime初始化DDL.sql` 保持同口径。已执行过旧版 DigFlow DDL 的库，补跑 `sqls/2026-07-09_DigFlow最新Runtime增量DDL.sql`，其中包含最新 LoopRuntime `df_loop_*` 表和 `df_resource_asset.storage_key` 唯一约束迁移。启用通用 Tasks 调度还需要补跑 `sqls/2026-07-16_通用Task调度RuntimeDDL.sql`。
+新库初始化 MySQL 使用 `sqls/full/digcrawl_full_sql_ddl.sql`；本地单机 SQLite 使用 `sqls/full/digcrawl_full_sqlite_ddl.sql`，覆盖 Collect、Watchlist/Tasks runtime、持久化 Watchlist 清单和 DigFlow `df_*` embedded runtime 表。DigCrawl 自身本地 SQLite driver 使用 `github.com/mattn/go-sqlite3`，需要 `CGO_ENABLED=1` 和本机 C 编译环境，macOS 可安装 Xcode Command Line Tools。默认 DigCrawl 本地状态库路径为 `storage/digcrawl/collect.db`，可通过 `Watchlist.Persistence.SQLitePath` 调整；DigFlow 本地 SQLite 还需要同步调整 `config/digflow-gorm.yml`、`config/digflow.yml` 和 `config/eino.yml`，完整 profile 见 `USAGE.md`。只初始化 DigFlow `df_*` MySQL 表可使用 `sqls/full/digflow_embedded_runtime_full_ddl.sql`。根目录兼容文件 `sqls/digcrawl_full_sql_ddl.sql` 和 `sqls/2026-07-09_DigFlow内嵌Runtime初始化DDL.sql` 保持同口径。已执行过旧版 DigFlow DDL 的库，补跑 `sqls/2026-07-09_DigFlow最新Runtime增量DDL.sql`，其中包含最新 LoopRuntime `df_loop_*` 表和 `df_resource_asset.storage_key` 唯一约束迁移。启用通用 Tasks 调度需要补跑 `sqls/2026-07-16_通用Task调度RuntimeDDL.sql`；启用数据库持久化 Watchlist 清单需要补跑 `sqls/2026-07-18_持久化Watchlist清单DDL.sql`，其中包含 MySQL `dc_watchlist_sources`、相关 `watch_id VARCHAR(191)` 调整和 SQLite 对应 DDL。
 
 本地 ASR 依赖 `ffmpeg` 和 `faster-whisper`。`ffmpeg` 需能在 `PATH` 中直接调用；`faster-whisper` 建议安装到隔离 venv，再把可执行命令加入 `PATH` 或通过 `--local-command` / `ASR.LocalCommand` 显式指定。
 
@@ -298,7 +329,8 @@ curl -s http://127.0.0.1:8787/manifest
 | `digcrawl asr transcribe` | ffmpeg 抽音频并用 API 或本地 ASR 转写 |
 | `digcrawl watchlist run` | 执行一轮 watchlist 监控、摘要和通知 |
 | `digcrawl watchlist serve` | 常驻调度，到期执行不同周期的 Tasks / Watchlist items |
-| `digcrawl gateway` | HTTP 工具网关 |
+| `digcrawl watchlist source` | 维护持久化 watchlist 清单，写入 `dc_watchlist_sources` |
+| `digcrawl gateway` | HTTP 工具网关，含 `/admin/watchlist/*` 运维接口 |
 | `digcrawl collector` | WebSocket 反向连接 Collector |
 | `digcrawl connect` | 保存宿主配置并启动 Collector |
 | `digcrawl login` | 保存 Collector Token |

@@ -5,14 +5,17 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/go-sql-driver/mysql"
 	"github.com/originaleric/digcrawl/collect"
 	"github.com/originaleric/digcrawl/config"
 	"github.com/originaleric/digcrawl/internal/notify"
 	"github.com/originaleric/digcrawl/internal/summary"
 	"github.com/originaleric/digcrawl/internal/watchlist"
+	"gopkg.in/yaml.v3"
 )
 
 type Store = watchlist.Store
@@ -49,10 +52,7 @@ func NewService(cfg *config.Config) (*Service, error) {
 	if err := validateNotificationConfig(cfg); err != nil {
 		return nil, err
 	}
-	if driver := cfg.Watchlist.PersistenceDriverOrDefault(); driver != "sqlite" {
-		return nil, fmt.Errorf("unsupported watchlist persistence driver %q; only sqlite is supported", driver)
-	}
-	st, err := watchlist.OpenStore(cfg.Watchlist.StateDBPathOrDefault(cfg.Collect.DBPathOrDefault()))
+	st, err := openWatchlistStore(cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -120,6 +120,87 @@ func NewService(cfg *config.Config) (*Service, error) {
 		summarizer: summarizer, notifier: notifier,
 		owner: fmt.Sprintf("%s-%d", host, time.Now().UnixNano()),
 	}, nil
+}
+
+func openWatchlistStore(cfg *config.Config) (*watchlist.Store, error) {
+	driver := cfg.Watchlist.PersistenceDriverOrDefault()
+	opts := watchlist.StoreOptions{Driver: driver}
+	switch driver {
+	case "sqlite", "sqlite3":
+		opts.SQLitePath = cfg.Watchlist.StateDBPathOrDefault(cfg.Collect.DBPathOrDefault())
+	case "mysql":
+		dsn, err := watchlistMySQLDSN(cfg)
+		if err != nil {
+			return nil, err
+		}
+		opts.MySQLDSN = dsn
+	default:
+		return nil, fmt.Errorf("unsupported watchlist persistence driver %q", driver)
+	}
+	return watchlist.OpenStoreWithOptions(opts)
+}
+
+func OpenConfiguredStore(cfg *config.Config) (*watchlist.Store, error) {
+	return openWatchlistStore(cfg)
+}
+
+func watchlistMySQLDSN(cfg *config.Config) (string, error) {
+	if dsn := strings.TrimSpace(cfg.Watchlist.Persistence.MySQLDSN); dsn != "" {
+		return os.ExpandEnv(dsn), nil
+	}
+	path := strings.TrimSpace(cfg.Watchlist.Persistence.GormConfigPath)
+	if path == "" {
+		path = "config/gorm.yml"
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("watchlist mysql dsn is empty and gorm config %q cannot be read: %w", path, err)
+	}
+	var gc struct {
+		Gorm struct {
+			Mysql struct {
+				Write struct {
+					Host     string `yaml:"Host"`
+					DataBase string `yaml:"DataBase"`
+					Port     int    `yaml:"Port"`
+					User     string `yaml:"User"`
+					Pass     string `yaml:"Pass"`
+					Charset  string `yaml:"Charset"`
+				} `yaml:"Write"`
+			} `yaml:"Mysql"`
+		} `yaml:"Gorm"`
+	}
+	if err := yaml.Unmarshal(data, &gc); err != nil {
+		return "", fmt.Errorf("decode gorm config %q: %w", path, err)
+	}
+	w := gc.Gorm.Mysql.Write
+	host := strings.TrimSpace(os.ExpandEnv(w.Host))
+	user := strings.TrimSpace(os.ExpandEnv(w.User))
+	pass := os.ExpandEnv(w.Pass)
+	db := strings.TrimSpace(os.ExpandEnv(w.DataBase))
+	if host == "" || user == "" || db == "" {
+		return "", fmt.Errorf("gorm mysql write config %q must include host, user and database", path)
+	}
+	port := w.Port
+	if port == 0 {
+		port = 3306
+	}
+	charset := strings.TrimSpace(w.Charset)
+	if charset == "" {
+		charset = "utf8mb4"
+	}
+	mysqlCfg := mysql.Config{
+		User:                 user,
+		Passwd:               pass,
+		Net:                  "tcp",
+		Addr:                 host + ":" + strconv.Itoa(port),
+		DBName:               db,
+		Params:               map[string]string{"charset": charset},
+		ParseTime:            true,
+		Loc:                  time.Local,
+		AllowNativePasswords: true,
+	}
+	return mysqlCfg.FormatDSN(), nil
 }
 
 func (s *Service) Close() error {
@@ -204,7 +285,11 @@ func validateFeishuChannel(channels map[string]config.FeishuChannel, id, context
 func (s *Service) RunOnce(ctx context.Context) ([]RunSummary, error) {
 	var summaries []RunSummary
 	var firstErr error
-	for _, raw := range configuredWatchlistItems(s.cfg) {
+	rawItems, err := s.configuredItems(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, raw := range rawItems {
 		item, err := s.normalizeItem(raw)
 		if err != nil {
 			if firstErr == nil {
@@ -224,6 +309,31 @@ func (s *Service) RunOnce(ctx context.Context) ([]RunSummary, error) {
 	return summaries, firstErr
 }
 
+func (s *Service) RunConfiguredItem(ctx context.Context, id string) (RunSummary, error) {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return RunSummary{}, fmt.Errorf("watchlist item id is required")
+	}
+	rawItems, err := s.configuredItems(ctx)
+	if err != nil {
+		return RunSummary{}, err
+	}
+	for _, raw := range rawItems {
+		if strings.TrimSpace(raw.ID) != id {
+			continue
+		}
+		item, err := s.normalizeItem(raw)
+		if err != nil {
+			return RunSummary{WatchID: id}, err
+		}
+		if !item.Enabled {
+			return RunSummary{WatchID: id}, fmt.Errorf("watchlist item %q is disabled", id)
+		}
+		return s.RunItem(ctx, item)
+	}
+	return RunSummary{WatchID: id}, fmt.Errorf("watchlist item %q not found", id)
+}
+
 func (s *Service) RunDue(ctx context.Context, now time.Time) ([]RunSummary, error) {
 	if now.IsZero() {
 		now = time.Now()
@@ -231,7 +341,11 @@ func (s *Service) RunDue(ctx context.Context, now time.Time) ([]RunSummary, erro
 	var summaries []RunSummary
 	var firstErr error
 	activeTaskIDs := []string{}
-	for _, raw := range configuredWatchlistItems(s.cfg) {
+	rawItems, err := s.configuredItems(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, raw := range rawItems {
 		item, err := s.normalizeItem(raw)
 		if err != nil {
 			if firstErr == nil {
@@ -498,6 +612,79 @@ func (s *Service) normalizeItem(raw config.WatchlistItem) (WatchItem, error) {
 
 func ConfiguredItemCount(cfg *config.Config) int {
 	return len(configuredWatchlistItems(cfg))
+}
+
+func (s *Service) ConfiguredItemCount(ctx context.Context) (int, error) {
+	items, err := s.configuredItems(ctx)
+	if err != nil {
+		return 0, err
+	}
+	return len(items), nil
+}
+
+func (s *Service) configuredItems(ctx context.Context) ([]config.WatchlistItem, error) {
+	mode := s.cfg.Watchlist.SourceModeOrDefault()
+	switch mode {
+	case "yaml":
+		return configuredWatchlistItems(s.cfg), nil
+	case "database":
+		return s.databaseWatchlistItems(ctx)
+	case "mixed":
+		items := configuredWatchlistItems(s.cfg)
+		dbItems, err := s.databaseWatchlistItems(ctx)
+		if err != nil {
+			return nil, err
+		}
+		merged := make(map[string]int, len(items)+len(dbItems))
+		out := make([]config.WatchlistItem, 0, len(items)+len(dbItems))
+		for _, item := range items {
+			key := strings.TrimSpace(item.ID)
+			if key == "" {
+				out = append(out, item)
+				continue
+			}
+			merged[key] = len(out)
+			out = append(out, item)
+		}
+		for _, item := range dbItems {
+			key := strings.TrimSpace(item.ID)
+			if idx, ok := merged[key]; ok && key != "" {
+				out[idx] = item
+				continue
+			}
+			out = append(out, item)
+		}
+		return out, nil
+	default:
+		return nil, fmt.Errorf("unsupported watchlist source mode %q; expected yaml, database or mixed", mode)
+	}
+}
+
+func (s *Service) databaseWatchlistItems(ctx context.Context) ([]config.WatchlistItem, error) {
+	sources, err := s.store.ListSources(ctx, false)
+	if err != nil {
+		return nil, err
+	}
+	items := make([]config.WatchlistItem, 0, len(sources))
+	for _, src := range sources {
+		enabled := src.Enabled
+		interval := ""
+		if src.Interval > 0 {
+			interval = src.Interval.String()
+		}
+		items = append(items, config.WatchlistItem{
+			ID:       src.ID,
+			Platform: src.Platform,
+			Type:     src.Type,
+			URL:      src.URL,
+			Name:     src.Name,
+			Interval: interval,
+			NotifyTo: src.NotifyTo,
+			Enabled:  &enabled,
+			Options:  src.Options,
+		})
+	}
+	return items, nil
 }
 
 func configuredWatchlistItems(cfg *config.Config) []config.WatchlistItem {

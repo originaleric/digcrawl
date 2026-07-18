@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"testing"
 
+	"github.com/originaleric/digcrawl/config"
 	"github.com/originaleric/digcrawl/protocol"
 	"github.com/originaleric/digcrawl/runtime"
 	"github.com/originaleric/digcrawl/runtime/registry"
@@ -57,5 +59,112 @@ func TestToolCallAuth(t *testing.T) {
 	srv.ServeHTTP(rec, req)
 	if rec.Code == http.StatusUnauthorized {
 		t.Fatal("expected authorized request to pass auth")
+	}
+}
+
+func TestWatchlistAdminSourceCRUD(t *testing.T) {
+	t.Parallel()
+	reg := registry.New()
+	rt := runtime.New(reg, runtime.Options{InstanceID: "test"})
+	cfg := &config.Config{
+		Watchlist: config.WatchlistConfig{
+			Persistence: config.WatchlistPersistenceConfig{
+				Driver:     "sqlite",
+				SQLitePath: filepath.Join(t.TempDir(), "watchlist.db"),
+			},
+		},
+	}
+	srv := NewServer(rt, nil, "secret")
+	srv.EnableWatchlistAdmin(cfg)
+
+	body := []byte(`{"id":"reddit-ai","name":"Reddit AI","platform":"reddit","kind":"reddit_subreddit","url":"https://www.reddit.com/r/artificial/new/","every":"30m","notify_to":"feishu-default","options":{"sort":"new"}}`)
+	req := httptest.NewRequest(http.MethodPost, "/admin/watchlist/sources", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected auth to protect admin API, got %d", rec.Code)
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/admin/watchlist/sources", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer secret")
+	rec = httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create status %d body %s", rec.Code, rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/admin/watchlist/sources/reddit-ai", nil)
+	req.Header.Set("Authorization", "Bearer secret")
+	rec = httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("get status %d body %s", rec.Code, rec.Body.String())
+	}
+	var one struct {
+		ID      string `json:"id"`
+		Every   string `json:"every"`
+		Enabled bool   `json:"enabled"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &one); err != nil {
+		t.Fatal(err)
+	}
+	if one.ID != "reddit-ai" || one.Every != "30m0s" || !one.Enabled {
+		t.Fatalf("unexpected source response: %+v", one)
+	}
+
+	req = httptest.NewRequest(http.MethodPatch, "/admin/watchlist/sources/reddit-ai/disable", nil)
+	req.Header.Set("Authorization", "Bearer secret")
+	rec = httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("disable status %d body %s", rec.Code, rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/admin/watchlist/sources?enabled_only=true", nil)
+	req.Header.Set("Authorization", "Bearer secret")
+	rec = httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list status %d body %s", rec.Code, rec.Body.String())
+	}
+	var list struct {
+		Sources []any `json:"sources"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &list); err != nil {
+		t.Fatal(err)
+	}
+	if len(list.Sources) != 0 {
+		t.Fatalf("disabled source should be filtered: %+v", list.Sources)
+	}
+
+	req = httptest.NewRequest(http.MethodDelete, "/admin/watchlist/sources/reddit-ai", nil)
+	req.Header.Set("Authorization", "Bearer secret")
+	rec = httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("delete status %d body %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestWatchlistAdminRequiresConfiguredGatewayToken(t *testing.T) {
+	t.Parallel()
+	reg := registry.New()
+	rt := runtime.New(reg, runtime.Options{InstanceID: "test"})
+	cfg := &config.Config{
+		Watchlist: config.WatchlistConfig{
+			Persistence: config.WatchlistPersistenceConfig{
+				Driver:     "sqlite",
+				SQLitePath: filepath.Join(t.TempDir(), "watchlist.db"),
+			},
+		},
+	}
+	srv := NewServer(rt, nil, "")
+	srv.EnableWatchlistAdmin(cfg)
+
+	req := httptest.NewRequest(http.MethodGet, "/admin/watchlist/sources", nil)
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("admin API should not register without gateway token, got %d body %s", rec.Code, rec.Body.String())
 	}
 }

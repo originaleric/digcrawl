@@ -7,6 +7,7 @@ require (
 	github.com/glebarez/go-sqlite v1.21.2
 	github.com/go-rod/rod v0.116.2
 	github.com/go-rod/stealth v0.4.9
+	github.com/go-sql-driver/mysql v1.8.1
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3
 	github.com/mark3labs/mcp-go v0.44.0
@@ -59,7 +60,6 @@ require (
 	github.com/go-playground/universal-translator v0.18.1 // indirect
 	github.com/go-playground/validator/v10 v10.20.0 // indirect
 	github.com/go-sourcemap/sourcemap v2.1.3+incompatible // indirect
-	github.com/go-sql-driver/mysql v1.8.1 // indirect
 	github.com/goccy/go-json v0.10.2 // indirect
 	github.com/golang-sql/civil v0.0.0-20220223132316-b832511892a9 // indirect
 	github.com/golang-sql/sqlexp v0.1.0 // indirect
@@ -157,3 +157,5 @@ require (
 	modernc.org/memory v1.5.0 // indirect
 	modernc.org/sqlite v1.23.1 // indirect
 )
+
+replace github.com/originaleric/DigFlow => github.com/originaleric/DigFlow v1.1.3

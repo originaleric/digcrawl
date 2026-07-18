@@ -33,6 +33,21 @@ type WatchItem struct {
 	Options  map[string]any
 }
 
+type WatchSource struct {
+	ID           string
+	Name         string
+	Platform     string
+	Type         string
+	URL          string
+	Enabled      bool
+	ScheduleMode string
+	Interval     time.Duration
+	NotifyTo     string
+	Options      map[string]any
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
+}
+
 type FeedItem struct {
 	ID           string
 	ContentKey   string

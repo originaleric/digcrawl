@@ -1,11 +1,15 @@
 package service
 
 import (
+	"context"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/originaleric/digcrawl/config"
 	"github.com/originaleric/digcrawl/internal/notify"
+	"github.com/originaleric/digcrawl/internal/watchlist"
 )
 
 func boolPtr(v bool) *bool {
@@ -209,5 +213,61 @@ func TestNormalizeTaskRejectsUnsupportedTaskType(t *testing.T) {
 	_, err := svc.normalizeItem(items[0])
 	if err == nil || !strings.Contains(err.Error(), "unsupported task type") {
 		t.Fatalf("expected unsupported task type error, got %v", err)
+	}
+}
+
+func TestConfiguredItemsLoadsDatabaseSources(t *testing.T) {
+	ctx := context.Background()
+	st, err := watchlist.OpenStore(filepath.Join(t.TempDir(), "watch.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	if err := st.UpsertSource(ctx, watchlist.WatchSource{
+		ID: "reddit-db", Name: "Reddit DB", Platform: "reddit", Type: "reddit_subreddit",
+		URL: "https://www.reddit.com/r/artificial/new/", Enabled: true, Interval: time.Hour,
+		NotifyTo: "feishu-default", Options: map[string]any{"sort": "new"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	svc := &Service{cfg: &config.Config{Watchlist: config.WatchlistConfig{
+		Source:          config.WatchlistSourceConfig{Mode: "database"},
+		DefaultInterval: "6h",
+	}}, store: st}
+	items, err := svc.configuredItems(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 || items[0].ID != "reddit-db" || items[0].Interval != "1h0m0s" {
+		t.Fatalf("database items mismatch: %+v", items)
+	}
+}
+
+func TestConfiguredItemsMixedModeLetsDatabaseOverrideYaml(t *testing.T) {
+	ctx := context.Background()
+	st, err := watchlist.OpenStore(filepath.Join(t.TempDir(), "watch.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	if err := st.UpsertSource(ctx, watchlist.WatchSource{
+		ID: "same-id", Name: "DB Source", Platform: "reddit", Type: "reddit_subreddit",
+		URL: "https://www.reddit.com/r/artificial/new/", Enabled: true, Interval: time.Hour,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	svc := &Service{cfg: &config.Config{Watchlist: config.WatchlistConfig{
+		Source:          config.WatchlistSourceConfig{Mode: "mixed"},
+		DefaultInterval: "6h",
+		Items: []config.WatchlistItem{{
+			ID: "same-id", Platform: "rss", Type: "rss", URL: "https://example.com/feed.xml",
+		}},
+	}}, store: st}
+	items, err := svc.configuredItems(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 || items[0].Platform != "reddit" || items[0].URL != "https://www.reddit.com/r/artificial/new/" {
+		t.Fatalf("mixed override mismatch: %+v", items)
 	}
 }

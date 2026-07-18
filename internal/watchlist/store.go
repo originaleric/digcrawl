@@ -3,21 +3,53 @@ package watchlist
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
+	_ "github.com/go-sql-driver/mysql"
 	"github.com/google/uuid"
 	_ "github.com/mattn/go-sqlite3"
 )
 
 type Store struct {
-	db *sql.DB
+	db      *sql.DB
+	dialect string
+}
+
+type StoreOptions struct {
+	Driver          string
+	SQLitePath      string
+	MySQLDSN        string
+	MaxOpenConns    int
+	MaxIdleConns    int
+	ConnMaxLifetime time.Duration
 }
 
 func OpenStore(path string) (*Store, error) {
+	return OpenStoreWithOptions(StoreOptions{Driver: "sqlite", SQLitePath: path})
+}
+
+func OpenStoreWithOptions(opts StoreOptions) (*Store, error) {
+	driver := strings.ToLower(strings.TrimSpace(opts.Driver))
+	if driver == "" {
+		driver = "sqlite"
+	}
+	switch driver {
+	case "sqlite", "sqlite3":
+		return openSQLiteStore(opts)
+	case "mysql":
+		return openMySQLStore(opts)
+	default:
+		return nil, fmt.Errorf("unsupported watchlist persistence driver %q", opts.Driver)
+	}
+}
+
+func openSQLiteStore(opts StoreOptions) (*Store, error) {
+	path := opts.SQLitePath
 	path = strings.TrimSpace(path)
 	if path == "" {
 		return nil, fmt.Errorf("watchlist db path is required")
@@ -34,7 +66,43 @@ func OpenStore(path string) (*Store, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("enable foreign keys: %w", err)
 	}
-	s := &Store{db: db}
+	s := &Store{db: db, dialect: "sqlite"}
+	if err := s.migrate(); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	return s, nil
+}
+
+func openMySQLStore(opts StoreOptions) (*Store, error) {
+	dsn := strings.TrimSpace(opts.MySQLDSN)
+	if dsn == "" {
+		return nil, fmt.Errorf("watchlist mysql dsn is required")
+	}
+	db, err := sql.Open("mysql", dsn)
+	if err != nil {
+		return nil, err
+	}
+	if opts.MaxOpenConns > 0 {
+		db.SetMaxOpenConns(opts.MaxOpenConns)
+	} else {
+		db.SetMaxOpenConns(10)
+	}
+	if opts.MaxIdleConns > 0 {
+		db.SetMaxIdleConns(opts.MaxIdleConns)
+	} else {
+		db.SetMaxIdleConns(2)
+	}
+	if opts.ConnMaxLifetime > 0 {
+		db.SetConnMaxLifetime(opts.ConnMaxLifetime)
+	} else {
+		db.SetConnMaxLifetime(30 * time.Minute)
+	}
+	if err := db.Ping(); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("connect watchlist mysql: %w", err)
+	}
+	s := &Store{db: db, dialect: "mysql"}
 	if err := s.migrate(); err != nil {
 		_ = db.Close()
 		return nil, err
@@ -49,8 +117,237 @@ func (s *Store) Close() error {
 	return s.db.Close()
 }
 
+func (s *Store) UpsertSource(ctx context.Context, src WatchSource) error {
+	src.ID = strings.TrimSpace(src.ID)
+	if src.ID == "" {
+		return fmt.Errorf("watchlist source id is required")
+	}
+	src.Platform = strings.ToLower(strings.TrimSpace(src.Platform))
+	src.Type = strings.ToLower(strings.TrimSpace(src.Type))
+	src.URL = strings.TrimSpace(src.URL)
+	if src.Platform == "" {
+		return fmt.Errorf("watchlist source %q platform is required", src.ID)
+	}
+	if src.Type == "" {
+		return fmt.Errorf("watchlist source %q kind is required", src.ID)
+	}
+	if src.URL == "" {
+		return fmt.Errorf("watchlist source %q url is required", src.ID)
+	}
+	src.ScheduleMode = strings.ToLower(strings.TrimSpace(src.ScheduleMode))
+	if src.ScheduleMode == "" {
+		src.ScheduleMode = "interval"
+	}
+	if src.ScheduleMode != "interval" {
+		return fmt.Errorf("watchlist source %q unsupported schedule mode %q", src.ID, src.ScheduleMode)
+	}
+	if src.Interval <= 0 {
+		src.Interval = 6 * time.Hour
+	}
+	now := time.Now().UTC()
+	if src.CreatedAt.IsZero() {
+		src.CreatedAt = now
+	}
+	src.UpdatedAt = now
+	opts, err := json.Marshal(src.Options)
+	if err != nil {
+		return fmt.Errorf("marshal watchlist source options: %w", err)
+	}
+	optionsJSON := string(opts)
+	if src.Options == nil {
+		optionsJSON = ""
+	}
+	if s.dialect == "mysql" {
+		_, err = s.db.ExecContext(ctx, `INSERT INTO dc_watchlist_sources (
+  source_id, name, platform, source_kind, source_url, enabled, schedule_mode, schedule_every_sec, notify_channel, options_json, created_at, updated_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON DUPLICATE KEY UPDATE
+  name = VALUES(name),
+  platform = VALUES(platform),
+  source_kind = VALUES(source_kind),
+  source_url = VALUES(source_url),
+  enabled = VALUES(enabled),
+  schedule_mode = VALUES(schedule_mode),
+  schedule_every_sec = VALUES(schedule_every_sec),
+  notify_channel = VALUES(notify_channel),
+  options_json = VALUES(options_json),
+  updated_at = VALUES(updated_at)`,
+			src.ID, nullStr(src.Name), src.Platform, src.Type, src.URL, boolInt(src.Enabled), src.ScheduleMode,
+			int64(src.Interval.Seconds()), nullStr(src.NotifyTo), nullStr(optionsJSON), src.CreatedAt.Format(time.RFC3339), src.UpdatedAt.Format(time.RFC3339))
+		return err
+	}
+	_, err = s.db.ExecContext(ctx, `INSERT INTO dc_watchlist_sources (
+  source_id, name, platform, source_kind, source_url, enabled, schedule_mode, schedule_every_sec, notify_channel, options_json, created_at, updated_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(source_id) DO UPDATE SET
+  name = excluded.name,
+  platform = excluded.platform,
+  source_kind = excluded.source_kind,
+  source_url = excluded.source_url,
+  enabled = excluded.enabled,
+  schedule_mode = excluded.schedule_mode,
+  schedule_every_sec = excluded.schedule_every_sec,
+  notify_channel = excluded.notify_channel,
+  options_json = excluded.options_json,
+  updated_at = excluded.updated_at`,
+		src.ID, nullStr(src.Name), src.Platform, src.Type, src.URL, boolInt(src.Enabled), src.ScheduleMode,
+		int64(src.Interval.Seconds()), nullStr(src.NotifyTo), nullStr(optionsJSON), src.CreatedAt.Format(time.RFC3339), src.UpdatedAt.Format(time.RFC3339))
+	return err
+}
+
+func (s *Store) ListSources(ctx context.Context, enabledOnly bool) ([]WatchSource, error) {
+	query := `SELECT source_id, COALESCE(name, ''), platform, source_kind, source_url, enabled, schedule_mode, schedule_every_sec, COALESCE(notify_channel, ''), COALESCE(options_json, ''), created_at, updated_at
+FROM dc_watchlist_sources`
+	if enabledOnly {
+		query += ` WHERE enabled = 1`
+	}
+	query += ` ORDER BY platform, source_kind, source_id`
+	rows, err := s.db.QueryContext(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []WatchSource
+	for rows.Next() {
+		src, err := scanSource(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, src)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) GetSource(ctx context.Context, id string) (WatchSource, error) {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return WatchSource{}, fmt.Errorf("watchlist source id is required")
+	}
+	row := s.db.QueryRowContext(ctx, `SELECT source_id, COALESCE(name, ''), platform, source_kind, source_url, enabled, schedule_mode, schedule_every_sec, COALESCE(notify_channel, ''), COALESCE(options_json, ''), created_at, updated_at
+FROM dc_watchlist_sources WHERE source_id = ?`, id)
+	src, err := scanSource(row)
+	if err == sql.ErrNoRows {
+		return WatchSource{}, fmt.Errorf("watchlist source %q not found", id)
+	}
+	return src, err
+}
+
+func (s *Store) SetSourceEnabled(ctx context.Context, id string, enabled bool) error {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return fmt.Errorf("watchlist source id is required")
+	}
+	if ok, err := s.sourceExists(ctx, id); err != nil {
+		return err
+	} else if !ok {
+		return fmt.Errorf("watchlist source %q not found", id)
+	}
+	res, err := s.db.ExecContext(ctx, `UPDATE dc_watchlist_sources SET enabled = ?, updated_at = ? WHERE source_id = ?`,
+		boolInt(enabled), time.Now().UTC().Format(time.RFC3339), id)
+	if err != nil {
+		return err
+	}
+	_, _ = res.RowsAffected()
+	return nil
+}
+
+func (s *Store) DeleteSource(ctx context.Context, id string) error {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return fmt.Errorf("watchlist source id is required")
+	}
+	res, err := s.db.ExecContext(ctx, `DELETE FROM dc_watchlist_sources WHERE source_id = ?`, id)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err == nil && n == 0 {
+		return fmt.Errorf("watchlist source %q not found", id)
+	}
+	return nil
+}
+
+func (s *Store) sourceExists(ctx context.Context, id string) (bool, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(1) FROM dc_watchlist_sources WHERE source_id = ?`, id).Scan(&n)
+	return n > 0, err
+}
+
+type sourceScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanSource(scanner sourceScanner) (WatchSource, error) {
+	var src WatchSource
+	var enabled int
+	var everySec int64
+	var optionsJSON, createdAt, updatedAt string
+	if err := scanner.Scan(&src.ID, &src.Name, &src.Platform, &src.Type, &src.URL, &enabled, &src.ScheduleMode, &everySec, &src.NotifyTo, &optionsJSON, &createdAt, &updatedAt); err != nil {
+		return WatchSource{}, err
+	}
+	src.Enabled = enabled != 0
+	src.Interval = time.Duration(everySec) * time.Second
+	if strings.TrimSpace(optionsJSON) != "" {
+		var opts map[string]any
+		if err := json.Unmarshal([]byte(optionsJSON), &opts); err != nil {
+			return WatchSource{}, fmt.Errorf("decode watchlist source %s options: %w", src.ID, err)
+		}
+		src.Options = opts
+	}
+	src.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
+	src.UpdatedAt, _ = time.Parse(time.RFC3339, updatedAt)
+	return src, nil
+}
+
 func (s *Store) migrate() error {
-	stmts := []string{
+	stmts := s.migrationStatements()
+	for _, stmt := range stmts {
+		if _, err := s.db.Exec(stmt); err != nil {
+			return err
+		}
+	}
+	_ = s.addColumnIfMissing("dc_watchlist_delivery", "message_title", s.textColumnType())
+	_ = s.addColumnIfMissing("dc_watchlist_delivery", "message_text", s.textColumnType())
+	if s.dialect == "sqlite" {
+		if err := s.migrateLegacyTables(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Store) textColumnType() string {
+	if s.dialect == "mysql" {
+		return "LONGTEXT"
+	}
+	return "TEXT"
+}
+
+func (s *Store) migrationStatements() []string {
+	if s.dialect == "mysql" {
+		return mysqlMigrationStatements()
+	}
+	return sqliteMigrationStatements()
+}
+
+func sqliteMigrationStatements() []string {
+	return []string{
+		`CREATE TABLE IF NOT EXISTS dc_watchlist_sources (
+  source_id TEXT PRIMARY KEY,
+  name TEXT,
+  platform TEXT NOT NULL,
+  source_kind TEXT NOT NULL,
+  source_url TEXT NOT NULL,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  schedule_mode TEXT NOT NULL DEFAULT 'interval',
+  schedule_every_sec INTEGER NOT NULL DEFAULT 21600,
+  notify_channel TEXT,
+  options_json TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+)`,
+		`CREATE INDEX IF NOT EXISTS idx_dc_watchlist_sources_enabled ON dc_watchlist_sources(enabled)`,
+		`CREATE INDEX IF NOT EXISTS idx_dc_watchlist_sources_platform_kind ON dc_watchlist_sources(platform, source_kind)`,
 		`CREATE TABLE IF NOT EXISTS dc_watchlist_locks (
   watch_id TEXT PRIMARY KEY,
   owner TEXT NOT NULL,
@@ -156,17 +453,132 @@ func (s *Store) migrate() error {
 		`CREATE INDEX IF NOT EXISTS idx_dc_task_events_run_id ON dc_task_events(run_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_dc_task_events_created_at ON dc_task_events(created_at)`,
 	}
-	for _, stmt := range stmts {
-		if _, err := s.db.Exec(stmt); err != nil {
-			return err
-		}
+}
+
+func mysqlMigrationStatements() []string {
+	return []string{
+		`CREATE TABLE IF NOT EXISTS dc_watchlist_sources (
+  source_id VARCHAR(191) PRIMARY KEY,
+  name VARCHAR(255),
+  platform VARCHAR(64) NOT NULL,
+  source_kind VARCHAR(128) NOT NULL,
+  source_url TEXT NOT NULL,
+  enabled TINYINT NOT NULL DEFAULT 1,
+  schedule_mode VARCHAR(64) NOT NULL DEFAULT 'interval',
+  schedule_every_sec BIGINT NOT NULL DEFAULT 21600,
+  notify_channel VARCHAR(191),
+  options_json LONGTEXT,
+  created_at VARCHAR(64) NOT NULL,
+  updated_at VARCHAR(64) NOT NULL,
+  KEY idx_dc_watchlist_sources_enabled (enabled),
+  KEY idx_dc_watchlist_sources_platform_kind (platform, source_kind)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+		`CREATE TABLE IF NOT EXISTS dc_watchlist_locks (
+  watch_id VARCHAR(191) PRIMARY KEY,
+  owner VARCHAR(191) NOT NULL,
+  acquired_at VARCHAR(64) NOT NULL,
+  expires_at VARCHAR(64) NOT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+		`CREATE TABLE IF NOT EXISTS dc_watchlist_runs (
+  run_id VARCHAR(191) PRIMARY KEY,
+  watch_id VARCHAR(191) NOT NULL,
+  owner VARCHAR(191) NOT NULL,
+  started_at VARCHAR(64) NOT NULL,
+  finished_at VARCHAR(64),
+  status VARCHAR(64) NOT NULL,
+  discovered_count INT DEFAULT 0,
+  new_count INT DEFAULT 0,
+  notified_count INT DEFAULT 0,
+  error TEXT,
+  KEY idx_dc_watchlist_runs_watch_id (watch_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+		`CREATE TABLE IF NOT EXISTS dc_watchlist_items (
+  watch_id VARCHAR(191) NOT NULL,
+  content_key VARCHAR(512) NOT NULL,
+  platform_item_id VARCHAR(191),
+  url TEXT NOT NULL,
+  canonical_url TEXT,
+  title TEXT,
+  published_at VARCHAR(64),
+  content_type VARCHAR(64),
+  content_hash VARCHAR(128),
+  summary_hash VARCHAR(128),
+  first_seen_at VARCHAR(64) NOT NULL,
+  last_seen_at VARCHAR(64) NOT NULL,
+  baseline_only TINYINT DEFAULT 0,
+  status VARCHAR(64) NOT NULL,
+  collect_error TEXT,
+  summary_error TEXT,
+  PRIMARY KEY (watch_id, content_key)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+		`CREATE TABLE IF NOT EXISTS dc_watchlist_delivery (
+  watch_id VARCHAR(191) NOT NULL,
+  content_key VARCHAR(512) NOT NULL,
+  channel_id VARCHAR(64) NOT NULL,
+  status VARCHAR(64) NOT NULL,
+  notified_at VARCHAR(64),
+  retry_count INT DEFAULT 0,
+  next_retry_at VARCHAR(64),
+  notify_error TEXT,
+  message_title TEXT,
+  message_text LONGTEXT,
+  PRIMARY KEY (watch_id, content_key, channel_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+		`CREATE TABLE IF NOT EXISTS dc_tasks_runtime (
+  task_id VARCHAR(191) PRIMARY KEY,
+  task_type VARCHAR(128) NOT NULL,
+  enabled TINYINT NOT NULL DEFAULT 1,
+  schedule_mode VARCHAR(64) NOT NULL,
+  schedule_every_sec BIGINT NOT NULL DEFAULT 0,
+  source_platform VARCHAR(64),
+  source_kind VARCHAR(128),
+  source_url TEXT,
+  notify_channel VARCHAR(191),
+  config_hash VARCHAR(128) NOT NULL,
+  last_run_id VARCHAR(191),
+  last_run_at VARCHAR(64),
+  next_run_at VARCHAR(64) NOT NULL,
+  last_status VARCHAR(64),
+  consecutive_failures INT NOT NULL DEFAULT 0,
+  updated_at VARCHAR(64) NOT NULL,
+  KEY idx_dc_tasks_runtime_next_run_at (next_run_at),
+  KEY idx_dc_tasks_runtime_type_enabled (task_type, enabled)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+		`CREATE TABLE IF NOT EXISTS dc_task_runs (
+  run_id VARCHAR(191) PRIMARY KEY,
+  task_id VARCHAR(191) NOT NULL,
+  task_type VARCHAR(128) NOT NULL,
+  owner VARCHAR(191) NOT NULL,
+  started_at VARCHAR(64) NOT NULL,
+  finished_at VARCHAR(64),
+  status VARCHAR(64) NOT NULL,
+  error TEXT,
+  metadata_json LONGTEXT,
+  KEY idx_dc_task_runs_task_id (task_id),
+  KEY idx_dc_task_runs_started_at (started_at),
+  KEY idx_dc_task_runs_status (status)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+		`CREATE TABLE IF NOT EXISTS dc_task_locks (
+  task_id VARCHAR(191) PRIMARY KEY,
+  owner VARCHAR(191) NOT NULL,
+  acquired_at VARCHAR(64) NOT NULL,
+  expires_at VARCHAR(64) NOT NULL,
+  KEY idx_dc_task_locks_expires_at (expires_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+		`CREATE TABLE IF NOT EXISTS dc_task_events (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  task_id VARCHAR(191) NOT NULL,
+  run_id VARCHAR(191),
+  event_type VARCHAR(128) NOT NULL,
+  status VARCHAR(64) NOT NULL,
+  message TEXT,
+  payload_json LONGTEXT,
+  created_at VARCHAR(64) NOT NULL,
+  KEY idx_dc_task_events_task_id (task_id),
+  KEY idx_dc_task_events_run_id (run_id),
+  KEY idx_dc_task_events_created_at (created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 	}
-	_ = s.addColumnIfMissing("dc_watchlist_delivery", "message_title", "TEXT")
-	_ = s.addColumnIfMissing("dc_watchlist_delivery", "message_text", "TEXT")
-	if err := s.migrateLegacyTables(); err != nil {
-		return err
-	}
-	return nil
 }
 
 func (s *Store) migrateLegacyTables() error {
@@ -222,11 +634,27 @@ FROM watchlist_delivery`); err != nil {
 
 func (s *Store) tableExists(name string) (bool, error) {
 	var n int
+	if s.dialect == "mysql" {
+		err := s.db.QueryRow(`SELECT COUNT(1) FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = ?`, name).Scan(&n)
+		return n > 0, err
+	}
 	err := s.db.QueryRow(`SELECT COUNT(1) FROM sqlite_master WHERE type = 'table' AND name = ?`, name).Scan(&n)
 	return n > 0, err
 }
 
 func (s *Store) addColumnIfMissing(table, column, typ string) error {
+	if s.dialect == "mysql" {
+		var n int
+		err := s.db.QueryRow(`SELECT COUNT(1) FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ? AND column_name = ?`, table, column).Scan(&n)
+		if err != nil {
+			return err
+		}
+		if n > 0 {
+			return nil
+		}
+		_, err = s.db.Exec(`ALTER TABLE ` + table + ` ADD COLUMN ` + column + ` ` + typ)
+		return err
+	}
 	rows, err := s.db.Query(`PRAGMA table_info(` + table + `)`)
 	if err != nil {
 		return err
@@ -305,6 +733,28 @@ func (s *Store) UpsertTaskDefinition(ctx context.Context, def TaskDefinition, no
 	}
 	nowText := now.UTC().Format(time.RFC3339)
 	nextText := nowText
+	if s.dialect == "mysql" {
+		_, err := s.db.ExecContext(ctx, `INSERT INTO dc_tasks_runtime (
+  task_id, task_type, enabled, schedule_mode, schedule_every_sec, source_platform, source_kind, source_url,
+  notify_channel, config_hash, next_run_at, updated_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON DUPLICATE KEY UPDATE
+  task_type = VALUES(task_type),
+  enabled = VALUES(enabled),
+  schedule_mode = VALUES(schedule_mode),
+  schedule_every_sec = VALUES(schedule_every_sec),
+  source_platform = VALUES(source_platform),
+  source_kind = VALUES(source_kind),
+  source_url = VALUES(source_url),
+  notify_channel = VALUES(notify_channel),
+  next_run_at = IF(config_hash != VALUES(config_hash), VALUES(next_run_at), next_run_at),
+  config_hash = VALUES(config_hash),
+  updated_at = VALUES(updated_at)`,
+			def.ID, def.Type, boolInt(def.Enabled), def.ScheduleMode, int64(def.ScheduleEvery.Seconds()),
+			nullStr(def.SourcePlatform), nullStr(def.SourceKind), nullStr(def.SourceURL), nullStr(def.NotifyChannel),
+			def.ConfigHash, nextText, nowText)
+		return err
+	}
 	_, err := s.db.ExecContext(ctx, `INSERT INTO dc_tasks_runtime (
   task_id, task_type, enabled, schedule_mode, schedule_every_sec, source_platform, source_kind, source_url,
   notify_channel, config_hash, next_run_at, updated_at
@@ -534,6 +984,21 @@ func (s *Store) UpsertDelivery(ctx context.Context, watchID, contentKey, channel
 		nextRetry = now.Add(5 * time.Minute).Format(time.RFC3339)
 	} else if status == StatusNotifyFailed {
 		status = StatusNotifyFinalFail
+	}
+	if s.dialect == "mysql" {
+		_, err := s.db.ExecContext(ctx, `INSERT INTO dc_watchlist_delivery (
+  watch_id, content_key, channel_id, status, notified_at, retry_count, next_retry_at, notify_error, message_title, message_text
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON DUPLICATE KEY UPDATE
+  status = VALUES(status),
+  notified_at = COALESCE(VALUES(notified_at), notified_at),
+  retry_count = retry_count + CASE WHEN VALUES(status) = ? THEN 1 ELSE 0 END,
+  next_retry_at = VALUES(next_retry_at),
+  notify_error = VALUES(notify_error),
+  message_title = COALESCE(VALUES(message_title), message_title),
+  message_text = COALESCE(VALUES(message_text), message_text)`,
+			watchID, contentKey, channelID, status, notified, 0, nullStr(nextRetry), nullStr(errText), nullStr(messageTitle), nullStr(messageText), StatusNotifyFailed)
+		return err
 	}
 	_, err := s.db.ExecContext(ctx, `INSERT INTO dc_watchlist_delivery (
   watch_id, content_key, channel_id, status, notified_at, retry_count, next_retry_at, notify_error, message_title, message_text

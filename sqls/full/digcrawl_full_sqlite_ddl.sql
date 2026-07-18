@@ -53,6 +53,27 @@ CREATE TABLE IF NOT EXISTS dc_tool_runs (
   created_at  TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS dc_watchlist_sources (
+  source_id          TEXT PRIMARY KEY,
+  name               TEXT,
+  platform           TEXT NOT NULL,
+  source_kind        TEXT NOT NULL,
+  source_url         TEXT NOT NULL,
+  enabled            INTEGER NOT NULL DEFAULT 1,
+  schedule_mode      TEXT NOT NULL DEFAULT 'interval',
+  schedule_every_sec INTEGER NOT NULL DEFAULT 21600,
+  notify_channel     TEXT,
+  options_json       TEXT,
+  created_at         TEXT NOT NULL,
+  updated_at         TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_dc_watchlist_sources_enabled
+  ON dc_watchlist_sources(enabled);
+
+CREATE INDEX IF NOT EXISTS idx_dc_watchlist_sources_platform_kind
+  ON dc_watchlist_sources(platform, source_kind);
+
 CREATE TABLE IF NOT EXISTS dc_watchlist_locks (
   watch_id    TEXT PRIMARY KEY,
   owner       TEXT NOT NULL,

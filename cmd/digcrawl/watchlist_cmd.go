@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
+	"fmt"
 	"log"
 	"math/rand"
 	"os"
@@ -11,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/originaleric/digcrawl/internal/watchlist"
 	watchlistservice "github.com/originaleric/digcrawl/internal/watchlist/service"
 )
 
@@ -23,6 +26,8 @@ func runWatchlist(args []string) {
 		runWatchlistRun(args[1:])
 	case "serve":
 		runWatchlistServe(args[1:])
+	case "source":
+		runWatchlistSource(args[1:])
 	default:
 		log.Fatalf("watchlist: unknown subcommand %q", args[0])
 	}
@@ -41,14 +46,14 @@ func runWatchlistRun(args []string) {
 	if !cfg.Watchlist.EnabledOrDefault() {
 		log.Fatal("watchlist: disabled; set Watchlist.Enabled=true")
 	}
-	if watchlistservice.ConfiguredItemCount(cfg) == 0 {
-		log.Fatal("watchlist: no items configured")
-	}
 	svc, err := watchlistservice.NewService(cfg)
 	if err != nil {
 		log.Fatalf("watchlist service: %v", err)
 	}
 	defer svc.Close()
+	if err := requireConfiguredWatchlistItems(context.Background(), svc); err != nil {
+		log.Fatal(err)
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -97,14 +102,14 @@ func runWatchlistServe(args []string) {
 	if !cfg.Watchlist.Scheduler.EnabledOrDefault() {
 		log.Fatal("watchlist scheduler: disabled; set Watchlist.Scheduler.Enabled=true")
 	}
-	if watchlistservice.ConfiguredItemCount(cfg) == 0 {
-		log.Fatal("watchlist: no items configured")
-	}
 	svc, err := watchlistservice.NewService(cfg)
 	if err != nil {
 		log.Fatalf("watchlist service: %v", err)
 	}
 	defer svc.Close()
+	if err := requireConfiguredWatchlistItems(context.Background(), svc); err != nil {
+		log.Fatal(err)
+	}
 
 	interval, err := time.ParseDuration(cfg.Watchlist.Scheduler.TickIntervalOrDefault())
 	if err != nil || interval <= 0 {
@@ -148,4 +153,153 @@ func runWatchlistServe(args []string) {
 			runDue()
 		}
 	}
+}
+
+func requireConfiguredWatchlistItems(ctx context.Context, svc interface {
+	ConfiguredItemCount(context.Context) (int, error)
+}) error {
+	n, err := svc.ConfiguredItemCount(ctx)
+	if err != nil {
+		return fmt.Errorf("watchlist: count configured items: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("watchlist: no items configured")
+	}
+	return nil
+}
+
+func runWatchlistSource(args []string) {
+	if len(args) == 0 {
+		log.Fatal("watchlist source: expected subcommand list|add|enable|disable|delete")
+	}
+	switch args[0] {
+	case "list":
+		runWatchlistSourceList(args[1:])
+	case "add":
+		runWatchlistSourceAdd(args[1:])
+	case "enable":
+		runWatchlistSourceSetEnabled(args[1:], true)
+	case "disable":
+		runWatchlistSourceSetEnabled(args[1:], false)
+	case "delete":
+		runWatchlistSourceDelete(args[1:])
+	default:
+		log.Fatalf("watchlist source: unknown subcommand %q", args[0])
+	}
+}
+
+func openWatchlistSourceStore(configPath string) (*watchlist.Store, error) {
+	cfg, err := loadConfig(configPath)
+	if err != nil {
+		return nil, fmt.Errorf("load config: %w", err)
+	}
+	return watchlistservice.OpenConfiguredStore(cfg)
+}
+
+func runWatchlistSourceList(args []string) {
+	fs := flag.NewFlagSet("watchlist source list", flag.ExitOnError)
+	configPath := fs.String("config", "config/config.yaml", "path to config.yaml")
+	enabledOnly := fs.Bool("enabled-only", false, "only list enabled sources")
+	_ = fs.Parse(args)
+	st, err := openWatchlistSourceStore(*configPath)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer st.Close()
+	sources, err := st.ListSources(context.Background(), *enabledOnly)
+	if err != nil {
+		log.Fatal(err)
+	}
+	out := make([]watchlistSourceView, 0, len(sources))
+	for _, src := range sources {
+		out = append(out, watchlistSourceView{
+			ID: src.ID, Name: src.Name, Platform: src.Platform, Kind: src.Type, URL: src.URL,
+			Enabled: src.Enabled, ScheduleMode: src.ScheduleMode, Every: src.Interval.String(),
+			NotifyTo: src.NotifyTo, Options: src.Options,
+		})
+	}
+	data, _ := json.MarshalIndent(out, "", "  ")
+	fmt.Println(string(data))
+}
+
+type watchlistSourceView struct {
+	ID           string         `json:"id"`
+	Name         string         `json:"name,omitempty"`
+	Platform     string         `json:"platform"`
+	Kind         string         `json:"kind"`
+	URL          string         `json:"url"`
+	Enabled      bool           `json:"enabled"`
+	ScheduleMode string         `json:"schedule_mode"`
+	Every        string         `json:"every"`
+	NotifyTo     string         `json:"notify_to,omitempty"`
+	Options      map[string]any `json:"options,omitempty"`
+}
+
+func runWatchlistSourceAdd(args []string) {
+	fs := flag.NewFlagSet("watchlist source add", flag.ExitOnError)
+	configPath := fs.String("config", "config/config.yaml", "path to config.yaml")
+	id := fs.String("id", "", "source id")
+	name := fs.String("name", "", "source display name")
+	platform := fs.String("platform", "", "source platform, e.g. reddit/x/toutiao/rss")
+	kind := fs.String("kind", "", "source kind, e.g. reddit_subreddit/rss/toutiao_author/x_user")
+	sourceURL := fs.String("url", "", "source URL")
+	every := fs.String("every", "6h", "scan interval")
+	notify := fs.String("notify", "", "notification channel id")
+	enabled := fs.Bool("enabled", true, "enable source")
+	optionsRaw := fs.String("options", "", "JSON object options")
+	_ = fs.Parse(args)
+	interval, err := time.ParseDuration(*every)
+	if err != nil {
+		log.Fatalf("watchlist source add: invalid --every: %v", err)
+	}
+	options := map[string]any(nil)
+	if strings.TrimSpace(*optionsRaw) != "" {
+		if err := json.Unmarshal([]byte(*optionsRaw), &options); err != nil {
+			log.Fatalf("watchlist source add: invalid --options JSON: %v", err)
+		}
+	}
+	st, err := openWatchlistSourceStore(*configPath)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer st.Close()
+	if err := st.UpsertSource(context.Background(), watchlist.WatchSource{
+		ID: *id, Name: *name, Platform: *platform, Type: *kind, URL: *sourceURL,
+		Enabled: *enabled, ScheduleMode: "interval", Interval: interval, NotifyTo: *notify, Options: options,
+	}); err != nil {
+		log.Fatal(err)
+	}
+	log.Printf("watchlist source %q saved", strings.TrimSpace(*id))
+}
+
+func runWatchlistSourceSetEnabled(args []string, enabled bool) {
+	fs := flag.NewFlagSet("watchlist source enabled", flag.ExitOnError)
+	configPath := fs.String("config", "config/config.yaml", "path to config.yaml")
+	id := fs.String("id", "", "source id")
+	_ = fs.Parse(args)
+	st, err := openWatchlistSourceStore(*configPath)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer st.Close()
+	if err := st.SetSourceEnabled(context.Background(), *id, enabled); err != nil {
+		log.Fatal(err)
+	}
+	log.Printf("watchlist source %q enabled=%v", strings.TrimSpace(*id), enabled)
+}
+
+func runWatchlistSourceDelete(args []string) {
+	fs := flag.NewFlagSet("watchlist source delete", flag.ExitOnError)
+	configPath := fs.String("config", "config/config.yaml", "path to config.yaml")
+	id := fs.String("id", "", "source id")
+	_ = fs.Parse(args)
+	st, err := openWatchlistSourceStore(*configPath)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer st.Close()
+	if err := st.DeleteSource(context.Background(), *id); err != nil {
+		log.Fatal(err)
+	}
+	log.Printf("watchlist source %q deleted", strings.TrimSpace(*id))
 }
