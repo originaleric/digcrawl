@@ -581,11 +581,46 @@ digcrawl browser check         # 检查平台会话，可选试读
 digcrawl asr transcribe        # ffmpeg 抽音频并转写
 digcrawl watchlist run         # 执行 watchlist 监控、摘要和通知
 digcrawl watchlist serve       # 常驻调度，到期执行不同周期的 Tasks / Watchlist items
+scripts/digcrawl-watchlist-service.sh install|start|stop|restart|status|logs|uninstall
 digcollect <url>              # 轻量采集入口，等价于 digcrawl collect <url>
 digcrawl help
 ```
 
 全局习惯：多数子命令支持 `--config <path>` 指定配置文件。
+
+### Watchlist 常驻服务脚本
+
+`scripts/digcrawl-watchlist-service.sh` 用于把 `digcrawl watchlist serve` 托管为用户级服务，方便本机或小型服务器部署。
+
+- macOS：生成 `~/Library/LaunchAgents/com.digcrawl.watchlist.plist` 并通过 `launchctl` 管理。
+- Linux：生成 `~/.config/systemd/user/digcrawl-watchlist.service` 并通过 `systemctl --user` 管理。
+- 日志：macOS 写入 `DIGCRAWL_LOG_DIR` 下的 `watchlist.out.log` / `watchlist.err.log`；Linux 默认进入 user journal，通过脚本的 `logs` 命令查看。
+
+常用命令：
+
+```bash
+DIGCRAWL_BIN="$PWD/digcrawl" \
+DIGCRAWL_CONFIG="$PWD/config/config.yaml" \
+./scripts/digcrawl-watchlist-service.sh install
+
+./scripts/digcrawl-watchlist-service.sh start
+./scripts/digcrawl-watchlist-service.sh status
+./scripts/digcrawl-watchlist-service.sh logs
+./scripts/digcrawl-watchlist-service.sh restart
+./scripts/digcrawl-watchlist-service.sh stop
+./scripts/digcrawl-watchlist-service.sh uninstall
+```
+
+可选环境变量：
+
+| 变量 | 说明 |
+|------|------|
+| `DIGCRAWL_BIN` | `digcrawl` 二进制路径，默认优先使用仓库根目录的 `./digcrawl` |
+| `DIGCRAWL_CONFIG` | 配置文件路径，默认 `config/config.yaml` |
+| `DIGCRAWL_WORKDIR` | 服务工作目录，默认仓库根目录 |
+| `DIGCRAWL_LOG_DIR` | 日志目录，默认 `logs/` |
+| `DIGCRAWL_SERVICE_NAME` | Linux systemd service 名，默认 `digcrawl-watchlist` |
+| `DIGCRAWL_SERVICE_LABEL` | macOS launchd label，默认 `com.digcrawl.watchlist` |
 
 ---
 

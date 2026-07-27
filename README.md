@@ -128,6 +128,20 @@ Watchlist 常驻调度：
 
 `watchlist serve` 会按 `Watchlist.Scheduler.TickInterval` 扫描到期任务，没有 runtime 状态的 task 会立即执行一次，之后按 `Tasks[].Schedule.Every` 或旧 `Watchlist.Items[].Interval` 写入 `dc_tasks_runtime.next_run_at` 并判断是否到期。`watchlist run` 保留为整轮执行入口，适合手动触发或外部 cron。
 
+macOS / Linux 可用仓库内脚本把 `watchlist serve` 安装为用户级常驻服务。脚本会在 macOS 生成 `launchd` plist，在 Linux 生成 `systemd --user` service：
+
+```bash
+DIGCRAWL_BIN="$PWD/digcrawl" \
+DIGCRAWL_CONFIG="$PWD/config/config.yaml" \
+./scripts/digcrawl-watchlist-service.sh install
+
+./scripts/digcrawl-watchlist-service.sh start
+./scripts/digcrawl-watchlist-service.sh status
+./scripts/digcrawl-watchlist-service.sh logs
+./scripts/digcrawl-watchlist-service.sh restart
+./scripts/digcrawl-watchlist-service.sh uninstall
+```
+
 Watchlist 清单支持 `Watchlist.Source.Mode` 选择来源：`yaml` 从 `Watchlist.Items` 和根级 `Tasks` 读取，`database` 从 `dc_watchlist_sources` 读取，`mixed` 同时读取且同 ID 时数据库覆盖 YAML。长清单建议使用 `database`，YAML 只保留调度、通知和持久化配置。持久化后端由 `Watchlist.Persistence.Driver` 决定，支持 `sqlite` 和 `mysql`；MySQL 可直接配置 `MySQLDSN`，也可通过 `GormConfigPath` 读取 `config/gorm.yml` 的写库配置。
 
 ```bash
@@ -330,6 +344,7 @@ curl -s http://127.0.0.1:8787/manifest
 | `digcrawl watchlist run` | 执行一轮 watchlist 监控、摘要和通知 |
 | `digcrawl watchlist serve` | 常驻调度，到期执行不同周期的 Tasks / Watchlist items |
 | `digcrawl watchlist source` | 维护持久化 watchlist 清单，写入 `dc_watchlist_sources` |
+| `scripts/digcrawl-watchlist-service.sh` | 将 watchlist 常驻调度安装为 macOS launchd / Linux systemd 用户服务 |
 | `digcrawl gateway` | HTTP 工具网关，含 `/admin/watchlist/*` 运维接口 |
 | `digcrawl collector` | WebSocket 反向连接 Collector |
 | `digcrawl connect` | 保存宿主配置并启动 Collector |
