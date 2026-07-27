@@ -144,6 +144,8 @@ DIGCRAWL_CONFIG="$PWD/config/config.yaml" \
 
 Watchlist 清单支持 `Watchlist.Source.Mode` 选择来源：`yaml` 从 `Watchlist.Items` 和根级 `Tasks` 读取，`database` 从 `dc_watchlist_sources` 读取，`mixed` 同时读取且同 ID 时数据库覆盖 YAML。长清单建议使用 `database`，YAML 只保留调度、通知和持久化配置。持久化后端由 `Watchlist.Persistence.Driver` 决定，支持 `sqlite` 和 `mysql`；MySQL 可直接配置 `MySQLDSN`，也可通过 `GormConfigPath` 读取 `config/gorm.yml` 的写库配置。
 
+Watchlist 建议优先配置来源页或列表页，而不是最终文章/帖子 URL。来源页会定期 Discover 最新内容 URL，并按 source 级 `content_key` 去重后只采集新增内容；最终详情页类 source 仍可用于单次归档、评论或互动变更监控。当前对外 source kind 包括 `rss`、`sitemap`、`reddit_subreddit`、`reddit_user`、`reddit_post_comments`、`toutiao_author`、`toutiao_article`、`x_user`、`x_post`、`douyin_user`、`douyin_video`、`xiaohongshu_user`、`xiaohongshu_note`、`wechat_list`、`wechat_article`、`web_list`。
+
 ```bash
 ./digcrawl watchlist source add --config config/config.yaml \
   --id reddit-ai --name "Reddit AI" --platform reddit --kind reddit_subreddit \
@@ -151,6 +153,7 @@ Watchlist 清单支持 `Watchlist.Source.Mode` 选择来源：`yaml` 从 `Watchl
   --notify feishu-default --options '{"sort":"new","limit":25}'
 
 ./digcrawl watchlist source list --config config/config.yaml
+./digcrawl watchlist source test-discover --config config/config.yaml --id reddit-ai
 ./digcrawl watchlist source disable --config config/config.yaml --id reddit-ai
 ./digcrawl watchlist source enable --config config/config.yaml --id reddit-ai
 ./digcrawl watchlist source delete --config config/config.yaml --id reddit-ai
@@ -166,9 +169,12 @@ curl -X POST -H "Authorization: Bearer $DIGCRAWL_GATEWAY_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"id":"reddit-ai","name":"Reddit AI","platform":"reddit","kind":"reddit_subreddit","url":"https://www.reddit.com/r/artificial/new/","every":"6h","notify_to":"feishu-default","options":{"sort":"new","limit":25}}' \
   http://127.0.0.1:8787/admin/watchlist/sources
+
+curl -X POST -H "Authorization: Bearer $DIGCRAWL_GATEWAY_TOKEN" \
+  http://127.0.0.1:8787/admin/watchlist/sources/reddit-ai/discover
 ```
 
-可用接口：`GET /admin/watchlist/sources`、`GET /admin/watchlist/sources/{id}`、`POST /admin/watchlist/sources`、`PUT /admin/watchlist/sources/{id}`、`PATCH /admin/watchlist/sources/{id}/enable`、`PATCH /admin/watchlist/sources/{id}/disable`、`DELETE /admin/watchlist/sources/{id}`、`POST /admin/watchlist/sources/{id}/run`、`POST /admin/watchlist/run-due`。
+可用接口：`GET /admin/watchlist/sources`、`GET /admin/watchlist/sources/{id}`、`POST /admin/watchlist/sources`、`PUT /admin/watchlist/sources/{id}`、`PATCH /admin/watchlist/sources/{id}/enable`、`PATCH /admin/watchlist/sources/{id}/disable`、`DELETE /admin/watchlist/sources/{id}`、`POST /admin/watchlist/sources/{id}/discover`、`POST /admin/watchlist/sources/{id}/run`、`POST /admin/watchlist/run-due`。
 
 DigFlow HTTP 摘要不需要编译私有 DigFlow runtime；默认构建下 `digflow_runtime` 会使用 stub 并回退到 extractive 摘要，避免普通测试和本地运行被私有仓库下载阻断。需要启用 DigFlow 内嵌 Runtime 时，使用 `-tags digflow_embedded` 构建，并先准备 SSH/GOPRIVATE、数据库与模型配置。DigFlow `v1.1.3` 的轻量化主要面向 `pkg/digflowapi` / `pkg/digflowtypes` 公共 DTO；digcrawl 内嵌模式仍使用 `pkg/digflow` runtime，首次构建仍会拉取 runtime 依赖树。真实数据库连接写入本地 `config/gorm.yml`，该文件已被 `.gitignore` 忽略；仓库提供无密钥模板 `config/gorm.example.yml`。DigFlow 自身表保持 `df_` 前缀，配置入口为 `config/digflow-gorm.yml`、`config/digflow.yml`、`config/eino.yml` 和 `agents/watchlist/agents.yml`。
 

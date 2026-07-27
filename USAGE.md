@@ -304,7 +304,18 @@ Watchlist 用于按配置定期检查指定来源的新增内容，复用 Collec
 
 `Tasks[].Schedule.Mode` 当前支持 `interval`；`Every` 使用 Go duration，例如 `6h`、`24h`、`30m`。调度状态写入通用 `dc_tasks_runtime` / `dc_task_runs` / `dc_task_locks` / `dc_task_events`：没有 runtime 状态的任务会立即执行一次，之后按 `Every` 更新 `next_run_at` 并判断是否到期。
 
-Watchlist 的来源发现由 `internal/source.Service` 统一承载，当前覆盖 RSS/Atom、sitemap、HTML 链接发现、今日头条固定文章/作者页、X/Twitter 单帖/用户页链接发现和 Reddit listing/comment 来源。Watchlist 只负责调度、去重、详情采集、摘要和通知，因此后续新增渠道应优先接入 `internal/source`，再由 Watchlist、Tasks 或其他 domain 复用。
+Watchlist 的来源发现由 `internal/source.Service` 统一承载，当前覆盖 RSS/Atom、sitemap、HTML 链接发现、今日头条固定文章/作者页、X/Twitter 单帖/用户页链接发现、抖音作品/用户页链接发现、小红书笔记/用户页链接发现、微信公众号文章/列表页链接发现和 Reddit listing/comment 来源。Watchlist 只负责调度、去重、详情采集、摘要和通知，因此后续新增渠道应优先接入 `internal/source`，再由 Watchlist、Tasks 或其他 domain 复用。
+
+推荐维护来源页或列表页 source，例如 `rss`、`sitemap`、`reddit_subreddit`、`reddit_user`、`toutiao_author`、`x_user`、`douyin_user`、`xiaohongshu_user`、`wechat_list`、`web_list`。`toutiao_article`、`x_post`、`douyin_video`、`xiaohongshu_note`、`wechat_article`、`reddit_post_comments` 属于详情页或评论变更监控，适合单次归档、评论更新或互动状态检查，不适合作为“新增 po 文”主来源。
+
+上线前可以先做 discover-only 验证，只检查来源页能否发现内容，不写入 `dc_watchlist_items`，也不会触发 collect、summary 或 notify：
+
+```bash
+digcrawl watchlist source test-discover --config config/config.yaml --id reddit-ai
+
+curl -X POST -H "Authorization: Bearer $DIGCRAWL_GATEWAY_TOKEN" \
+  http://127.0.0.1:8787/admin/watchlist/sources/reddit-ai/discover
+```
 
 `Watchlist.Items[].Options` 可为不同平台提供扩展参数。Reddit 已支持：
 
@@ -315,12 +326,31 @@ Watchlist 的来源发现由 `internal/source.Service` 统一承载，当前覆�
 今日头条已支持：
 
 - `article` / `group` / `toutiao_article`：固定头条文章 URL 监控，例如 `https://www.toutiao.com/w/.../`、`https://www.toutiao.com/group/.../` 或 `https://www.toutiao.com/article/.../`。该模式复用已验证的 `toutiao.article.read` 抓取链路。
-- `author` / `user`：作者页链接发现；静态 `href`、hydration 中的转义 URL 和相对内容路径都会尝试解析，但头条作者页若完全依赖动态 API/登录态，仍可能需要后续专用 API 或 headless 渲染发现。
+- `toutiao_author` / `author` / `user`：作者页链接发现；静态 `href`、hydration 中的转义 URL 和相对内容路径都会尝试解析，发现结果使用 `toutiao:<article_id>` 去重。头条作者页若完全依赖动态 API/登录态，仍可能需要后续专用 API 或 headless 渲染发现。
 
 X / Twitter 已支持：
 
 - `x_post`：固定单帖 URL 监控，例如 `https://x.com/elonmusk/status/...`。该模式复用已验证的 `x.post.read` 抓取链路。
-- `x_user`：用户主页静态 status 链接发现；X 主页内容通常依赖前端动态加载，未登录/未渲染 HTML 可能发现不到最新帖子，生产使用建议优先配置明确的 `x_post` 或后续接入 X API/浏览器渲染发现。
+- `x_user`：用户主页静态 status 链接发现，发现结果使用 `x:<status_id>` 去重；X 主页内容通常依赖前端动态加载，未登录/未渲染 HTML 可能发现不到最新帖子，生产使用建议后续接入 X API/浏览器渲染发现。
+
+抖音已支持：
+
+- `douyin_video` / `video`：固定抖音作品 URL 监控，例如 `https://www.douyin.com/video/...`、`https://www.iesdouyin.com/share/video/...` 或带 `modal_id` 的用户页链接，发现结果使用 `douyin:<work_id>` 去重。
+- `douyin_user` / `user`：用户页或列表页作品链接发现，静态链接、hydration URL 和 browser fallback metadata 都会参与候选提取；可配合 `wait_selector`、`include_pattern`、`limit` 收窄范围。
+
+小红书已支持：
+
+- `xiaohongshu_note` / `xhs_note`：固定笔记 URL 监控，例如 `https://www.xiaohongshu.com/explore/...` 或 `/discovery/item/...`，发现结果使用 `xiaohongshu:<note_id>` 去重。
+- `xiaohongshu_user` / `xhs_user`：用户页或列表页笔记链接发现，发现结果会规范化为 `/explore/<note_id>` 并使用稳定 note id 去重；登录态平台建议先执行 `digcrawl browser login --platform xiaohongshu`。
+
+微信公众号已支持：
+
+- `wechat_article`：固定公众号文章 URL 监控，例如 `https://mp.weixin.qq.com/s/...`。
+- `wechat_list`：公众号文章列表页或普通页面中的 `mp.weixin.qq.com/s...` 链接发现，发现结果使用规范化文章 URL hash 去重；列表页若需要登录或动态加载，可使用 browser fallback 和 `wait_selector`。
+
+普通网页已支持：
+
+- `web_list`：从列表页或首页抽取同域链接，默认用规范化 URL 作为 `content_key`，并去除 `utm_*`、`spm` 等常见追踪参数；可用 `include_pattern`、`exclude_pattern`、`limit`、`wait_selector`、`content_selector` 控制 URL 范围、数量和 browser fallback 提取时机。
 
 `Summary` 字段：
 

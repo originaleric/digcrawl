@@ -178,6 +178,8 @@ func BrowserBrowse(ctx context.Context, req *BrowserBrowseRequest) (*BrowserBrow
 	if script := strings.TrimSpace(req.MetadataScript); script != "" {
 		if meta, err := evalPageMetadata(page, script); err == nil && len(meta) > 0 {
 			resp.Metadata = meta
+		} else if err != nil {
+			resp.Metadata = map[string]any{"_metadata_error": err.Error()}
 		}
 	}
 
@@ -196,6 +198,31 @@ func evalPageMetadata(page *rod.Page, script string) (map[string]any, error) {
 	if result == nil {
 		return nil, fmt.Errorf("metadata script returned nil")
 	}
+	if rawValue := result.Value.Raw(); rawValue != nil {
+		if rawString, ok := rawValue.(string); ok {
+			var meta map[string]any
+			if err := json.Unmarshal([]byte(strings.TrimSpace(rawString)), &meta); err == nil {
+				return meta, nil
+			}
+			return nil, fmt.Errorf("metadata value string is not a JSON object: %s", truncateForError(rawString, 120))
+		}
+		if rawBytes, ok := rawValue.([]byte); ok {
+			var meta map[string]any
+			if err := json.Unmarshal(rawBytes, &meta); err != nil {
+				return nil, fmt.Errorf("metadata value bytes is not a JSON object: %w", err)
+			}
+			return meta, nil
+		}
+		data, err := json.Marshal(rawValue)
+		if err != nil {
+			return nil, fmt.Errorf("metadata value is not JSON: %w", err)
+		}
+		var meta map[string]any
+		if err := json.Unmarshal(data, &meta); err != nil {
+			return nil, fmt.Errorf("metadata value is not a JSON object: type=%T value=%s err=%w", rawValue, truncateForError(string(data), 120), err)
+		}
+		return meta, nil
+	}
 	jsonVal, err := page.ObjectToJSON(result)
 	if err != nil {
 		return nil, err
@@ -209,6 +236,14 @@ func evalPageMetadata(page *rod.Page, script string) (map[string]any, error) {
 		return nil, fmt.Errorf("metadata is not a JSON object: %w", err)
 	}
 	return meta, nil
+}
+
+func truncateForError(value string, limit int) string {
+	value = strings.TrimSpace(value)
+	if limit <= 0 || len(value) <= limit {
+		return value
+	}
+	return value[:limit] + "..."
 }
 
 func validateURL(rawURL string) (*url.URL, error) {

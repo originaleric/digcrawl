@@ -168,3 +168,58 @@ func TestWatchlistAdminRequiresConfiguredGatewayToken(t *testing.T) {
 		t.Fatalf("admin API should not register without gateway token, got %d body %s", rec.Code, rec.Body.String())
 	}
 }
+
+func TestWatchlistAdminSourceDiscover(t *testing.T) {
+	t.Parallel()
+	feedSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`<?xml version="1.0"?><rss><channel><item><title>A</title><link>https://example.com/a</link><guid>g1</guid></item></channel></rss>`))
+	}))
+	defer feedSrv.Close()
+
+	reg := registry.New()
+	rt := runtime.New(reg, runtime.Options{InstanceID: "test"})
+	cfg := &config.Config{
+		Watchlist: config.WatchlistConfig{
+			Source: config.WatchlistSourceConfig{
+				Mode: "database",
+			},
+			Persistence: config.WatchlistPersistenceConfig{
+				Driver:     "sqlite",
+				SQLitePath: filepath.Join(t.TempDir(), "watchlist.db"),
+			},
+		},
+	}
+	srv := NewServer(rt, nil, "secret")
+	srv.EnableWatchlistAdmin(cfg)
+
+	body := []byte(`{"id":"rss-local","name":"RSS Local","platform":"rss","kind":"rss","url":"` + feedSrv.URL + `","every":"30m"}`)
+	req := httptest.NewRequest(http.MethodPost, "/admin/watchlist/sources", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer secret")
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create status %d body %s", rec.Code, rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/admin/watchlist/sources/rss-local/discover", nil)
+	req.Header.Set("Authorization", "Bearer secret")
+	rec = httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("discover status %d body %s", rec.Code, rec.Body.String())
+	}
+	var out struct {
+		Count int `json:"count"`
+		Items []struct {
+			ContentKey string `json:"content_key"`
+			URL        string `json:"url"`
+			Title      string `json:"title"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if out.Count != 1 || len(out.Items) != 1 || out.Items[0].ContentKey != "g1" || out.Items[0].Title != "A" {
+		t.Fatalf("unexpected discover response: %+v", out)
+	}
+}

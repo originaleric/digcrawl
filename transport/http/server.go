@@ -46,6 +46,7 @@ func (s *Server) EnableWatchlistAdmin(cfg *config.Config) {
 	s.mux.HandleFunc("DELETE /admin/watchlist/sources/{id}", s.handleWatchlistSourcesDelete(cfg))
 	s.mux.HandleFunc("PATCH /admin/watchlist/sources/{id}/enable", s.handleWatchlistSourcesSetEnabled(cfg, true))
 	s.mux.HandleFunc("PATCH /admin/watchlist/sources/{id}/disable", s.handleWatchlistSourcesSetEnabled(cfg, false))
+	s.mux.HandleFunc("POST /admin/watchlist/sources/{id}/discover", s.handleWatchlistSourcesDiscover(cfg))
 	s.mux.HandleFunc("POST /admin/watchlist/sources/{id}/run", s.handleWatchlistSourcesRun(cfg))
 	s.mux.HandleFunc("POST /admin/watchlist/run-due", s.handleWatchlistRunDue(cfg))
 }
@@ -268,6 +269,23 @@ func (s *Server) handleWatchlistSourcesRun(cfg *config.Config) http.HandlerFunc 
 	}
 }
 
+func (s *Server) handleWatchlistSourcesDiscover(cfg *config.Config) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		svc, err := watchlistservice.NewDiscoverService(cfg)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		defer svc.Close()
+		items, err := svc.DiscoverConfiguredItem(r.Context(), r.PathValue("id"))
+		status := http.StatusOK
+		if err != nil {
+			status = http.StatusBadRequest
+		}
+		writeJSON(w, status, map[string]any{"count": len(items), "items": discoveredItemViews(items), "error": errorString(err)})
+	}
+}
+
 func (s *Server) handleWatchlistRunDue(cfg *config.Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		svc, err := watchlistservice.NewService(cfg)
@@ -309,6 +327,18 @@ type watchlistSourceView struct {
 	Every        string         `json:"every"`
 	NotifyTo     string         `json:"notify_to,omitempty"`
 	Options      map[string]any `json:"options,omitempty"`
+}
+
+type watchlistDiscoveredItemView struct {
+	ID           string         `json:"id,omitempty"`
+	ContentKey   string         `json:"content_key"`
+	URL          string         `json:"url"`
+	CanonicalURL string         `json:"canonical_url,omitempty"`
+	Title        string         `json:"title,omitempty"`
+	Author       string         `json:"author,omitempty"`
+	PublishedAt  string         `json:"published_at,omitempty"`
+	ContentType  string         `json:"content_type,omitempty"`
+	Raw          map[string]any `json:"raw,omitempty"`
 }
 
 func readWatchlistSourceRequest(r *http.Request) (watchlist.WatchSource, error) {
@@ -355,6 +385,25 @@ func sourceView(src watchlist.WatchSource) watchlistSourceView {
 		Enabled: src.Enabled, ScheduleMode: src.ScheduleMode, Every: src.Interval.String(),
 		NotifyTo: src.NotifyTo, Options: src.Options,
 	}
+}
+
+func discoveredItemViews(items []watchlist.FeedItem) []watchlistDiscoveredItemView {
+	out := make([]watchlistDiscoveredItemView, 0, len(items))
+	for _, item := range items {
+		out = append(out, watchlistDiscoveredItemView{
+			ID: item.ID, ContentKey: item.ContentKey, URL: item.URL, CanonicalURL: item.CanonicalURL,
+			Title: item.Title, Author: item.Author, PublishedAt: formatOptionalTime(item.PublishedAt),
+			ContentType: item.ContentType, Raw: item.Raw,
+		})
+	}
+	return out
+}
+
+func formatOptionalTime(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	return t.Format(time.RFC3339)
 }
 
 func errorString(err error) string {

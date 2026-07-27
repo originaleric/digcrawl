@@ -122,6 +122,22 @@ func NewService(cfg *config.Config) (*Service, error) {
 	}, nil
 }
 
+func NewDiscoverService(cfg *config.Config) (*Service, error) {
+	var st *watchlist.Store
+	var err error
+	if cfg == nil {
+		cfg = &config.Config{}
+	}
+	switch cfg.Watchlist.SourceModeOrDefault() {
+	case "database", "mixed":
+		st, err = openWatchlistStore(cfg)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return &Service{cfg: cfg, store: st, feeds: FeedRegistry{}, owner: "digcrawl-discover"}, nil
+}
+
 func openWatchlistStore(cfg *config.Config) (*watchlist.Store, error) {
 	driver := cfg.Watchlist.PersistenceDriverOrDefault()
 	opts := watchlist.StoreOptions{Driver: driver}
@@ -332,6 +348,39 @@ func (s *Service) RunConfiguredItem(ctx context.Context, id string) (RunSummary,
 		return s.RunItem(ctx, item)
 	}
 	return RunSummary{WatchID: id}, fmt.Errorf("watchlist item %q not found", id)
+}
+
+func (s *Service) DiscoverConfiguredItem(ctx context.Context, id string) ([]FeedItem, error) {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return nil, fmt.Errorf("watchlist item id is required")
+	}
+	rawItems, err := s.configuredItems(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, raw := range rawItems {
+		if strings.TrimSpace(raw.ID) != id {
+			continue
+		}
+		item, err := s.normalizeItem(raw)
+		if err != nil {
+			return nil, err
+		}
+		if !item.Enabled {
+			return nil, fmt.Errorf("watchlist item %q is disabled", id)
+		}
+		feeds, err := s.feeds.ListLatest(ctx, item)
+		if err != nil {
+			return nil, err
+		}
+		limit := s.cfg.Watchlist.MaxItemsPerRunOrDefault()
+		if limit > 0 && len(feeds) > limit {
+			feeds = feeds[:limit]
+		}
+		return feeds, nil
+	}
+	return nil, fmt.Errorf("watchlist item %q not found", id)
 }
 
 func (s *Service) RunDue(ctx context.Context, now time.Time) ([]RunSummary, error) {

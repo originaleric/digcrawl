@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -269,5 +271,28 @@ func TestConfiguredItemsMixedModeLetsDatabaseOverrideYaml(t *testing.T) {
 	}
 	if len(items) != 1 || items[0].Platform != "reddit" || items[0].URL != "https://www.reddit.com/r/artificial/new/" {
 		t.Fatalf("mixed override mismatch: %+v", items)
+	}
+}
+
+func TestDiscoverConfiguredItemUsesConfiguredSourceWithoutPersisting(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`<?xml version="1.0"?><rss><channel><item><title>A</title><link>https://example.com/a</link><guid>g1</guid></item><item><title>B</title><link>https://example.com/b</link><guid>g2</guid></item></channel></rss>`))
+	}))
+	defer srv.Close()
+
+	cfg := &config.Config{Watchlist: config.WatchlistConfig{
+		DefaultInterval: "6h",
+		MaxItemsPerRun:  1,
+		Items: []config.WatchlistItem{{
+			ID: "rss-local", Platform: "rss", Type: "rss", URL: srv.URL, Enabled: boolPtr(true),
+		}},
+	}}
+	svc := &Service{cfg: cfg, feeds: FeedRegistry{Client: srv.Client()}}
+	items, err := svc.DiscoverConfiguredItem(context.Background(), "rss-local")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 || items[0].ContentKey != "g1" {
+		t.Fatalf("unexpected discovered items: %+v", items)
 	}
 }

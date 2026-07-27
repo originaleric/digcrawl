@@ -57,7 +57,7 @@ func runWatchlistRun(args []string) {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	run := func() {
+	run := func() error {
 		summaries, err := svc.RunOnce(ctx)
 		for _, s := range summaries {
 			log.Printf("watchlist run=%s watch=%s discovered=%d new=%d collected=%d summarized=%d notified=%d locked=%v errors=%s",
@@ -66,11 +66,15 @@ func runWatchlistRun(args []string) {
 		if err != nil {
 			log.Printf("watchlist run error: %v", err)
 		}
+		return err
 	}
-	run()
 	if *once {
+		if err := run(); err != nil {
+			os.Exit(1)
+		}
 		return
 	}
+	run()
 	interval, err := time.ParseDuration(cfg.Watchlist.DefaultIntervalOrDefault())
 	if err != nil || interval <= 0 {
 		interval = 6 * time.Hour
@@ -170,7 +174,7 @@ func requireConfiguredWatchlistItems(ctx context.Context, svc interface {
 
 func runWatchlistSource(args []string) {
 	if len(args) == 0 {
-		log.Fatal("watchlist source: expected subcommand list|add|enable|disable|delete")
+		log.Fatal("watchlist source: expected subcommand list|add|enable|disable|delete|test-discover")
 	}
 	switch args[0] {
 	case "list":
@@ -183,6 +187,8 @@ func runWatchlistSource(args []string) {
 		runWatchlistSourceSetEnabled(args[1:], false)
 	case "delete":
 		runWatchlistSourceDelete(args[1:])
+	case "test-discover":
+		runWatchlistSourceTestDiscover(args[1:])
 	default:
 		log.Fatalf("watchlist source: unknown subcommand %q", args[0])
 	}
@@ -241,7 +247,7 @@ func runWatchlistSourceAdd(args []string) {
 	id := fs.String("id", "", "source id")
 	name := fs.String("name", "", "source display name")
 	platform := fs.String("platform", "", "source platform, e.g. reddit/x/toutiao/rss")
-	kind := fs.String("kind", "", "source kind, e.g. reddit_subreddit/rss/toutiao_author/x_user")
+	kind := fs.String("kind", "", "source kind, e.g. rss/sitemap/reddit_subreddit/reddit_user/reddit_post_comments/toutiao_author/toutiao_article/x_user/x_post/douyin_user/douyin_video/xiaohongshu_user/xiaohongshu_note/wechat_list/wechat_article/web_list")
 	sourceURL := fs.String("url", "", "source URL")
 	every := fs.String("every", "6h", "scan interval")
 	notify := fs.String("notify", "", "notification channel id")
@@ -302,4 +308,54 @@ func runWatchlistSourceDelete(args []string) {
 		log.Fatal(err)
 	}
 	log.Printf("watchlist source %q deleted", strings.TrimSpace(*id))
+}
+
+func runWatchlistSourceTestDiscover(args []string) {
+	fs := flag.NewFlagSet("watchlist source test-discover", flag.ExitOnError)
+	configPath := fs.String("config", "config/config.yaml", "path to config.yaml")
+	id := fs.String("id", "", "source id")
+	_ = fs.Parse(args)
+
+	cfg, err := loadConfig(*configPath)
+	if err != nil {
+		log.Fatalf("load config: %v", err)
+	}
+	svc, err := watchlistservice.NewDiscoverService(cfg)
+	if err != nil {
+		log.Fatalf("watchlist service: %v", err)
+	}
+	defer svc.Close()
+	items, err := svc.DiscoverConfiguredItem(context.Background(), *id)
+	if err != nil {
+		log.Fatal(err)
+	}
+	out := make([]watchlistDiscoveredItemView, 0, len(items))
+	for _, item := range items {
+		out = append(out, watchlistDiscoveredItemView{
+			ID: item.ID, ContentKey: item.ContentKey, URL: item.URL, CanonicalURL: item.CanonicalURL,
+			Title: item.Title, Author: item.Author, PublishedAt: formatOptionalTime(item.PublishedAt),
+			ContentType: item.ContentType, Raw: item.Raw,
+		})
+	}
+	data, _ := json.MarshalIndent(map[string]any{"count": len(out), "items": out}, "", "  ")
+	fmt.Println(string(data))
+}
+
+type watchlistDiscoveredItemView struct {
+	ID           string         `json:"id,omitempty"`
+	ContentKey   string         `json:"content_key"`
+	URL          string         `json:"url"`
+	CanonicalURL string         `json:"canonical_url,omitempty"`
+	Title        string         `json:"title,omitempty"`
+	Author       string         `json:"author,omitempty"`
+	PublishedAt  string         `json:"published_at,omitempty"`
+	ContentType  string         `json:"content_type,omitempty"`
+	Raw          map[string]any `json:"raw,omitempty"`
+}
+
+func formatOptionalTime(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	return t.Format(time.RFC3339)
 }

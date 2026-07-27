@@ -99,7 +99,7 @@ LocalBrowser:
     - old.reddit.com
     - new.reddit.com
     - redd.it
-  ChromePath: ""
+  ChromePath: "/Users/dig/Library/Caches/ms-playwright/chromium_headless_shell-1217/chrome-headless-shell-mac-arm64/chrome-headless-shell"
   Headless: true
   CookieStoreDir: "storage/digcrawl/browser_cookies"
   CDPMode: false
@@ -107,7 +107,12 @@ LocalBrowser:
   CDPConnectExisting: false
   UserDataDir: ""
   ProxyURL: ""
-  ExtraArgs: []
+  ExtraArgs:
+    - "--single-process"
+    - "--no-zygote"
+    - "--disable-crash-reporter"
+    - "--disable-crashpad"
+    - "--no-sandbox"
 
 Platform:
   BrowseRetryMaxAttempts: 2
