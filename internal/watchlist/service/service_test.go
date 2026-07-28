@@ -218,6 +218,31 @@ func TestNormalizeTaskRejectsUnsupportedTaskType(t *testing.T) {
 	}
 }
 
+func TestSummaryTextForVideoPrefersASR(t *testing.T) {
+	feed := FeedItem{ContentType: "video"}
+	out := map[string]any{
+		"content_type": "video",
+		"text":         "看更多视频，上今日头条。",
+		"markdown":     "页面 Markdown",
+	}
+	got := summaryTextForCollectedItem(feed, out, "视频口播文案")
+	if got != "视频口播文案" {
+		t.Fatalf("expected video summary text to prefer ASR, got %q", got)
+	}
+}
+
+func TestSummaryTextForArticlePrefersPageText(t *testing.T) {
+	feed := FeedItem{ContentType: "article"}
+	out := map[string]any{
+		"content_type": "article",
+		"text":         "文章正文",
+	}
+	got := summaryTextForCollectedItem(feed, out, "误传 ASR")
+	if got != "文章正文" {
+		t.Fatalf("expected article summary text to prefer page text, got %q", got)
+	}
+}
+
 func TestConfiguredItemsLoadsDatabaseSources(t *testing.T) {
 	ctx := context.Background()
 	st, err := watchlist.OpenStore(filepath.Join(t.TempDir(), "watch.db"))

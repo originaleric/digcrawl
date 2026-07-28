@@ -731,8 +731,11 @@ func (s *Store) UpsertTaskDefinition(ctx context.Context, def TaskDefinition, no
 	if now.IsZero() {
 		now = time.Now().UTC()
 	}
+	if err := ValidateSchedule(def); err != nil {
+		return err
+	}
 	nowText := now.UTC().Format(time.RFC3339)
-	nextText := nowText
+	nextText := def.InitialNextRunAt(now).Format(time.RFC3339)
 	if s.dialect == "mysql" {
 		_, err := s.db.ExecContext(ctx, `INSERT INTO dc_tasks_runtime (
   task_id, task_type, enabled, schedule_mode, schedule_every_sec, source_platform, source_kind, source_url,
@@ -880,10 +883,10 @@ func (s *Store) FinishTaskRun(ctx context.Context, runID string, def TaskDefinit
 	if finishedAt.IsZero() {
 		finishedAt = time.Now().UTC()
 	}
-	nextRunAt := finishedAt.UTC().Add(def.ScheduleEvery)
-	if def.ScheduleEvery <= 0 {
-		nextRunAt = finishedAt.UTC()
+	if err := ValidateSchedule(def); err != nil {
+		return err
 	}
+	nextRunAt := def.NextRunAfter(finishedAt)
 	finishedText := finishedAt.UTC().Format(time.RFC3339)
 	nextText := nextRunAt.Format(time.RFC3339)
 	tx, err := s.db.BeginTx(ctx, nil)

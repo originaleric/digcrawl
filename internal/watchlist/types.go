@@ -22,15 +22,17 @@ const (
 )
 
 type WatchItem struct {
-	ID       string
-	Platform string
-	Type     string
-	URL      string
-	Name     string
-	Interval time.Duration
-	NotifyTo string
-	Enabled  bool
-	Options  map[string]any
+	ID           string
+	Platform     string
+	Type         string
+	URL          string
+	Name         string
+	Interval     time.Duration
+	ScheduleMode string
+	ScheduleAt   string
+	NotifyTo     string
+	Enabled      bool
+	Options      map[string]any
 }
 
 type WatchSource struct {
@@ -82,6 +84,7 @@ type TaskDefinition struct {
 	Enabled        bool
 	ScheduleMode   string
 	ScheduleEvery  time.Duration
+	ScheduleAt     string
 	SourcePlatform string
 	SourceKind     string
 	SourceURL      string

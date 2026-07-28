@@ -54,6 +54,7 @@ func (s *Service) exportOpts(outDir string, formats []string) ExportOptions {
 		MediaTimeoutSec: s.cfg.Collect.MediaTimeoutSec,
 		ArtifactStore:   s.artifacts,
 		OCR:             s.cfg.OCR,
+		ASR:             s.cfg.ASR,
 	}
 }
 

@@ -14,8 +14,8 @@ Models:
     Type: openai
     Config:
       ApiKey: "${DIGFLOW_SUMMARY_API_KEY}"
-      BaseUrl: "https://api.openai.com/v1"
-      Model: "gpt-4o-mini"
+      BaseUrl: "https://api.deepseek.com/v1"
+      Model: "deepseek-v4-flash"
       Temperature: 0.2
 
 Tools: []
@@ -49,6 +49,7 @@ Nodes:
       }
 
       如果输入内容不足，也要返回合法 JSON，并在 summary 中说明信息不足。
+      如果 items 为空，digest_title 使用“今日无更新”，overall_summary 使用“今日无更新”，items 返回空数组。
 
 Edges:
   - From: START

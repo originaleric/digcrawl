@@ -20,3 +20,16 @@ func ToutiaoArticleReadEntry(configDomains []string, artStore artifact.Store) re
 		toutiao.ReadArticle,
 	)
 }
+
+// ToutiaoVideoReadEntry returns registry entry for toutiao.video.read.
+func ToutiaoVideoReadEntry(configDomains []string, artStore artifact.Store) registry.Entry {
+	return platformReadEntry(
+		ToolToutiaoVideoRead,
+		"Read a Toutiao video page via local browser with structured output and media URLs.",
+		[]string{"browser", "toutiao", "cookie.local", "platform.read", "video"},
+		toutiaoDefaultDomains,
+		configDomains,
+		artStore,
+		toutiao.ReadVideo,
+	)
+}

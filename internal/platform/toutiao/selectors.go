@@ -5,9 +5,10 @@ import (
 )
 
 const (
-	PlatformName = "toutiao"
-	ContentType  = "article"
-	CookieDomain = "www.toutiao.com"
+	PlatformName     = "toutiao"
+	ContentType      = "article"
+	VideoContentType = "video"
+	CookieDomain     = "www.toutiao.com"
 )
 
 const (
@@ -21,4 +22,15 @@ var ArticleBrowseAttempts = []platform.BrowseAttempt{
 	{WaitSelector: ".article-content", ContentSelector: ".article-content"},
 	{WaitSelector: ".tt-article-content", ContentSelector: ".tt-article-content"},
 	{WaitSelector: "main", ContentSelector: "main"},
+}
+
+const (
+	VideoWaitSelector    = "video, #root, body"
+	VideoContentSelector = "body"
+)
+
+var VideoBrowseAttempts = []platform.BrowseAttempt{
+	{WaitSelector: "video", ContentSelector: "body"},
+	{WaitSelector: "#root", ContentSelector: "#root"},
+	{WaitSelector: "body", ContentSelector: "body"},
 }

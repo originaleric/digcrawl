@@ -262,6 +262,14 @@ func validateNotificationConfig(cfg *config.Config) error {
 			defaultID = id
 		}
 	}
+	for _, ch := range channels {
+		if isFeishuAppChannel(ch) {
+			if strings.TrimSpace(os.ExpandEnv(strings.TrimSpace(feishu.AppID))) == "" || strings.TrimSpace(os.ExpandEnv(strings.TrimSpace(feishu.AppSecret))) == "" {
+				return fmt.Errorf("feishu app channel requires AppID and AppSecret")
+			}
+			break
+		}
+	}
 	if len(channels) == 0 {
 		return fmt.Errorf("feishu notifications require at least one channel")
 	}
@@ -292,10 +300,21 @@ func validateFeishuChannel(channels map[string]config.FeishuChannel, id, context
 	if !ok {
 		return fmt.Errorf("feishu %s references missing channel %q", context, id)
 	}
+	if isFeishuAppChannel(ch) {
+		if strings.TrimSpace(os.ExpandEnv(strings.TrimSpace(ch.ReceiveID))) == "" {
+			return fmt.Errorf("feishu channel %q receive id is required", id)
+		}
+		return nil
+	}
 	if strings.TrimSpace(os.ExpandEnv(strings.TrimSpace(ch.WebhookURL))) == "" {
 		return fmt.Errorf("feishu channel %q webhook url is required", id)
 	}
 	return nil
+}
+
+func isFeishuAppChannel(ch config.FeishuChannel) bool {
+	mode := strings.ToLower(strings.TrimSpace(ch.Mode))
+	return mode == "app" || mode == "bot" || mode == "openapi"
 }
 
 func (s *Service) RunOnce(ctx context.Context) ([]RunSummary, error) {
@@ -546,6 +565,13 @@ func (s *Service) RunItem(ctx context.Context, item WatchItem) (RunSummary, erro
 		_ = s.store.UpsertDelivery(ctx, item.ID, key, notifyResult.ChannelID, StatusNotifyFailed, notifyResult.Error, notifyResult.Retryable, msg.Title, msg.Text)
 		sum.Errors = append(sum.Errors, notifyResult.Error)
 	}
+	if !baseline && sum.NewItems == 0 && shouldNotifyNoUpdate(item.Options) {
+		if err := s.notifyNoUpdate(ctx, item, time.Now()); err != nil {
+			sum.Errors = append(sum.Errors, err.Error())
+		} else {
+			sum.Notified++
+		}
+	}
 	if len(sum.Errors) > 0 {
 		status = "partial"
 		errText = strings.Join(sum.Errors, "; ")
@@ -633,6 +659,35 @@ func (s *Service) retryPendingDeliveries(ctx context.Context, item WatchItem) (i
 	return notified, nil
 }
 
+func (s *Service) notifyNoUpdate(ctx context.Context, item WatchItem, now time.Time) error {
+	if now.IsZero() {
+		now = time.Now()
+	}
+	name := strings.TrimSpace(item.Name)
+	if name == "" {
+		name = strings.TrimSpace(item.ID)
+	}
+	date := now.In(time.Local).Format("2006-01-02")
+	title := fmt.Sprintf("%s 今日无更新", name)
+	text := fmt.Sprintf("%s\n\n%s 今日无更新。", title, date)
+	res := s.notifier.Send(ctx, item.NotifyTo, notify.Message{Title: title, Text: text})
+	if res.Status == "notified" || res.Status == StatusNotified {
+		key := "__no_update__:" + date
+		_ = s.store.UpsertDelivery(ctx, item.ID, key, res.ChannelID, StatusNotified, "", false, title, text)
+		return nil
+	}
+	status := StatusNotifyFailed
+	if !res.Retryable {
+		status = StatusNotifyFinalFail
+	}
+	key := "__no_update__:" + date
+	_ = s.store.UpsertDelivery(ctx, item.ID, key, res.ChannelID, status, res.Error, res.Retryable, title, text)
+	if strings.TrimSpace(res.Error) == "" {
+		return fmt.Errorf("notify no-update message failed")
+	}
+	return fmt.Errorf("notify no-update message failed: %s", res.Error)
+}
+
 func (s *Service) normalizeItem(raw config.WatchlistItem) (WatchItem, error) {
 	if strings.TrimSpace(raw.ID) == "" {
 		return WatchItem{}, fmt.Errorf("watchlist item id is required")
@@ -651,11 +706,16 @@ func (s *Service) normalizeItem(raw config.WatchlistItem) (WatchItem, error) {
 	if err != nil {
 		return WatchItem{}, fmt.Errorf("watchlist item %s invalid interval: %w", raw.ID, err)
 	}
+	scheduleMode := strings.ToLower(strings.TrimSpace(optionString(raw.Options, "_task_schedule_mode")))
+	if scheduleMode == "" {
+		scheduleMode = "interval"
+	}
+	scheduleAt := optionString(raw.Options, "_task_schedule_at")
 	return WatchItem{
 		ID: strings.TrimSpace(raw.ID), Platform: strings.ToLower(strings.TrimSpace(raw.Platform)),
 		Type: strings.ToLower(strings.TrimSpace(raw.Type)), URL: strings.TrimSpace(raw.URL),
-		Name: strings.TrimSpace(raw.Name), Interval: d, NotifyTo: strings.TrimSpace(raw.NotifyTo), Enabled: raw.EnabledOrDefault(),
-		Options: raw.Options,
+		Name: strings.TrimSpace(raw.Name), Interval: d, ScheduleMode: scheduleMode, ScheduleAt: scheduleAt,
+		NotifyTo: strings.TrimSpace(raw.NotifyTo), Enabled: raw.EnabledOrDefault(), Options: raw.Options,
 	}, nil
 }
 
@@ -767,12 +827,22 @@ func watchlistItemFromTask(task config.TaskConfig) config.WatchlistItem {
 	}
 	mode := strings.ToLower(strings.TrimSpace(task.Schedule.Mode))
 	switch mode {
-	case "", "interval":
+	case "", "interval", "daily":
 	default:
-		options["_task_schedule_error"] = fmt.Sprintf("unsupported mode %q; only interval is supported", task.Schedule.Mode)
+		options["_task_schedule_error"] = fmt.Sprintf("unsupported mode %q; supported modes: interval, daily", task.Schedule.Mode)
+	}
+	if mode == "" {
+		mode = "interval"
+	}
+	options["_task_schedule_mode"] = mode
+	if strings.TrimSpace(task.Schedule.At) != "" {
+		options["_task_schedule_at"] = strings.TrimSpace(task.Schedule.At)
 	}
 	enabled := task.EnabledOrDefault()
 	interval := strings.TrimSpace(task.Schedule.Every)
+	if mode == "daily" && interval == "" {
+		interval = "24h"
+	}
 	return config.WatchlistItem{
 		ID:       strings.TrimSpace(task.ID),
 		Platform: strings.TrimSpace(task.Source.Platform),
@@ -806,11 +876,30 @@ func (s *Service) collectFeedItem(ctx context.Context, feed FeedItem) (Collected
 	if err := json.Unmarshal(data, &out); err != nil {
 		return CollectedItem{Feed: feed}, fmt.Errorf("decode collect json: %w", err)
 	}
+	asrText := extractMetadataText(out, "asr_text")
 	return CollectedItem{
-		Feed: feed, Title: str(out["title"]), Text: firstNonEmpty(str(out["text"]), str(out["markdown"])),
-		ASRText: extractMetadataText(out, "asr_text"), OCRText: extractOCRText(out),
+		Feed: feed, Title: str(out["title"]), Text: summaryTextForCollectedItem(feed, out, asrText),
+		ASRText: asrText, OCRText: extractOCRText(out),
 		Metadata: extractMetadata(out),
 	}, nil
+}
+
+func summaryTextForCollectedItem(feed FeedItem, out map[string]any, asrText string) string {
+	text := firstNonEmpty(str(out["text"]), str(out["markdown"]))
+	if isVideoCollectedItem(feed, out) && strings.TrimSpace(asrText) != "" {
+		return strings.TrimSpace(asrText)
+	}
+	return text
+}
+
+func isVideoCollectedItem(feed FeedItem, out map[string]any) bool {
+	for _, v := range []string{feed.ContentType, str(out["content_type"])} {
+		switch strings.ToLower(strings.TrimSpace(v)) {
+		case "video", "toutiao_video", "douyin_video":
+			return true
+		}
+	}
+	return false
 }
 
 func retryableItemStatus(status string) bool {
@@ -851,6 +940,34 @@ func optionString(opts map[string]any, key string) string {
 		return strings.TrimSpace(value.String())
 	default:
 		return strings.TrimSpace(fmt.Sprint(value))
+	}
+}
+
+func shouldNotifyNoUpdate(opts map[string]any) bool {
+	for _, key := range []string{"notify_no_update", "NotifyNoUpdate", "notifyOnNoUpdate", "notify_on_no_update"} {
+		if optionBool(opts, key) {
+			return true
+		}
+	}
+	return false
+}
+
+func optionBool(opts map[string]any, key string) bool {
+	if opts == nil {
+		return false
+	}
+	v, ok := opts[key]
+	if !ok {
+		return false
+	}
+	switch value := v.(type) {
+	case bool:
+		return value
+	case string:
+		b, _ := strconv.ParseBool(strings.TrimSpace(value))
+		return b
+	default:
+		return strings.EqualFold(strings.TrimSpace(fmt.Sprint(value)), "true")
 	}
 }
 

@@ -87,11 +87,16 @@ func (r Service) readToutiao(ctx context.Context, item Source) ([]Item, error) {
 	switch inferToutiaoWatchlistType(ctx, item) {
 	case "article", "group", "post", "toutiao_article":
 		return feedItemFromToutiaoArticle(ctx, item)
+	case "video", "toutiao_video":
+		return feedItemFromToutiaoVideo(ctx, item)
 	case "author", "user", "profile", "toutiao_author", "toutiao_user":
 		return r.readHTMLLinks(ctx, item, "toutiao")
 	default:
-		if isToutiaoArticleURL(ctx, item.URL) {
+		if isToutiaoContentURL(ctx, item.URL, "article", "group") {
 			return feedItemFromToutiaoArticle(ctx, item)
+		}
+		if isToutiaoContentURL(ctx, item.URL, "video") {
+			return feedItemFromToutiaoVideo(ctx, item)
 		}
 		return r.readHTMLLinks(ctx, item, "toutiao")
 	}
@@ -102,15 +107,31 @@ func inferToutiaoWatchlistType(ctx context.Context, item Source) string {
 	if typ != "" {
 		return typ
 	}
-	if isToutiaoArticleURL(ctx, item.URL) {
+	if isToutiaoContentURL(ctx, item.URL, "article", "group") {
 		return "article"
+	}
+	if isToutiaoContentURL(ctx, item.URL, "video") {
+		return "video"
 	}
 	return "author"
 }
 
 func isToutiaoArticleURL(ctx context.Context, rawURL string) bool {
+	return isToutiaoContentURL(ctx, rawURL, "article", "group")
+}
+
+func isToutiaoContentURL(ctx context.Context, rawURL string, kinds ...string) bool {
 	norm, err := toutiaoplatform.NormalizeURL(ctx, rawURL)
-	return err == nil && norm.PlatformID != ""
+	if err != nil || norm.PlatformID == "" {
+		return false
+	}
+	kind := strings.ToLower(strings.TrimSpace(norm.ContentKind))
+	for _, want := range kinds {
+		if kind == strings.ToLower(strings.TrimSpace(want)) {
+			return true
+		}
+	}
+	return false
 }
 
 func feedItemFromToutiaoArticle(ctx context.Context, item Source) ([]Item, error) {
@@ -132,6 +153,30 @@ func feedItemFromToutiaoArticle(ctx context.Context, item Source) ([]Item, error
 		ContentType:  "article",
 		Raw: map[string]any{
 			"article_id": norm.PlatformID,
+			"source_url": item.URL,
+		},
+	}}, nil
+}
+
+func feedItemFromToutiaoVideo(ctx context.Context, item Source) ([]Item, error) {
+	norm, err := toutiaoplatform.NormalizeURL(ctx, item.URL)
+	if err != nil {
+		return nil, err
+	}
+	if norm.PlatformID == "" || norm.ContentKind != "video" {
+		return nil, fmt.Errorf("toutiao video url is required")
+	}
+	link := firstNonEmpty(norm.CanonicalURL, item.URL)
+	key := "toutiao:video:" + norm.PlatformID
+	return []Item{{
+		ID:           key,
+		ContentKey:   key,
+		URL:          link,
+		CanonicalURL: link,
+		Title:        item.Name,
+		ContentType:  "video",
+		Raw: map[string]any{
+			"video_id":   norm.PlatformID,
 			"source_url": item.URL,
 		},
 	}}, nil
@@ -568,7 +613,7 @@ func watchItemsFromDocument(doc *feed.Document, contentType string) []Item {
 
 var hrefRe = regexp.MustCompile(`(?i)href=["']([^"']+)["']`)
 var absoluteURLRe = regexp.MustCompile(`(?i)https?://[^"'<>\\\s]+`)
-var relativeContentPathRe = regexp.MustCompile(`(?i)/(?:article|group)/[0-9]+/?|/[A-Za-z0-9_]{1,32}/status/[0-9]+/?`)
+var relativeContentPathRe = regexp.MustCompile(`(?i)/(?:article|group|video)/[0-9]+/?|/[A-Za-z0-9_]{1,32}/status/[0-9]+/?`)
 
 func (r Service) readHTMLLinks(ctx context.Context, item Source, platform string) ([]Item, error) {
 	data, _, err := r.feedService().Fetch(ctx, item.URL)
@@ -877,7 +922,11 @@ func discoveredLinkItem(ctx context.Context, platform, link, title string) Item 
 	switch platform {
 	case "toutiao":
 		if norm, err := toutiaoplatform.NormalizeURL(ctx, link); err == nil && norm.PlatformID != "" {
-			id = "toutiao:" + norm.PlatformID
+			if norm.ContentKind == "video" {
+				id = "toutiao:video:" + norm.PlatformID
+			} else {
+				id = "toutiao:" + norm.PlatformID
+			}
 			key = id
 			canonical = firstNonEmpty(norm.CanonicalURL, link)
 		}
@@ -933,7 +982,7 @@ func platformLink(platform string, base *url.URL, link string) bool {
 	path := strings.ToLower(u.Path)
 	switch platform {
 	case "toutiao":
-		return strings.Contains(host, "toutiao.com") && (strings.Contains(path, "/article/") || strings.Contains(path, "/group/"))
+		return strings.Contains(host, "toutiao.com") && (strings.Contains(path, "/article/") || strings.Contains(path, "/group/") || strings.Contains(path, "/video/"))
 	case "douyin":
 		return (strings.Contains(host, "douyin.com") || strings.Contains(host, "iesdouyin.com")) && (strings.Contains(path, "/video/") || strings.Contains(path, "/note/") || strings.Contains(path, "/share/video/"))
 	case "xiaohongshu", "xhs":

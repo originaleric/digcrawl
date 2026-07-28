@@ -1,0 +1,13 @@
+Feishu:
+  Enabled: true
+  DefaultChannel: "feishu-default"
+  APIBaseURL: "https://open.feishu.cn"
+  AppID: "${FEISHU_APP_ID}"
+  AppSecret: "${FEISHU_APP_SECRET}"
+  Channels:
+    - ID: "feishu-default"
+      Mode: "app"
+      ReceiveIDType: "chat_id"
+      ReceiveID: "${FEISHU_CHAT_ID}"
+      TimeoutSec: 10
+      MaxMessageChars: 12000

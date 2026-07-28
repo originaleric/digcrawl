@@ -23,7 +23,7 @@ DigCrawl 的核心目标不是“提供一个网关”，而是把公众号、�
 | 静态解析/API/RSS 优先 + 浏览器兜底 | 微信公众号优先使用 HTTP HTML 静态解析；小红书、抖音、头条优先尝试页面上下文 API；X 优先尝试官方 Tweet lookup，再回落到公开 oEmbed 和浏览器；RSS/Atom 由通用 Feed service 读取；Reddit 优先官方 API，再兜底 RSS，最后按配置兜底公开页面 |
 | 登录态复用 | 支持通过有头浏览器完成平台登录，后续采集复用本机 Cookie |
 | 批量采集与收件箱 | 支持 URL 文件批处理、`collect-inbox` 收件箱和 `--watch` 轮询 |
-| Watchlist 定时监控 | 复用 `internal/source` 定期检查 RSS/sitemap、头条固定文章/作者页、X/Twitter 单帖、平台主页和 Reddit subreddit/user/post comments 的新增内容，并通过通知通道推送 |
+| Watchlist 定时监控 | 复用 `internal/source` 定期检查 RSS/sitemap、头条固定文章/作者页/视频列表页、X/Twitter 单帖、平台主页和 Reddit subreddit/user/post comments 的新增内容，并通过通知通道推送 |
 | 多格式导出 | 同时导出 Markdown、HTML、JSON，可选下载媒体到 `.assets/` |
 | OCR 图片文字提取 | 可通过配置接入 OCR provider，对正文图片、截图、平台媒体和本地 assets 提取文字并写入结构化元数据 |
 | ASR 视频语音转写 | 通过 `ffmpeg` 抽音频后，支持 OpenAI-compatible API 或本地 `faster-whisper` 命令转写 |
@@ -34,7 +34,7 @@ DigCrawl 的核心目标不是“提供一个网关”，而是把公众号、�
 
 OCR 目前支持 OpenAI-compatible 视觉模型、智谱 `zhipu_ocr` / `glm-ocr` 原生接口和本地开发桩；Collect 下载媒体时会优先对本地 `.assets` 图片做 OCR，并将结果写入 `platform_metadata.ocr_results`。
 
-ASR 能力通过 `digcrawl asr transcribe <video>` 或 Gateway 工具 `asr.transcribe` 调用：先用 `ffmpeg` 抽取 16k 单声道 wav，再按配置选择 API provider 或本地 provider。API provider 兼容 `/audio/transcriptions`；本地 provider 默认调用 `faster-whisper`，也可在 `ASR.LocalCommand` / `ASR.LocalArgs` 中替换为 whisper.cpp 等命令。
+ASR 能力通过 `digcrawl asr transcribe <video>`、Gateway 工具 `asr.transcribe` 或 Collect 视频导出链路调用：先用 `ffmpeg` 抽取 16k 单声道 wav，再按配置选择 API provider 或本地 provider。API provider 兼容 `/audio/transcriptions`；本地 provider 默认调用 `faster-whisper`，如果 Python 包未提供 CLI，会自动 fallback 到 `scripts/faster_whisper_asr.py`，也可在 `ASR.LocalCommand` / `ASR.LocalArgs` 中替换为 whisper.cpp 等命令。
 
 Watchlist 能力通过 `digcrawl watchlist run --once`、`digcrawl watchlist run` 或 `digcrawl watchlist serve` 调用：先对配置的 RSS/sitemap、头条固定文章或作者页、平台主页、X/Twitter 单帖或 Reddit 来源做最新内容发现，再复用 Collect 抓取详情，最后按 `Summary` 配置使用规则摘要、LLM 直连或 DigFlow Runtime 生成摘要，并通过 Feishu webhook 推送。新配置推荐使用根级 `Tasks` 描述定时任务，`watchlist.collect` 可为不同来源配置不同扫描周期；旧 `Watchlist.Items` 继续兼容。调度状态写入通用 `dc_task_*` runtime 表，内容去重、摘要和投递状态继续写入 watchlist 领域表。
 
@@ -52,6 +52,7 @@ Watchlist 能力通过 `digcrawl watchlist run --once`、`digcrawl watchlist run
 - 2026-07-16：新增通用 Tasks 调度 runtime，支持不同 watchlist task 配置独立扫描周期、到期判断、运行记录、锁和事件表。
 - 2026-07-17：将平台发现逻辑抽象到 `internal/source`，Watchlist 复用头条、X、Reddit、RSS 等来源发现；同时修复本机浏览器兜底路径，完成头条和 X 的 Watchlist dry-run 验证。
 - 2026-07-18：新增持久化 Watchlist 清单，支持 `yaml` / `database` / `mixed` 来源模式，清单可写入 SQLite 或 MySQL；补齐 `digcrawl watchlist source` CLI 和 `/admin/watchlist/*` HTTP 运维接口，并同步 MySQL / SQLite full DDL。
+- 2026-07-28：新增今日头条视频详情读取 `toutiao.video.read`、视频列表页发现、Collect 下载视频后自动 ASR enrich，并补齐本地 `faster-whisper` Python runner 兜底。
 
 ## 支持的平台
 
@@ -61,6 +62,7 @@ Watchlist 能力通过 `digcrawl watchlist run --once`、`digcrawl watchlist run
 | 小红书 | `xiaohongshu.com`、`xhslink.com` | `xiaohongshu.note.read` |
 | 抖音 | `douyin.com` | `douyin.video.read` |
 | 今日头条文章 | `toutiao.com`、`m.toutiao.com` | `toutiao.article.read` |
+| 今日头条视频 | `toutiao.com/video/...` | `toutiao.video.read` |
 | X | `x.com`、`twitter.com` | `x.post.read` |
 | Reddit | `reddit.com`、`old.reddit.com`、`new.reddit.com`、`redd.it` | `reddit.post.read`、`reddit.subreddit.read`、`reddit.user.read` |
 | RSS / Atom | `.rss`、`.atom`、`.xml`、`/feed`、`/rss` | `feed.read` |
@@ -70,7 +72,7 @@ Watchlist 能力通过 `digcrawl watchlist run --once`、`digcrawl watchlist run
 
 微信公众号公开文章会优先走 HTTP 静态解析，直接提取标题、作者、发布时间、正文、Markdown/HTML 和图片资源；只有网络瞬断或解析状态不确定时才进入浏览器兜底。若微信安全验证、频控、删除/私密页面或最终 URL 跳出微信域名，会返回结构化错误而不是导出占位内容。
 
-今日头条读取面向公开文章页，先进行轻量 API 探测，再回落到浏览器 DOM / hydration / meta 提取；若 `toutiao.com/group/...` 实际跳转到西瓜、抖音或视频内容，会快速返回 `CONTENT_TYPE_MISMATCH`，不会作为文章导出。
+今日头条文章读取面向公开文章页，先进行轻量 API 探测，再回落到浏览器 DOM / hydration / meta 提取；若 `toutiao.com/group/...` 实际跳转到西瓜、抖音或视频内容，会快速返回 `CONTENT_TYPE_MISMATCH`，不会作为文章导出。今日头条视频读取由 `toutiao.video.read` 单独处理，支持从 `/video/...` 页面提取视频源、封面和页面文案；Collect 在 `ASR.Enabled=true` 且成功下载 video/audio 后会把转写结果写入 `asr_text` 和 Markdown 的 `## ASR`。
 
 X 读取面向公开单帖，先尝试官方 Tweet lookup API；当账号套餐或权限不足时，会回落到公开 oEmbed 端点提取正文、作者、发布时间和 canonical URL；删除、不可见、登录墙壳页不会作为正常内容导出。
 
@@ -90,6 +92,7 @@ go build -o digcollect ./cmd/digcollect
 ```bash
 ./digcrawl collect "https://mp.weixin.qq.com/s/..." --format md,html,json
 ./digcrawl collect "https://www.toutiao.com/article/..." --format md,json
+./digcrawl collect "https://www.toutiao.com/video/..." --format md,json
 ./digcrawl collect "https://www.reddit.com/r/golang/comments/abc123/title/" --format md,json
 ./digcrawl collect "https://www.reddit.com/r/artificial/.rss" --format md,json
 ./digcrawl collect "https://example.com/article" --out ./collect-output
@@ -126,7 +129,7 @@ Watchlist 常驻调度：
 ./digcrawl watchlist serve --config config/config.yaml
 ```
 
-`watchlist serve` 会按 `Watchlist.Scheduler.TickInterval` 扫描到期任务，没有 runtime 状态的 task 会立即执行一次，之后按 `Tasks[].Schedule.Every` 或旧 `Watchlist.Items[].Interval` 写入 `dc_tasks_runtime.next_run_at` 并判断是否到期。`watchlist run` 保留为整轮执行入口，适合手动触发或外部 cron。
+`watchlist serve` 会按 `Watchlist.Scheduler.TickInterval` 扫描到期任务。`Tasks[].Schedule.Mode=interval` 按 `Every` 周期运行；`Mode=daily` 按本机时区的 `At: "HH:MM"` 运行，例如每天上午 9 点写 `At: "09:00"`。任务完成后会写入 `dc_tasks_runtime.next_run_at` 并由后续 tick 判断是否到期。`watchlist run` 保留为整轮执行入口，适合手动触发或外部 cron。
 
 macOS / Linux 可用仓库内脚本把 `watchlist serve` 安装为用户级常驻服务。脚本会在 macOS 生成 `launchd` plist，在 Linux 生成 `systemd --user` service：
 
@@ -144,7 +147,9 @@ DIGCRAWL_CONFIG="$PWD/config/config.yaml" \
 
 Watchlist 清单支持 `Watchlist.Source.Mode` 选择来源：`yaml` 从 `Watchlist.Items` 和根级 `Tasks` 读取，`database` 从 `dc_watchlist_sources` 读取，`mixed` 同时读取且同 ID 时数据库覆盖 YAML。长清单建议使用 `database`，YAML 只保留调度、通知和持久化配置。持久化后端由 `Watchlist.Persistence.Driver` 决定，支持 `sqlite` 和 `mysql`；MySQL 可直接配置 `MySQLDSN`，也可通过 `GormConfigPath` 读取 `config/gorm.yml` 的写库配置。
 
-Watchlist 建议优先配置来源页或列表页，而不是最终文章/帖子 URL。来源页会定期 Discover 最新内容 URL，并按 source 级 `content_key` 去重后只采集新增内容；最终详情页类 source 仍可用于单次归档、评论或互动变更监控。当前对外 source kind 包括 `rss`、`sitemap`、`reddit_subreddit`、`reddit_user`、`reddit_post_comments`、`toutiao_author`、`toutiao_article`、`x_user`、`x_post`、`douyin_user`、`douyin_video`、`xiaohongshu_user`、`xiaohongshu_note`、`wechat_list`、`wechat_article`、`web_list`。
+Watchlist 建议优先配置来源页或列表页，而不是最终文章/帖子 URL。来源页会定期 Discover 最新内容 URL，并按 source 级 `content_key` 去重后只采集新增内容；最终详情页类 source 仍可用于单次归档、评论或互动变更监控。当前对外 source kind 包括 `rss`、`sitemap`、`reddit_subreddit`、`reddit_user`、`reddit_post_comments`、`toutiao_author`、`toutiao_article`、`toutiao_video`、`x_user`、`x_post`、`douyin_user`、`douyin_video`、`xiaohongshu_user`、`xiaohongshu_note`、`wechat_list`、`wechat_article`、`web_list`。
+
+需要在没有新增内容时仍发送通知，可在对应 Task/Source 的 `Options` 中配置 `notify_no_update: true`。该通知只在发现流程成功且本轮新增为 0 时发送，不会把抓取失败误报为“今日无更新”。
 
 ```bash
 ./digcrawl watchlist source add --config config/config.yaml \
@@ -221,13 +226,26 @@ export HF_HOME="/Users/dig/.openclaw/tmp/huggingface"
 ./digcrawl asr transcribe ./video.mp4 --provider local --model small
 ```
 
-如果安装的 Python 包没有提供 `faster-whisper` CLI，可提供一个兼容命令，或在运行时指定完整路径：
+如果安装的 Python 包没有提供 `faster-whisper` CLI，可使用仓库内 runner：
 
-```bash
-./digcrawl asr transcribe ./video.mp4 \
-  --provider local \
-  --model small \
-  --local-command /Users/dig/.openclaw/tmp/faster-whisper-venv/bin/faster-whisper
+```yaml
+ASR:
+  Enabled: true
+  Provider: local
+  Model: small
+  Language: zh
+  LocalCommand: "/Users/dig/.openclaw/tmp/faster-whisper-venv/bin/python"
+  LocalArgs:
+    - "scripts/faster_whisper_asr.py"
+    - "{audio_path}"
+    - "--model"
+    - "{model}"
+    - "--language"
+    - "{language}"
+    - "--output_format"
+    - "json"
+    - "--output_dir"
+    - "{output_dir}"
 ```
 
 本机浏览器兜底依赖 Chrome/Chromium。若系统 Chrome 或 Rod 自动下载的 Chromium 在 macOS sandbox / headless 环境中启动失败，建议安装 Playwright 的 `chrome-headless-shell`，并通过 `LocalBrowser.ChromePath` 与 `LocalBrowser.ExtraArgs` 显式指定：

@@ -60,6 +60,42 @@ func TestServiceExtractsToutiaoHydrationLinks(t *testing.T) {
 	}
 }
 
+func TestServiceExtractsToutiaoVideoLinks(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`<html><body><a href="https://www.toutiao.com/video/7667505035089101366/?log_from=a">V</a><script>{"url":"https:\/\/www.toutiao.com\/article\/7658204565203960362\/"}</script></body></html>`))
+	}))
+	defer srv.Close()
+	items, err := Service{}.ListLatest(context.Background(), Source{ID: "w1", Platform: "toutiao", Type: "toutiao_author", URL: srv.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("expected article and video links, got %+v", items)
+	}
+	if items[0].URL != "https://www.toutiao.com/video/7667505035089101366/" || items[0].ContentKey != "toutiao:video:7667505035089101366" || items[0].ContentType != "video" {
+		t.Fatalf("unexpected video item: %+v", items[0])
+	}
+}
+
+func TestServiceReadsFixedToutiaoVideo(t *testing.T) {
+	items, err := Service{}.ListLatest(context.Background(), Source{
+		ID:       "tt-video",
+		Platform: "toutiao",
+		Type:     "toutiao_video",
+		URL:      "https://www.toutiao.com/video/7667505035089101366/",
+		Name:     "Toutiao video",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("expected 1 item, got %+v", items)
+	}
+	if items[0].URL != "https://www.toutiao.com/video/7667505035089101366/" || items[0].ContentKey != "toutiao:video:7667505035089101366" || items[0].ContentType != "video" {
+		t.Fatalf("unexpected toutiao video item: %+v", items[0])
+	}
+}
+
 func TestServiceReadsFixedToutiaoArticle(t *testing.T) {
 	items, err := Service{}.ListLatest(context.Background(), Source{
 		ID:       "tt1",

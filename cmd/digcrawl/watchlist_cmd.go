@@ -247,7 +247,7 @@ func runWatchlistSourceAdd(args []string) {
 	id := fs.String("id", "", "source id")
 	name := fs.String("name", "", "source display name")
 	platform := fs.String("platform", "", "source platform, e.g. reddit/x/toutiao/rss")
-	kind := fs.String("kind", "", "source kind, e.g. rss/sitemap/reddit_subreddit/reddit_user/reddit_post_comments/toutiao_author/toutiao_article/x_user/x_post/douyin_user/douyin_video/xiaohongshu_user/xiaohongshu_note/wechat_list/wechat_article/web_list")
+	kind := fs.String("kind", "", "source kind, e.g. rss/sitemap/reddit_subreddit/reddit_user/reddit_post_comments/toutiao_author/toutiao_article/toutiao_video/x_user/x_post/douyin_user/douyin_video/xiaohongshu_user/xiaohongshu_note/wechat_list/wechat_article/web_list")
 	sourceURL := fs.String("url", "", "source URL")
 	every := fs.String("every", "6h", "scan interval")
 	notify := fs.String("notify", "", "notification channel id")

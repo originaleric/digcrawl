@@ -62,6 +62,28 @@ func TestDetectDouyin(t *testing.T) {
 	}
 }
 
+func TestDetectToutiaoVideo(t *testing.T) {
+	t.Parallel()
+	m, err := Detect("https://www.toutiao.com/video/7667505035089101366/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.Platform != "toutiao" || m.Tool != platformprov.ToolToutiaoVideoRead {
+		t.Fatalf("got %+v", m)
+	}
+}
+
+func TestDetectToutiaoArticle(t *testing.T) {
+	t.Parallel()
+	m, err := Detect("https://www.toutiao.com/article/7667505035089101366/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.Platform != "toutiao" || m.Tool != platformprov.ToolToutiaoArticleRead {
+		t.Fatalf("got %+v", m)
+	}
+}
+
 func TestDetectXPost(t *testing.T) {
 	t.Parallel()
 	m, err := Detect("https://twitter.com/u/status/99")

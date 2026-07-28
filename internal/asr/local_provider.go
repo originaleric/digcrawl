@@ -29,7 +29,12 @@ func (p *localProvider) Transcribe(ctx context.Context, audioPath string) (*Resu
 		return nil, fmt.Errorf("stat audio: %w", err)
 	}
 	if _, err := exec.LookPath(p.command); err != nil {
-		return nil, fmt.Errorf("local ASR command %q not found in PATH; install it or configure ASR.LocalCommand / --local-command", p.command)
+		fallbackCommand, fallbackArgs, ok := localCommandFallback(p.command, p.args)
+		if !ok {
+			return nil, fmt.Errorf("local ASR command %q not found in PATH; install it or configure ASR.LocalCommand / --local-command", p.command)
+		}
+		p.command = fallbackCommand
+		p.args = fallbackArgs
 	}
 	outDir, err := os.MkdirTemp("", "digcrawl-asr-local-*")
 	if err != nil {
@@ -79,6 +84,30 @@ func (p *localProvider) Transcribe(ctx context.Context, audioPath string) (*Resu
 	}
 	result.Audio.SizeBytes = info.Size()
 	return result, nil
+}
+
+func localCommandFallback(command string, args []string) (string, []string, bool) {
+	if len(args) > 0 {
+		return "", nil, false
+	}
+	command = strings.ToLower(strings.TrimSpace(command))
+	if command != "faster-whisper" && command != "faster_whisper" {
+		return "", nil, false
+	}
+	if _, err := os.Stat(filepath.Join("scripts", "faster_whisper_asr.py")); err != nil {
+		return "", nil, false
+	}
+	python, err := exec.LookPath("python3")
+	if err != nil {
+		return "", nil, false
+	}
+	return python, []string{
+		filepath.Join("scripts", "faster_whisper_asr.py"),
+		"{audio_path}",
+		"--model", "{model}",
+		"--output_format", "json",
+		"--output_dir", "{output_dir}",
+	}, true
 }
 
 func expandArgs(args []string, values map[string]string) []string {

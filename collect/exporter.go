@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/originaleric/digcrawl/config"
+	internalasr "github.com/originaleric/digcrawl/internal/asr"
 	"github.com/originaleric/digcrawl/internal/ocr"
 	"github.com/originaleric/digcrawl/runtime/artifact"
 )
@@ -24,6 +25,7 @@ type ExportOptions struct {
 	MediaTimeoutSec int
 	ArtifactStore   artifact.Store
 	OCR             config.OCRConfig
+	ASR             config.ASRConfig
 }
 
 // ExportResult lists written files.
@@ -113,6 +115,11 @@ func Export(ctx context.Context, out map[string]any, opts ExportOptions) (Export
 				AssetsDir:  paths.Assets,
 				Downloaded: downloaded,
 			}); len(results) > 0 {
+				ocrAppliedAfterWrite = true
+			}
+		}
+		if opts.ASR.EnabledOrDefault() {
+			if enrichASRFromDownloadedMedia(ctx, out, opts.ASR, downloaded, paths.Assets) {
 				ocrAppliedAfterWrite = true
 			}
 		}
@@ -223,7 +230,65 @@ func buildMarkdownDocument(out map[string]any, body string) string {
 			b.WriteString("\n")
 		}
 	}
+	if asrText, _ := out["asr_text"].(string); strings.TrimSpace(asrText) != "" && !strings.Contains(body, asrText) {
+		if body != "" {
+			b.WriteString("\n")
+		}
+		b.WriteString("## ASR\n\n")
+		b.WriteString(strings.TrimSpace(asrText))
+		b.WriteString("\n")
+	}
 	return b.String()
+}
+
+func enrichASRFromDownloadedMedia(ctx context.Context, out map[string]any, cfg config.ASRConfig, downloaded []map[string]any, assetsDir string) bool {
+	if len(downloaded) == 0 {
+		return false
+	}
+	meta := platformMetadata(out)
+	changed := false
+	for _, item := range downloaded {
+		mediaType, _ := item["type"].(string)
+		mediaType = strings.ToLower(strings.TrimSpace(mediaType))
+		if mediaType != "video" && mediaType != "audio" {
+			continue
+		}
+		local, _ := item["local"].(string)
+		if strings.TrimSpace(local) == "" {
+			continue
+		}
+		path := filepath.Join(assetsDir, filepath.Base(local))
+		res, err := internalasr.Transcribe(ctx, path, cfg, internalasr.Options{})
+		if err != nil {
+			meta["asr_error"] = err.Error()
+			changed = true
+			continue
+		}
+		if res == nil || strings.TrimSpace(res.Text) == "" {
+			meta["asr_error"] = "ASR returned empty transcript"
+			changed = true
+			continue
+		}
+		delete(meta, "asr_error")
+		out["asr_text"] = strings.TrimSpace(res.Text)
+		meta["asr_provider"] = res.Provider
+		meta["asr_model"] = res.Model
+		meta["asr_language"] = res.Language
+		meta["asr_duration"] = res.Duration
+		meta["asr_media_local"] = local
+		out["platform_metadata"] = meta
+		return true
+	}
+	out["platform_metadata"] = meta
+	return changed
+}
+
+func platformMetadata(out map[string]any) map[string]any {
+	meta, _ := out["platform_metadata"].(map[string]any)
+	if meta == nil {
+		meta = map[string]any{}
+	}
+	return meta
 }
 
 func pickHTMLBody(out map[string]any) string {

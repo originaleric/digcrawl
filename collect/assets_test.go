@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -21,6 +22,105 @@ func TestFallbackMediaItemsFromMarkdown(t *testing.T) {
 	items := fallbackMediaItems(out)
 	if len(items) != 2 {
 		t.Fatalf("expected 2 fallback items, got %d", len(items))
+	}
+}
+
+func TestExportRecordsASRErrorForInvalidDownloadedVideo(t *testing.T) {
+	enabled := true
+	assetsDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(assetsDir, "001.mp4"), []byte("not a real video"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out := map[string]any{"platform_metadata": map[string]any{}}
+	changed := enrichASRFromDownloadedMedia(context.Background(), out, config.ASRConfig{
+		Enabled:  &enabled,
+		Provider: "stub",
+	}, []map[string]any{{"type": "video", "local": "001.mp4"}}, assetsDir)
+	if !changed {
+		t.Fatal("invalid media should trigger output rewrite for asr_error")
+	}
+	meta, _ := out["platform_metadata"].(map[string]any)
+	if _, ok := meta["asr_error"].(string); !ok {
+		t.Fatalf("expected invalid video to record asr_error without failing collect, meta=%+v", meta)
+	}
+}
+
+func TestRewritePersistsASRErrorForInvalidDownloadedVideo(t *testing.T) {
+	t.Parallel()
+	enabled := true
+	dir := t.TempDir()
+	assetsDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(assetsDir, "001.mp4"), []byte("not a real video"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out := map[string]any{
+		"title":             "Invalid ASR Video",
+		"source_url":        "https://www.toutiao.com/video/1/",
+		"platform_metadata": map[string]any{},
+	}
+	changed := enrichASRFromDownloadedMedia(context.Background(), out, config.ASRConfig{
+		Enabled:  &enabled,
+		Provider: "stub",
+	}, []map[string]any{{"type": "video", "local": "001.mp4"}}, assetsDir)
+	if !changed {
+		t.Fatal("invalid media should trigger output rewrite for asr_error")
+	}
+	paths, err := BuildOutputPaths(dir, "Invalid ASR Video", time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := rewriteTextualOutputs(out, paths, []string{"json"}); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(paths.JSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		t.Fatal(err)
+	}
+	meta, _ := parsed["platform_metadata"].(map[string]any)
+	if _, ok := meta["asr_error"].(string); !ok {
+		t.Fatalf("json missing asr_error: %s", string(data))
+	}
+}
+
+func TestASRSuccessClearsPreviousMediaError(t *testing.T) {
+	t.Parallel()
+	enabled := true
+	assetsDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(assetsDir, "002.mp4"), []byte("fake video"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ffmpeg := filepath.Join(assetsDir, "ffmpeg")
+	script := "#!/bin/sh\nfor out do :; done\nprintf 'wav' > \"$out\"\n"
+	if runtime.GOOS == "windows" {
+		t.Skip("shell fake ffmpeg is not portable on windows")
+	}
+	if err := os.WriteFile(ffmpeg, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	out := map[string]any{"platform_metadata": map[string]any{}}
+	changed := enrichASRFromDownloadedMedia(context.Background(), out, config.ASRConfig{
+		Enabled:    &enabled,
+		Provider:   "stub",
+		FFmpegPath: ffmpeg,
+		TempDir:    assetsDir,
+	}, []map[string]any{
+		{"type": "video", "local": "001.mp4"},
+		{"type": "video", "local": "002.mp4"},
+	}, assetsDir)
+	if !changed {
+		t.Fatal("successful second media should change output")
+	}
+	got, _ := out["asr_text"].(string)
+	if got != "stub ASR transcript" {
+		t.Fatalf("asr_text=%q", got)
+	}
+	meta, _ := out["platform_metadata"].(map[string]any)
+	if _, ok := meta["asr_error"]; ok {
+		t.Fatalf("stale asr_error should be cleared after success: %+v", meta)
 	}
 }
 

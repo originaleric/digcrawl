@@ -512,6 +512,7 @@ type TaskConfig struct {
 type TaskScheduleConfig struct {
 	Mode  string `yaml:"Mode" json:"Mode,omitempty"`
 	Every string `yaml:"Every" json:"Every,omitempty"`
+	At    string `yaml:"At" json:"At,omitempty"`
 }
 
 type TaskSourceConfig struct {
@@ -657,13 +658,20 @@ type NotificationsConfig struct {
 type FeishuNotificationConfig struct {
 	Enabled        *bool           `yaml:"Enabled" json:"Enabled,omitempty"`
 	DefaultChannel string          `yaml:"DefaultChannel" json:"DefaultChannel,omitempty"`
+	ConfigPath     string          `yaml:"ConfigPath" json:"ConfigPath,omitempty"`
+	APIBaseURL     string          `yaml:"APIBaseURL" json:"APIBaseURL,omitempty"`
+	AppID          string          `yaml:"AppID" json:"AppID,omitempty"`
+	AppSecret      string          `yaml:"AppSecret" json:"AppSecret,omitempty"`
 	Channels       []FeishuChannel `yaml:"Channels" json:"Channels,omitempty"`
 }
 
 type FeishuChannel struct {
 	ID              string `yaml:"ID" json:"ID,omitempty"`
+	Mode            string `yaml:"Mode" json:"Mode,omitempty"` // webhook | app
 	WebhookURL      string `yaml:"WebhookURL" json:"WebhookURL,omitempty"`
 	Secret          string `yaml:"Secret" json:"Secret,omitempty"`
+	ReceiveIDType   string `yaml:"ReceiveIDType" json:"ReceiveIDType,omitempty"`
+	ReceiveID       string `yaml:"ReceiveID" json:"ReceiveID,omitempty"`
 	TimeoutSec      int    `yaml:"TimeoutSec" json:"TimeoutSec,omitempty"`
 	MaxMessageChars int    `yaml:"MaxMessageChars" json:"MaxMessageChars,omitempty"`
 }
@@ -673,6 +681,23 @@ func (c FeishuNotificationConfig) EnabledOrDefault() bool {
 		return false
 	}
 	return *c.Enabled
+}
+
+func (c FeishuNotificationConfig) APIBaseURLOrDefault() string {
+	if strings.TrimSpace(c.APIBaseURL) != "" {
+		return strings.TrimRight(strings.TrimSpace(c.APIBaseURL), "/")
+	}
+	return "https://open.feishu.cn"
+}
+
+func (c FeishuNotificationConfig) hasValues() bool {
+	return c.Enabled != nil ||
+		strings.TrimSpace(c.DefaultChannel) != "" ||
+		strings.TrimSpace(c.ConfigPath) != "" ||
+		strings.TrimSpace(c.APIBaseURL) != "" ||
+		strings.TrimSpace(c.AppID) != "" ||
+		strings.TrimSpace(c.AppSecret) != "" ||
+		len(c.Channels) > 0
 }
 
 // XAPIConfig controls X/Twitter API based post reads.
@@ -958,6 +983,7 @@ func init() {
 					"xiaohongshu.note.read",
 					"douyin.video.read",
 					"toutiao.article.read",
+					"toutiao.video.read",
 					"x.post.read",
 					"reddit.post.read",
 					"reddit.subreddit.read",
@@ -989,6 +1015,7 @@ func init() {
 					"xiaohongshu.note.read",
 					"douyin.video.read",
 					"toutiao.article.read",
+					"toutiao.video.read",
 					"x.post.read",
 					"reddit.post.read",
 					"reddit.subreddit.read",
@@ -1165,8 +1192,62 @@ func Load(path string) (*Config, error) {
 		return nil, err
 	}
 	mergeDefaults(&cfg)
+	if err := mergeLocalFeishuConfig(&cfg); err != nil {
+		return nil, err
+	}
 	defaultCfg = cfg
 	return &defaultCfg, nil
+}
+
+func mergeLocalFeishuConfig(cfg *Config) error {
+	path := strings.TrimSpace(cfg.Notifications.Feishu.ConfigPath)
+	if path == "" {
+		return nil
+	}
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var local struct {
+		Feishu        FeishuNotificationConfig `yaml:"Feishu"`
+		Notifications NotificationsConfig      `yaml:"Notifications"`
+	}
+	if err := yaml.Unmarshal(data, &local); err != nil {
+		return err
+	}
+	override := local.Feishu
+	if !override.hasValues() {
+		override = local.Notifications.Feishu
+	}
+	mergeFeishuNotificationConfig(&cfg.Notifications.Feishu, override)
+	return nil
+}
+
+func mergeFeishuNotificationConfig(dst *FeishuNotificationConfig, src FeishuNotificationConfig) {
+	if src.Enabled != nil {
+		dst.Enabled = src.Enabled
+	}
+	if strings.TrimSpace(src.DefaultChannel) != "" {
+		dst.DefaultChannel = src.DefaultChannel
+	}
+	if strings.TrimSpace(src.ConfigPath) != "" {
+		dst.ConfigPath = src.ConfigPath
+	}
+	if strings.TrimSpace(src.APIBaseURL) != "" {
+		dst.APIBaseURL = src.APIBaseURL
+	}
+	if strings.TrimSpace(src.AppID) != "" {
+		dst.AppID = src.AppID
+	}
+	if strings.TrimSpace(src.AppSecret) != "" {
+		dst.AppSecret = src.AppSecret
+	}
+	if len(src.Channels) > 0 {
+		dst.Channels = src.Channels
+	}
 }
 
 func mergeDefaults(cfg *Config) {

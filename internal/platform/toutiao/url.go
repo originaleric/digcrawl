@@ -13,12 +13,13 @@ import (
 var (
 	articleIDPattern = regexp.MustCompile(`(?i)/article/(\d+)`)
 	groupIDPattern   = regexp.MustCompile(`(?i)/group/(\d+)`)
+	videoIDPattern   = regexp.MustCompile(`(?i)/video/(\d+)`)
 	wIDPattern       = regexp.MustCompile(`(?i)/w/(\d+)`)
 	shortPathPattern = regexp.MustCompile(`(?i)/is/([A-Za-z0-9_-]+)`)
 	toutiaoHosts     = []string{"toutiao.com", "www.toutiao.com", "m.toutiao.com"}
 )
 
-// NormalizeURL 归一化头条文章 URL（含 m.toutiao.com 短链 resolve）。
+// NormalizeURL 归一化头条内容 URL（含 m.toutiao.com 短链 resolve）。
 func NormalizeURL(ctx context.Context, rawURL string) (*platform.NormalizedURL, error) {
 	rawURL = strings.TrimSpace(rawURL)
 	if rawURL == "" {
@@ -59,6 +60,8 @@ func NormalizeURL(ctx context.Context, rawURL string) (*platform.NormalizedURL, 
 		out.PlatformID = id
 		if kind == "group" {
 			out.CanonicalURL = fmt.Sprintf("https://www.toutiao.com/group/%s/", id)
+		} else if kind == VideoContentType {
+			out.CanonicalURL = fmt.Sprintf("https://www.toutiao.com/video/%s/", id)
 		} else {
 			out.CanonicalURL = fmt.Sprintf("https://www.toutiao.com/article/%s/", id)
 		}
@@ -77,6 +80,9 @@ func NormalizeURL(ctx context.Context, rawURL string) (*platform.NormalizedURL, 
 func extractArticleID(path string) (id, kind string) {
 	if m := wIDPattern.FindStringSubmatch(path); len(m) >= 2 {
 		return m[1], ContentType
+	}
+	if m := videoIDPattern.FindStringSubmatch(path); len(m) >= 2 {
+		return m[1], VideoContentType
 	}
 	if m := groupIDPattern.FindStringSubmatch(path); len(m) >= 2 {
 		return m[1], "group"

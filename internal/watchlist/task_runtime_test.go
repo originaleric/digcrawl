@@ -62,6 +62,60 @@ func TestTaskRuntimeDueUsesGenericTaskTables(t *testing.T) {
 	}
 }
 
+func TestTaskRuntimeDailyScheduleUsesConfiguredLocalTime(t *testing.T) {
+	oldLocal := time.Local
+	time.Local = time.UTC
+	defer func() { time.Local = oldLocal }()
+
+	st, err := OpenStore(t.TempDir() + "/watchlist.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	item := WatchItem{ID: "daily-source", Interval: 24 * time.Hour, ScheduleMode: "daily", ScheduleAt: "09:00", Enabled: true}
+	def := TaskDefinitionForItem(item)
+	ctx := context.Background()
+	now := time.Date(2026, 7, 16, 8, 30, 0, 0, time.UTC)
+	if err := st.UpsertTaskDefinition(ctx, def, now); err != nil {
+		t.Fatal(err)
+	}
+	due, err := st.IsTaskDue(ctx, def.ID, time.Date(2026, 7, 16, 8, 59, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if due {
+		t.Fatal("daily task should not be due before configured time")
+	}
+	due, err = st.IsTaskDue(ctx, def.ID, time.Date(2026, 7, 16, 9, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !due {
+		t.Fatal("daily task should be due at configured time")
+	}
+	runID, err := st.StartTaskRun(ctx, def, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.FinishTaskRun(ctx, runID, def, "success", "", `{"ok":true}`, time.Date(2026, 7, 16, 9, 5, 0, 0, time.UTC)); err != nil {
+		t.Fatal(err)
+	}
+	due, err = st.IsTaskDue(ctx, def.ID, time.Date(2026, 7, 17, 8, 59, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if due {
+		t.Fatal("daily task should wait until next configured time after finishing")
+	}
+	due, err = st.IsTaskDue(ctx, def.ID, time.Date(2026, 7, 17, 9, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !due {
+		t.Fatal("daily task should be due on the next day at configured time")
+	}
+}
+
 func TestTaskRuntimeSyncsDisabledTasks(t *testing.T) {
 	st, err := OpenStore(t.TempDir() + "/watchlist.db")
 	if err != nil {

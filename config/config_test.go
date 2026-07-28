@@ -206,8 +206,8 @@ Tasks:
     Name: Reddit AI
     Type: watchlist.collect
     Schedule:
-      Mode: interval
-      Every: 6h
+      Mode: daily
+      At: "09:00"
     Source:
       Platform: reddit
       Kind: reddit_subreddit
@@ -241,7 +241,50 @@ Tasks:
 		t.Fatalf("tasks len=%d", len(cfg.Tasks))
 	}
 	task := cfg.Tasks[0]
-	if task.ID != "reddit-ai-watch" || task.Schedule.Every != "6h" || task.Source.Options["sort"] != "new" {
+	if task.ID != "reddit-ai-watch" || task.Schedule.Mode != "daily" || task.Schedule.At != "09:00" || task.Source.Options["sort"] != "new" {
 		t.Fatalf("task not parsed: %+v", task)
+	}
+}
+
+func TestLoadMergesLocalFeishuConfig(t *testing.T) {
+	dir := t.TempDir()
+	localPath := filepath.Join(dir, "feishu.yml")
+	data := []byte(`
+Notifications:
+  Feishu:
+    Enabled: true
+    DefaultChannel: feishu-default
+    ConfigPath: "` + localPath + `"
+    Channels:
+      - ID: feishu-default
+        WebhookURL: "${FEISHU_WEBHOOK_URL}"
+`)
+	configPath := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(configPath, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	local := []byte(`
+Feishu:
+  AppID: local-app
+  AppSecret: local-secret
+  Channels:
+    - ID: feishu-default
+      Mode: app
+      ReceiveIDType: chat_id
+      ReceiveID: oc_local
+`)
+	if err := os.WriteFile(localPath, local, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	feishu := cfg.Notifications.Feishu
+	if feishu.AppID != "local-app" || feishu.AppSecret != "local-secret" {
+		t.Fatalf("local app credentials not merged: %+v", feishu)
+	}
+	if len(feishu.Channels) != 1 || feishu.Channels[0].Mode != "app" || feishu.Channels[0].ReceiveID != "oc_local" {
+		t.Fatalf("local channels not merged: %+v", feishu.Channels)
 	}
 }

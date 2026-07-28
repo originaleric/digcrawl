@@ -10,6 +10,7 @@ Gateway:
     - xiaohongshu.note.read
     - douyin.video.read
     - toutiao.article.read
+    - toutiao.video.read
     - x.post.read
     - reddit.post.read
     - reddit.subreddit.read
@@ -45,6 +46,7 @@ Collector:
     - xiaohongshu.note.read
     - douyin.video.read
     - toutiao.article.read
+    - toutiao.video.read
     - x.post.read
     - reddit.post.read
     - reddit.subreddit.read
@@ -193,11 +195,13 @@ ASR:
   LocalCommand: "faster-whisper"
   # 留空时默认执行：
   # faster-whisper <audio_path> --model <model> --output_format json --output_dir <output_dir>
+  # 如果 PATH 中没有 faster-whisper 命令，会自动 fallback 到：
+  # python3 scripts/faster_whisper_asr.py <audio_path> --model <model> --output_format json --output_dir <output_dir>
   # 可使用占位符：{audio_path} {model} {language} {output_dir}
   LocalArgs: []
 
 Watchlist:
-  Enabled: false
+  Enabled: true
   DryRun: false
   DefaultInterval: "6h"
   Scheduler:
@@ -209,17 +213,17 @@ Watchlist:
   #   database - 从 dc_watchlist_sources 读取，适合长期维护的大清单。
   #   mixed    - 同时读取 YAML 和数据库；同 ID 时数据库覆盖 YAML。
   Source:
-    Mode: yaml
-  NotifyOnFirstRun: false
-  MaxItemsPerRun: 20
+    Mode: mixed
+  NotifyOnFirstRun: true
+  MaxItemsPerRun: 2
   LockTTL: "30m"
   Persistence:
     # sqlite | mysql。source 清单和 runtime 状态共用该持久化后端。
-    Driver: sqlite
-    SQLitePath: "storage/digcrawl/collect.db"
+    Driver: mysql
+    SQLitePath: ""
     # Driver=mysql 时可二选一：
     # MySQLDSN: "${DIGCRAWL_MYSQL_DSN}"
-    # GormConfigPath: "config/gorm.yml"
+    GormConfigPath: "config/gorm.yml"
   # Deprecated: kept for old configs; new configs should use Persistence.SQLitePath.
   DBPath: "storage/digcrawl/collect.db"
   Items: []
@@ -248,7 +252,24 @@ Watchlist:
 
 # Tasks 是新的通用定时任务描述。watchlist.collect 会被映射为 Watchlist item 执行；
 # 旧 Watchlist.Items 仍兼容，后续任务类型会继续复用该结构。
-Tasks: []
+Tasks:
+  - ID: toutiao-daily-author-summary
+    Name: 头条号每日更新摘要
+    Type: watchlist.collect
+    Enabled: true
+    Schedule:
+      Mode: daily
+      At: "09:00"
+    Source:
+      Platform: toutiao
+      Kind: toutiao_author
+      URL: https://www.toutiao.com/c/user/token/Cib0Mn8hfUmV08zTwS5-_YbyDu95mr_xaTmGBTF2pvSOtOGSJ4hZaBpJCjwAAAAAAAAAAAAAULUmJ9yfoV4AL40sEiqnKTziYw2-OuxKt_JBi9A2s5ck4xLc4ZCWr4Y1lJRARde4DpEQvPSXDhjDxYPqBCIBA-son68=/?source=profile
+      Options:
+        limit: 2
+        wait_selector: "a[href]"
+        notify_no_update: true
+    Notify:
+      Channel: feishu-default
 # 示例：
 # Tasks:
 #   - ID: reddit-ai-watch
@@ -258,6 +279,9 @@ Tasks: []
 #     Schedule:
 #       Mode: interval
 #       Every: 6h
+#       # 或使用每日固定时间：
+#       # Mode: daily
+#       # At: "09:00"
 #     Source:
 #       Platform: reddit
 #       Kind: reddit_subreddit
@@ -269,9 +293,9 @@ Tasks: []
 #       Channel: feishu-default
 
 Summary:
-  Enabled: false
+  Enabled: true
   # extractive | llm_direct | digflow_runtime | digflow_http
-  Provider: "extractive"
+  Provider: "digflow_runtime"
   TimeoutSec: 60
   MaxInputChars: 30000
   ImportanceThreshold: "medium"
@@ -304,8 +328,9 @@ Summary:
 
 Notifications:
   Feishu:
-    Enabled: false
+    Enabled: true
     DefaultChannel: "feishu-default"
+    ConfigPath: "config/feishu.yml"
     Channels:
       - ID: "feishu-default"
         WebhookURL: "${FEISHU_WEBHOOK_URL}"

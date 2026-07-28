@@ -227,7 +227,7 @@ OCR:
 
 | 字段 | 说明 |
 |------|------|
-| `Enabled` | 预留开关，默认 `false`；CLI 和工具调用仍以显式请求为准 |
+| `Enabled` | 是否在 Collect 下载到 video/audio 后自动转写，默认 `false`；CLI 和工具调用仍可通过显式请求单独运行 |
 | `Provider` | ASR provider，支持 `api`、`local`、`stub` |
 | `APIKey` | API provider key |
 | `BaseURL` | OpenAI-compatible API base URL，默认 `https://api.openai.com/v1` |
@@ -240,7 +240,7 @@ OCR:
 | `TempDir` | 抽取音频的临时目录，空则使用系统临时目录 |
 | `AudioSampleRate` | ffmpeg 抽取 wav 的采样率，默认 `16000` |
 | `MaxAudioBytes` | API provider 上传音频大小上限 |
-| `LocalCommand` | 本地 ASR 命令，默认 `faster-whisper` |
+| `LocalCommand` | 本地 ASR 命令，默认 `faster-whisper`；命令不存在且未配置 `LocalArgs` 时，会尝试 fallback 到 `python3 scripts/faster_whisper_asr.py` |
 | `LocalArgs` | 本地 ASR 参数模板，支持 `{audio_path}`、`{model}`、`{language}`、`{output_dir}` |
 
 配置示例：
@@ -260,11 +260,23 @@ ASR:
 
 ```yaml
 ASR:
+  Enabled: true
   Provider: local
-  Model: ""
+  Model: small
+  Language: zh
   FFmpegPath: "ffmpeg"
-  LocalCommand: "faster-whisper"
-  LocalArgs: []
+  LocalCommand: "/path/to/faster-whisper-venv/bin/python"
+  LocalArgs:
+    - "scripts/faster_whisper_asr.py"
+    - "{audio_path}"
+    - "--model"
+    - "{model}"
+    - "--language"
+    - "{language}"
+    - "--output_format"
+    - "json"
+    - "--output_dir"
+    - "{output_dir}"
 ```
 
 ### Watchlist / Summary / Notifications
@@ -302,11 +314,11 @@ Watchlist 用于按配置定期检查指定来源的新增内容，复用 Collec
 | `watchlist.collect` | 通过 `internal/source` 拉取最新内容，复用 Collect、Summary 和 Notifications |
 | `feed.digest` | `watchlist.collect` 的兼容别名，适合 RSS/Feed 摘要场景 |
 
-`Tasks[].Schedule.Mode` 当前支持 `interval`；`Every` 使用 Go duration，例如 `6h`、`24h`、`30m`。调度状态写入通用 `dc_tasks_runtime` / `dc_task_runs` / `dc_task_locks` / `dc_task_events`：没有 runtime 状态的任务会立即执行一次，之后按 `Every` 更新 `next_run_at` 并判断是否到期。
+`Tasks[].Schedule.Mode` 当前支持 `interval` 和 `daily`。`interval` 使用 `Every` 的 Go duration，例如 `6h`、`24h`、`30m`；`daily` 使用本机时区的 `At: "HH:MM"`，例如每天上午 9 点写 `At: "09:00"`。调度状态写入通用 `dc_tasks_runtime` / `dc_task_runs` / `dc_task_locks` / `dc_task_events`：任务完成后会按当前 schedule 更新 `next_run_at` 并判断是否到期。
 
-Watchlist 的来源发现由 `internal/source.Service` 统一承载，当前覆盖 RSS/Atom、sitemap、HTML 链接发现、今日头条固定文章/作者页、X/Twitter 单帖/用户页链接发现、抖音作品/用户页链接发现、小红书笔记/用户页链接发现、微信公众号文章/列表页链接发现和 Reddit listing/comment 来源。Watchlist 只负责调度、去重、详情采集、摘要和通知，因此后续新增渠道应优先接入 `internal/source`，再由 Watchlist、Tasks 或其他 domain 复用。
+Watchlist 的来源发现由 `internal/source.Service` 统一承载，当前覆盖 RSS/Atom、sitemap、HTML 链接发现、今日头条固定文章/作者页/视频列表页、X/Twitter 单帖/用户页链接发现、抖音作品/用户页链接发现、小红书笔记/用户页链接发现、微信公众号文章/列表页链接发现和 Reddit listing/comment 来源。Watchlist 只负责调度、去重、详情采集、摘要和通知，因此后续新增渠道应优先接入 `internal/source`，再由 Watchlist、Tasks 或其他 domain 复用。
 
-推荐维护来源页或列表页 source，例如 `rss`、`sitemap`、`reddit_subreddit`、`reddit_user`、`toutiao_author`、`x_user`、`douyin_user`、`xiaohongshu_user`、`wechat_list`、`web_list`。`toutiao_article`、`x_post`、`douyin_video`、`xiaohongshu_note`、`wechat_article`、`reddit_post_comments` 属于详情页或评论变更监控，适合单次归档、评论更新或互动状态检查，不适合作为“新增 po 文”主来源。
+推荐维护来源页或列表页 source，例如 `rss`、`sitemap`、`reddit_subreddit`、`reddit_user`、`toutiao_author`、`x_user`、`douyin_user`、`xiaohongshu_user`、`wechat_list`、`web_list`。`toutiao_article`、`toutiao_video`、`x_post`、`douyin_video`、`xiaohongshu_note`、`wechat_article`、`reddit_post_comments` 属于详情页或评论变更监控，适合单次归档、评论更新或互动状态检查，不适合作为“新增 po 文”主来源。
 
 上线前可以先做 discover-only 验证，只检查来源页能否发现内容，不写入 `dc_watchlist_items`，也不会触发 collect、summary 或 notify：
 
@@ -326,7 +338,8 @@ curl -X POST -H "Authorization: Bearer $DIGCRAWL_GATEWAY_TOKEN" \
 今日头条已支持：
 
 - `article` / `group` / `toutiao_article`：固定头条文章 URL 监控，例如 `https://www.toutiao.com/w/.../`、`https://www.toutiao.com/group/.../` 或 `https://www.toutiao.com/article/.../`。该模式复用已验证的 `toutiao.article.read` 抓取链路。
-- `toutiao_author` / `author` / `user`：作者页链接发现；静态 `href`、hydration 中的转义 URL 和相对内容路径都会尝试解析，发现结果使用 `toutiao:<article_id>` 去重。头条作者页若完全依赖动态 API/登录态，仍可能需要后续专用 API 或 headless 渲染发现。
+- `video` / `toutiao_video`：固定头条视频 URL 监控，例如 `https://www.toutiao.com/video/.../`。该模式复用 `toutiao.video.read`，可在 `ASR.Enabled=true` 时下载视频后写入 `asr_text`。
+- `toutiao_author` / `author` / `user`：作者页或视频列表页链接发现；静态 `href`、hydration 中的转义 URL 和相对内容路径都会尝试解析，发现结果使用 `toutiao:<article_id>` 或 `toutiao:video:<video_id>` 去重。头条作者页若完全依赖动态 API/登录态，仍可能需要后续专用 API 或 headless 渲染发现。
 
 X / Twitter 已支持：
 
@@ -429,15 +442,16 @@ Tasks:
     Type: watchlist.collect
     Enabled: true
     Schedule:
-      Mode: interval
-      Every: 6h
+      Mode: daily
+      At: "09:00"
     Source:
-      Platform: reddit
-      Kind: reddit_subreddit
-      URL: https://www.reddit.com/r/artificial/new/
+      Platform: toutiao
+      Kind: toutiao_author
+      URL: https://www.toutiao.com/c/user/token/...
       Options:
-        sort: new
-        limit: 25
+        limit: 2
+        wait_selector: "a[href]"
+        notify_no_update: true
     Notify:
       Channel: feishu-default
   - ID: toutiao-article-watch
@@ -802,7 +816,8 @@ Collect 在**无云端宿主**的情况下，把链接抓取并导出到本地�
 | 微信公众号 | `mp.weixin.qq.com` 等 | `wechat.article.read` |
 | 小红书 | `xiaohongshu.com`、`xhslink.com` 等 | `xiaohongshu.note.read` |
 | 抖音 | `douyin.com` 等 | `douyin.video.read` |
-| 今日头条 | `toutiao.com`、`m.toutiao.com` 等 | `toutiao.article.read` |
+| 今日头条文章 | `toutiao.com`、`m.toutiao.com` 等 | `toutiao.article.read` |
+| 今日头条视频 | `toutiao.com/video/...` | `toutiao.video.read` |
 | X / Twitter | `x.com`、`twitter.com` 等 | `x.post.read` |
 | RSS / Atom | `.rss`、`.atom`、`.xml`、`/feed`、`/rss` | `feed.read` |
 | 任意网页 | 其他 `http(s)` URL | `browser.browse`（通用网页） |
@@ -814,6 +829,7 @@ Collect 在**无云端宿主**的情况下，把链接抓取并导出到本地�
 ```bash
 digcrawl collect "https://mp.weixin.qq.com/s/xxxx"
 digcrawl collect "https://www.toutiao.com/article/xxxx"
+digcrawl collect "https://www.toutiao.com/video/xxxx"
 digcrawl collect "https://www.reddit.com/r/artificial/.rss" --format md,json
 digcrawl collect "https://example.com/article" --format md,html,json --out ./my-output
 ```
@@ -926,6 +942,7 @@ collect-inbox/
 | `xiaohongshu.note.read` | 小红书笔记 |
 | `douyin.video.read` | 抖音视频页 |
 | `toutiao.article.read` | 今日头条文章 |
+| `toutiao.video.read` | 今日头条视频 |
 | `x.post.read` | X 帖子 |
 
 ### 浏览器（browser）

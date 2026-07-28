@@ -7,6 +7,7 @@ const (
 	ToolDouyinVideoRead     = "douyin.video.read"
 	ToolXPostRead           = "x.post.read"
 	ToolToutiaoArticleRead  = "toutiao.article.read"
+	ToolToutiaoVideoRead    = "toutiao.video.read"
 	ToolRedditPostRead      = "reddit.post.read"
 	ToolRedditSubredditRead = "reddit.subreddit.read"
 	ToolRedditUserRead      = "reddit.user.read"
