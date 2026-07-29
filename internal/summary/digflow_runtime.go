@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"hash/fnv"
 	"os"
+	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -89,12 +91,17 @@ func (p *EmbeddedDigFlowProvider) ensureRuntime(ctx context.Context) (*digflow.R
 	if p.runtime != nil {
 		return p.runtime, nil
 	}
+	prepared, cleanup, err := p.prepareRuntimeConfigFiles()
+	if err != nil {
+		return nil, err
+	}
+	defer cleanup()
 	loadGlobalTools := false
 	opts := digflow.Options{
 		RootDir:           expandPath(p.RootDir),
-		ConfigPath:        expandPath(p.ConfigPath),
-		GormConfigPath:    expandPath(p.GormConfigPath),
-		EinoConfigPath:    expandPath(p.EinoConfigPath),
+		ConfigPath:        prepared.ConfigPath,
+		GormConfigPath:    prepared.GormConfigPath,
+		EinoConfigPath:    prepared.EinoConfigPath,
 		GlobalSkillsDir:   expandPath(p.GlobalSkillsDir),
 		LoadGlobalTools:   &loadGlobalTools,
 		DisableCheckpoint: p.DisableCheckpoint,
@@ -113,6 +120,106 @@ func (p *EmbeddedDigFlowProvider) ensureRuntime(ctx context.Context) (*digflow.R
 	}
 	p.runtime = rt
 	return rt, nil
+}
+
+type preparedRuntimeConfigFiles struct {
+	ConfigPath     string
+	GormConfigPath string
+	EinoConfigPath string
+}
+
+func (p *EmbeddedDigFlowProvider) prepareRuntimeConfigFiles() (preparedRuntimeConfigFiles, func(), error) {
+	prepared := preparedRuntimeConfigFiles{
+		ConfigPath:     expandPath(p.ConfigPath),
+		GormConfigPath: expandPath(p.GormConfigPath),
+		EinoConfigPath: expandPath(p.EinoConfigPath),
+	}
+	paths := []string{prepared.ConfigPath, prepared.GormConfigPath, prepared.EinoConfigPath}
+	needsTemplate := false
+	for _, path := range paths {
+		if configFileNeedsEnvExpansion(path) {
+			needsTemplate = true
+			break
+		}
+	}
+	if !needsTemplate {
+		return prepared, func() {}, nil
+	}
+	dir, err := os.MkdirTemp("", "digcrawl-digflow-config-*")
+	if err != nil {
+		return preparedRuntimeConfigFiles{}, nil, fmt.Errorf("create digflow config temp dir: %w", err)
+	}
+	cleanup := func() { _ = os.RemoveAll(dir) }
+	var copyErr error
+	if prepared.ConfigPath, copyErr = expandConfigTemplateToDir(prepared.ConfigPath, dir); copyErr != nil {
+		cleanup()
+		return preparedRuntimeConfigFiles{}, nil, copyErr
+	}
+	if prepared.GormConfigPath, copyErr = expandConfigTemplateToDir(prepared.GormConfigPath, dir); copyErr != nil {
+		cleanup()
+		return preparedRuntimeConfigFiles{}, nil, copyErr
+	}
+	if prepared.EinoConfigPath, copyErr = expandConfigTemplateToDir(prepared.EinoConfigPath, dir); copyErr != nil {
+		cleanup()
+		return preparedRuntimeConfigFiles{}, nil, copyErr
+	}
+	return prepared, cleanup, nil
+}
+
+func configFileNeedsEnvExpansion(path string) bool {
+	if strings.TrimSpace(path) == "" {
+		return false
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	return strings.Contains(string(data), "${")
+}
+
+func expandConfigTemplateToDir(path, dir string) (string, error) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return "", nil
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("read digflow config template %q: %w", path, err)
+	}
+	expanded, err := expandRequiredEnvTemplate(string(data))
+	if err != nil {
+		return "", fmt.Errorf("expand digflow config template %q: %w", path, err)
+	}
+	name := filepath.Base(path)
+	if strings.TrimSpace(name) == "" || name == "." || name == string(filepath.Separator) {
+		name = "config.yml"
+	}
+	out := filepath.Join(dir, name)
+	if err := os.WriteFile(out, []byte(expanded), 0o600); err != nil {
+		return "", fmt.Errorf("write expanded digflow config %q: %w", out, err)
+	}
+	return out, nil
+}
+
+func expandRequiredEnvTemplate(s string) (string, error) {
+	missing := map[string]struct{}{}
+	expanded := os.Expand(s, func(name string) string {
+		value, ok := os.LookupEnv(name)
+		if !ok || strings.TrimSpace(value) == "" {
+			missing[name] = struct{}{}
+			return ""
+		}
+		return value
+	})
+	if len(missing) > 0 {
+		names := make([]string, 0, len(missing))
+		for name := range missing {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		return "", fmt.Errorf("missing required environment variables: %s", strings.Join(names, ", "))
+	}
+	return expanded, nil
 }
 
 func (p *EmbeddedDigFlowProvider) fallback(ctx context.Context, req Request, cause error) (*Result, error) {

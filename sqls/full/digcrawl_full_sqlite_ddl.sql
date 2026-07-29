@@ -125,6 +125,7 @@ CREATE TABLE IF NOT EXISTS dc_watchlist_delivery (
   notify_error  TEXT,
   message_title TEXT,
   message_text  TEXT,
+  message_provider TEXT,
   PRIMARY KEY (watch_id, content_key, channel_id)
 );
 

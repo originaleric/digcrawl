@@ -8,8 +8,18 @@ This script intentionally matches the argument shape used by ASR.LocalArgs:
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
+
+
+def ensure_model_cache_env() -> None:
+    if not os.environ.get("HF_HOME") and not os.environ.get("HUGGINGFACE_HUB_CACHE"):
+        repo_root = Path(__file__).resolve().parent.parent
+        cache_dir = repo_root / ".cache" / "huggingface"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        os.environ["HF_HOME"] = str(cache_dir)
+    os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
 
 
 def main() -> int:
@@ -22,6 +32,8 @@ def main() -> int:
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--compute_type", default="int8")
     args = parser.parse_args()
+
+    ensure_model_cache_env()
 
     try:
         from faster_whisper import WhisperModel

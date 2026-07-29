@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"database/sql"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -11,11 +12,21 @@ import (
 
 	"github.com/originaleric/digcrawl/config"
 	"github.com/originaleric/digcrawl/internal/notify"
+	"github.com/originaleric/digcrawl/internal/summary"
 	"github.com/originaleric/digcrawl/internal/watchlist"
 )
 
 func boolPtr(v bool) *bool {
 	return &v
+}
+
+type recordingNotifier struct {
+	calls int
+}
+
+func (n *recordingNotifier) Send(ctx context.Context, channelID string, msg notify.Message) notify.Result {
+	n.calls++
+	return notify.Result{ChannelID: channelID, Status: StatusNotified}
 }
 
 func baseNotificationConfig() *config.Config {
@@ -218,16 +229,32 @@ func TestNormalizeTaskRejectsUnsupportedTaskType(t *testing.T) {
 	}
 }
 
-func TestSummaryTextForVideoPrefersASR(t *testing.T) {
+func TestSummaryTextForVideoKeepsASRSeparateForAgent(t *testing.T) {
 	feed := FeedItem{ContentType: "video"}
 	out := map[string]any{
 		"content_type": "video",
 		"text":         "看更多视频，上今日头条。",
 		"markdown":     "页面 Markdown",
 	}
-	got := summaryTextForCollectedItem(feed, out, "视频口播文案")
-	if got != "视频口播文案" {
-		t.Fatalf("expected video summary text to prefer ASR, got %q", got)
+	got, err := summaryTextForCollectedItem(feed, out, "视频口播文案")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "" {
+		t.Fatalf("expected video page text to stay empty so ASR is passed separately to agent, got %q", got)
+	}
+}
+
+func TestSummaryTextForVideoRequiresASR(t *testing.T) {
+	feed := FeedItem{ContentType: "video"}
+	out := map[string]any{
+		"content_type": "video",
+		"text":         "看更多视频，上今日头条。",
+		"markdown":     "页面 Markdown",
+	}
+	_, err := summaryTextForCollectedItem(feed, out, "")
+	if err == nil || !strings.Contains(err.Error(), "ASR/subtitles are required") {
+		t.Fatalf("expected video without ASR to fail, got %v", err)
 	}
 }
 
@@ -237,10 +264,159 @@ func TestSummaryTextForArticlePrefersPageText(t *testing.T) {
 		"content_type": "article",
 		"text":         "文章正文",
 	}
-	got := summaryTextForCollectedItem(feed, out, "误传 ASR")
+	got, err := summaryTextForCollectedItem(feed, out, "误传 ASR")
+	if err != nil {
+		t.Fatal(err)
+	}
 	if got != "文章正文" {
 		t.Fatalf("expected article summary text to prefer page text, got %q", got)
 	}
+}
+
+func TestValidateVideoSummaryRejectsExtractiveFallback(t *testing.T) {
+	collected := CollectedItem{
+		Feed:    FeedItem{ContentType: "video"},
+		ASRText: "这是一段视频口播转写。",
+	}
+	err := validateSummaryResultForCollectedItem(collected, &summary.Result{
+		Provider: "extractive",
+		Items: []summary.ResultItem{{
+			Summary: "这是一段视频口播转写。",
+		}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "requires agent provider") {
+		t.Fatalf("expected extractive fallback rejection, got %v", err)
+	}
+}
+
+func TestValidateVideoSummaryRejectsCopiedTranscript(t *testing.T) {
+	collected := CollectedItem{
+		Feed:    FeedItem{ContentType: "video"},
+		ASRText: "这是一段视频口播转写。",
+	}
+	err := validateSummaryResultForCollectedItem(collected, &summary.Result{
+		Provider: "digflow_runtime",
+		Items: []summary.ResultItem{{
+			Summary: "这是一段 视频口播 转写。",
+		}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "copied ASR transcript") {
+		t.Fatalf("expected copied transcript rejection, got %v", err)
+	}
+}
+
+func TestValidateVideoSummaryAcceptsAgentSummary(t *testing.T) {
+	collected := CollectedItem{
+		Feed:    FeedItem{ContentType: "video"},
+		ASRText: "这是一段视频口播转写，包含较多原始表达。",
+	}
+	err := validateSummaryResultForCollectedItem(collected, &summary.Result{
+		Provider: "digflow_runtime",
+		Items: []summary.ResultItem{{
+			Summary: "作者回应观众关心，解释近期未继续使用某个表达，是因为表达需要符合当下语境。",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("expected agent summary to pass, got %v", err)
+	}
+}
+
+func TestRetryPendingDeliveriesRejectsStaleVideoMessage(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "watch.db")
+	st, err := watchlist.OpenStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	if _, err := st.UpsertDiscovered(ctx, "video-watch", FeedItem{
+		ContentKey:  "video-1",
+		URL:         "https://www.toutiao.com/video/1/",
+		Title:       "Video",
+		ContentType: "video",
+	}, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.UpsertDeliveryWithProvider(ctx, "video-watch", "video-1", "feishu-default", StatusNotifyFailed, "http 500", true, "Video", "raw transcript", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := forceDeliveryRetryAt(ctx, path, "video-watch", "video-1", "2000-01-01T00:00:00Z"); err != nil {
+		t.Fatal(err)
+	}
+	notifier := &recordingNotifier{}
+	svc := &Service{
+		cfg:      &config.Config{Watchlist: config.WatchlistConfig{MaxItemsPerRun: 10}},
+		store:    st,
+		notifier: notifier,
+	}
+	notified, err := svc.retryPendingDeliveries(ctx, WatchItem{ID: "video-watch"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if notified != 0 || notifier.calls != 0 {
+		t.Fatalf("stale video pending delivery should not be sent, notified=%d calls=%d", notified, notifier.calls)
+	}
+	status, err := st.ItemStatus(ctx, "video-watch", "video-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status != StatusSummaryFailed {
+		t.Fatalf("stale video pending delivery should make the item retryable for regenerated summary, got status %q", status)
+	}
+}
+
+func TestRetryPendingDeliveriesAllowsAgentVideoMessage(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "watch.db")
+	st, err := watchlist.OpenStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	if _, err := st.UpsertDiscovered(ctx, "video-watch", FeedItem{
+		ContentKey:  "video-1",
+		URL:         "https://www.toutiao.com/video/1/",
+		Title:       "Video",
+		ContentType: "video",
+	}, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.UpsertDeliveryWithProvider(ctx, "video-watch", "video-1", "feishu-default", StatusNotifyFailed, "http 500", true, "Video", "agent summary", "digflow_runtime"); err != nil {
+		t.Fatal(err)
+	}
+	if err := forceDeliveryRetryAt(ctx, path, "video-watch", "video-1", "2000-01-01T00:00:00Z"); err != nil {
+		t.Fatal(err)
+	}
+	notifier := &recordingNotifier{}
+	svc := &Service{
+		cfg:      &config.Config{Watchlist: config.WatchlistConfig{MaxItemsPerRun: 10}},
+		store:    st,
+		notifier: notifier,
+	}
+	notified, err := svc.retryPendingDeliveries(ctx, WatchItem{ID: "video-watch"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if notified != 1 || notifier.calls != 1 {
+		t.Fatalf("agent video pending delivery should be retried, notified=%d calls=%d", notified, notifier.calls)
+	}
+	status, err := st.ItemStatus(ctx, "video-watch", "video-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status != StatusNotified {
+		t.Fatalf("agent video pending delivery should become notified, got status %q", status)
+	}
+}
+
+func forceDeliveryRetryAt(ctx context.Context, path, watchID, contentKey, retryAt string) error {
+	db, err := sql.Open("sqlite3", path)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	_, err = db.ExecContext(ctx, `UPDATE dc_watchlist_delivery SET next_retry_at = ? WHERE watch_id = ? AND content_key = ?`, retryAt, watchID, contentKey)
+	return err
 }
 
 func TestShouldNotifyNoUpdateRequiresConfiguredLimitCompleteness(t *testing.T) {

@@ -116,6 +116,13 @@ LocalBrowser:
     - "--disable-crashpad"
     - "--no-sandbox"
 
+RuntimeEnv:
+  # 是否从 config/runtime-env.yml 显式注入运行时变量。
+  # 用于 DigFlow embedded runtime 模板中的 ${DIGCRAWL_MYSQL_*}、${DIGFLOW_SUMMARY_API_KEY} 等。
+  Enabled: false
+  ConfigPath: "config/runtime-env.yml"
+  Variables: {}
+
 Platform:
   BrowseRetryMaxAttempts: 2
   BrowseRetryDelayMs: 800
@@ -176,14 +183,14 @@ OCR:
   AppendToText: false
 
 ASR:
-  Enabled: false
+  Enabled: true
   # api | local | stub
   # api 使用 OpenAI-compatible /audio/transcriptions；local 使用 faster-whisper/whisper.cpp 等本地命令。
-  Provider: "api"
+  Provider: "local"
   APIKey: ""
   BaseURL: "https://api.openai.com/v1"
   # 留空时根据 Provider 选择默认模型：api=whisper-1，local=small。
-  Model: ""
+  Model: "small"
   Language: ""
   Prompt: ""
   ResponseFormat: "verbose_json"
@@ -192,13 +199,21 @@ ASR:
   TempDir: ""
   AudioSampleRate: 16000
   MaxAudioBytes: 26214400
-  LocalCommand: "faster-whisper"
+  LocalCommand: ".venv-asr/bin/python"
   # 留空时默认执行：
   # faster-whisper <audio_path> --model <model> --output_format json --output_dir <output_dir>
   # 如果 PATH 中没有 faster-whisper 命令，会自动 fallback 到：
   # python3 scripts/faster_whisper_asr.py <audio_path> --model <model> --output_format json --output_dir <output_dir>
   # 可使用占位符：{audio_path} {model} {language} {output_dir}
-  LocalArgs: []
+  LocalArgs:
+    - "scripts/faster_whisper_asr.py"
+    - "{audio_path}"
+    - "--model"
+    - "{model}"
+    - "--output_format"
+    - "json"
+    - "--output_dir"
+    - "{output_dir}"
 
 Watchlist:
   Enabled: true

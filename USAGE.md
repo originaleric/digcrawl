@@ -529,8 +529,9 @@ DigFlow 内嵌 Runtime 需要额外准备：
 - `config/eino.yml`：DigFlow / DigEino domain 表名、上下文、skills、chat history、execution state 配置。
 - `agents/watchlist/agents.yml`：宿主侧 agent manifest。
 - `agents/watchlist/summary-agent.yml`：watchlist 摘要 agent。
+- `config/runtime-env.yml`：本地运行时变量注入，参考 `config/runtime-env.example.yml`，由 `config/config.yaml` 的 `RuntimeEnv.ConfigPath` 显式启用。
 
-默认构建不编译私有 DigFlow runtime 依赖，`digflow_runtime` provider 会使用 stub 并回退到 extractive 摘要。DigFlow 已固定到 `v1.1.3`；需要真正嵌入 DigFlow runtime 时，先配置 SSH/GOPRIVATE，然后使用 `-tags digflow_embedded` 构建或测试。内嵌 runtime 首次构建会拉取 runtime 依赖树，建议显式设置可写 Go cache，避免本机权限或冷缓存导致长时间无输出。
+默认构建不编译私有 DigFlow runtime 依赖，`digflow_runtime` provider 会使用 stub 并回退到 extractive 摘要。DigFlow 已固定到 `v1.1.3`；需要真正嵌入 DigFlow runtime 时，先配置 SSH/GOPRIVATE，然后使用 `-tags digflow_embedded` 构建或测试。内嵌 runtime 首次构建会拉取 runtime 依赖树，建议显式设置可写 Go cache，避免本机权限或冷缓存导致长时间无输出。`config/digflow-gorm.yml` / `config/eino.yml` 中的 `${...}` 变量会由 DigCrawl 宿主侧在运行时展开到临时配置文件；缺失变量会直接报错，不会静默展开为空。
 
 ```bash
 GOPRIVATE=github.com/originaleric/* \
@@ -643,7 +644,6 @@ digcrawl help
 常用命令：
 
 ```bash
-DIGCRAWL_BIN="$PWD/digcrawl" \
 DIGCRAWL_CONFIG="$PWD/config/config.yaml" \
 ./scripts/digcrawl-watchlist-service.sh install
 
@@ -665,6 +665,14 @@ DIGCRAWL_CONFIG="$PWD/config/config.yaml" \
 | `DIGCRAWL_LOG_DIR` | 日志目录，默认 `logs/` |
 | `DIGCRAWL_SERVICE_NAME` | Linux systemd service 名，默认 `digcrawl-watchlist` |
 | `DIGCRAWL_SERVICE_LABEL` | macOS launchd label，默认 `com.digcrawl.watchlist` |
+| `DIGCRAWL_AUTO_BUILD` | 是否由脚本自动构建 watchlist 二进制，默认 `1` |
+| `DIGCRAWL_BUILD_TAGS` | 自动构建 tag，默认 `digflow_embedded` |
+| `DIGCRAWL_BUILD_GOCACHE` | 自动构建 Go build cache，默认 `/private/tmp/digcrawl-gocache` |
+| `DIGCRAWL_BUILD_GOMODCACHE` | 自动构建 Go module cache，默认 `.tmp/go-mod-watchlist` |
+
+`install` 会构建 `bin/digcrawl-watchlist`；`run-foreground` 只运行已有 binary，不会在服务重启时重新 build。更新代码或 DigFlow 依赖后，先执行 `./scripts/digcrawl-watchlist-service.sh build` 或重新 `install`。
+
+使用 `digflow_runtime` summary agent 时，服务进程不再要求 launchd/systemd 注入业务密钥。推荐在主配置中设置 `RuntimeEnv.ConfigPath: config/runtime-env.yml`，并在本地 ignored 的 `config/runtime-env.yml` 中开启 `RuntimeEnv.Enabled: true`，填入 `DIGCRAWL_MYSQL_HOST`、`DIGCRAWL_MYSQL_DATABASE`、`DIGCRAWL_MYSQL_USER`、`DIGCRAWL_MYSQL_PASSWORD` 和 `DIGFLOW_SUMMARY_API_KEY`。仓库只提交 `config/runtime-env.example.yml`。
 
 ---
 

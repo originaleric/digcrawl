@@ -134,7 +134,6 @@ Watchlist 常驻调度：
 macOS / Linux 可用仓库内脚本把 `watchlist serve` 安装为用户级常驻服务。脚本会在 macOS 生成 `launchd` plist，在 Linux 生成 `systemd --user` service：
 
 ```bash
-DIGCRAWL_BIN="$PWD/digcrawl" \
 DIGCRAWL_CONFIG="$PWD/config/config.yaml" \
 ./scripts/digcrawl-watchlist-service.sh install
 
@@ -144,6 +143,10 @@ DIGCRAWL_CONFIG="$PWD/config/config.yaml" \
 ./scripts/digcrawl-watchlist-service.sh restart
 ./scripts/digcrawl-watchlist-service.sh uninstall
 ```
+
+脚本 `install` 时默认会自动构建 `bin/digcrawl-watchlist`，并使用 `-tags digflow_embedded`，确保 watchlist 的 `digflow_runtime` summary agent 真正嵌入运行；常驻服务启动时只运行已构建 binary，不会在每次重启时重新 `go build`。需要手动重建可执行 `./scripts/digcrawl-watchlist-service.sh build`。
+
+使用 `digflow_runtime` summary agent 时，推荐通过 `RuntimeEnv` 做配置文件 opt-in 注入：主配置 `RuntimeEnv.ConfigPath` 指向本地 `config/runtime-env.yml`，真实的 `DIGCRAWL_MYSQL_HOST`、`DIGCRAWL_MYSQL_DATABASE`、`DIGCRAWL_MYSQL_USER`、`DIGCRAWL_MYSQL_PASSWORD` 和 `DIGFLOW_SUMMARY_API_KEY` 放在该本地 YAML 中。仓库提供无密钥模板 `config/runtime-env.example.yml`，真实文件已被 `.gitignore` 忽略，不需要再依赖 shell 环境或服务管理器环境变量。
 
 Watchlist 清单支持 `Watchlist.Source.Mode` 选择来源：`yaml` 从 `Watchlist.Items` 和根级 `Tasks` 读取，`database` 从 `dc_watchlist_sources` 读取，`mixed` 同时读取且同 ID 时数据库覆盖 YAML。长清单建议使用 `database`，YAML 只保留调度、通知和持久化配置。持久化后端由 `Watchlist.Persistence.Driver` 决定，支持 `sqlite` 和 `mysql`；MySQL 可直接配置 `MySQLDSN`，也可通过 `GormConfigPath` 读取 `config/gorm.yml` 的写库配置。
 
@@ -181,7 +184,7 @@ curl -X POST -H "Authorization: Bearer $DIGCRAWL_GATEWAY_TOKEN" \
 
 可用接口：`GET /admin/watchlist/sources`、`GET /admin/watchlist/sources/{id}`、`POST /admin/watchlist/sources`、`PUT /admin/watchlist/sources/{id}`、`PATCH /admin/watchlist/sources/{id}/enable`、`PATCH /admin/watchlist/sources/{id}/disable`、`DELETE /admin/watchlist/sources/{id}`、`POST /admin/watchlist/sources/{id}/discover`、`POST /admin/watchlist/sources/{id}/run`、`POST /admin/watchlist/run-due`。
 
-DigFlow HTTP 摘要不需要编译私有 DigFlow runtime；默认构建下 `digflow_runtime` 会使用 stub 并回退到 extractive 摘要，避免普通测试和本地运行被私有仓库下载阻断。需要启用 DigFlow 内嵌 Runtime 时，使用 `-tags digflow_embedded` 构建，并先准备 SSH/GOPRIVATE、数据库与模型配置。DigFlow `v1.1.3` 的轻量化主要面向 `pkg/digflowapi` / `pkg/digflowtypes` 公共 DTO；digcrawl 内嵌模式仍使用 `pkg/digflow` runtime，首次构建仍会拉取 runtime 依赖树。真实数据库连接写入本地 `config/gorm.yml`，该文件已被 `.gitignore` 忽略；仓库提供无密钥模板 `config/gorm.example.yml`。DigFlow 自身表保持 `df_` 前缀，配置入口为 `config/digflow-gorm.yml`、`config/digflow.yml`、`config/eino.yml` 和 `agents/watchlist/agents.yml`。
+DigFlow HTTP 摘要不需要编译私有 DigFlow runtime；默认 `go build ./cmd/digcrawl` 下 `digflow_runtime` 会使用 stub 并回退到 extractive 摘要，避免普通测试和本地运行被私有仓库下载阻断。需要启用 DigFlow 内嵌 Runtime 时，使用 `-tags digflow_embedded` 构建，并先准备 SSH/GOPRIVATE、数据库与模型配置。Watchlist 常驻脚本默认会用该 tag 构建 `bin/digcrawl-watchlist`。DigFlow `v1.1.3` 的轻量化主要面向 `pkg/digflowapi` / `pkg/digflowtypes` 公共 DTO；digcrawl 内嵌模式仍使用 `pkg/digflow` runtime，首次构建仍会拉取 runtime 依赖树。真实数据库连接写入本地 `config/gorm.yml`，DigFlow 模板变量通过 `RuntimeEnv.ConfigPath` 指向的本地 `config/runtime-env.yml` 注入；仓库提供无密钥模板 `config/gorm.example.yml` 和 `config/runtime-env.example.yml`。DigFlow 自身表保持 `df_` 前缀，配置入口为 `config/digflow-gorm.yml`、`config/digflow.yml`、`config/eino.yml` 和 `agents/watchlist/agents.yml`；其中 `config/digflow-gorm.yml` 支持 `${DIGCRAWL_MYSQL_*}` 由 DigCrawl 宿主侧在运行时展开到临时配置文件，缺失变量会 fail-fast。
 
 ```bash
 GOPRIVATE=github.com/originaleric/* \
@@ -211,7 +214,7 @@ export REDDIT_CLIENT_SECRET="<client-secret>"
 export REDDIT_REFRESH_TOKEN="<optional-refresh-token>"
 ```
 
-新库初始化 MySQL 使用 `sqls/full/digcrawl_full_sql_ddl.sql`；本地单机 SQLite 使用 `sqls/full/digcrawl_full_sqlite_ddl.sql`，覆盖 Collect、Watchlist/Tasks runtime、持久化 Watchlist 清单和 DigFlow `df_*` embedded runtime 表。DigCrawl 自身本地 SQLite driver 使用 `github.com/mattn/go-sqlite3`，需要 `CGO_ENABLED=1` 和本机 C 编译环境，macOS 可安装 Xcode Command Line Tools。默认 DigCrawl 本地状态库路径为 `storage/digcrawl/collect.db`，可通过 `Watchlist.Persistence.SQLitePath` 调整；DigFlow 本地 SQLite 还需要同步调整 `config/digflow-gorm.yml`、`config/digflow.yml` 和 `config/eino.yml`，完整 profile 见 `USAGE.md`。只初始化 DigFlow `df_*` MySQL 表可使用 `sqls/full/digflow_embedded_runtime_full_ddl.sql`。根目录兼容文件 `sqls/digcrawl_full_sql_ddl.sql` 和 `sqls/2026-07-09_DigFlow内嵌Runtime初始化DDL.sql` 保持同口径。已执行过旧版 DigFlow DDL 的库，补跑 `sqls/2026-07-09_DigFlow最新Runtime增量DDL.sql`，其中包含最新 LoopRuntime `df_loop_*` 表和 `df_resource_asset.storage_key` 唯一约束迁移。启用通用 Tasks 调度需要补跑 `sqls/2026-07-16_通用Task调度RuntimeDDL.sql`；启用数据库持久化 Watchlist 清单需要补跑 `sqls/2026-07-18_持久化Watchlist清单DDL.sql`，其中包含 MySQL `dc_watchlist_sources`、相关 `watch_id VARCHAR(191)` 调整和 SQLite 对应 DDL。
+新库初始化 MySQL 使用 `sqls/full/digcrawl_full_sql_ddl.sql`；本地单机 SQLite 使用 `sqls/full/digcrawl_full_sqlite_ddl.sql`，覆盖 Collect、Watchlist/Tasks runtime、持久化 Watchlist 清单和 DigFlow `df_*` embedded runtime 表。DigCrawl 自身本地 SQLite driver 使用 `github.com/mattn/go-sqlite3`，需要 `CGO_ENABLED=1` 和本机 C 编译环境，macOS 可安装 Xcode Command Line Tools。默认 DigCrawl 本地状态库路径为 `storage/digcrawl/collect.db`，可通过 `Watchlist.Persistence.SQLitePath` 调整；DigFlow 本地 SQLite 还需要同步调整 `config/digflow-gorm.yml`、`config/digflow.yml` 和 `config/eino.yml`，完整 profile 见 `USAGE.md`。只初始化 DigFlow `df_*` MySQL 表可使用 `sqls/full/digflow_embedded_runtime_full_ddl.sql`。根目录兼容文件 `sqls/digcrawl_full_sql_ddl.sql` 和 `sqls/2026-07-09_DigFlow内嵌Runtime初始化DDL.sql` 保持同口径。已执行过旧版 DigFlow DDL 的库，补跑 `sqls/2026-07-09_DigFlow最新Runtime增量DDL.sql`，其中包含最新 LoopRuntime `df_loop_*` 表和 `df_resource_asset.storage_key` 唯一约束迁移。启用通用 Tasks 调度需要补跑 `sqls/2026-07-16_通用Task调度RuntimeDDL.sql`；启用数据库持久化 Watchlist 清单需要补跑 `sqls/2026-07-18_持久化Watchlist清单DDL.sql`，其中包含 MySQL `dc_watchlist_sources`、相关 `watch_id VARCHAR(191)` 调整和 SQLite 对应 DDL。已建库升级视频摘要投递元数据可补跑 `sqls/2026-07-29_Watchlist视频摘要投递元数据DDL.sql`。
 
 本地 ASR 依赖 `ffmpeg` 和 `faster-whisper`。`ffmpeg` 需能在 `PATH` 中直接调用；`faster-whisper` 建议安装到隔离 venv，再把可执行命令加入 `PATH` 或通过 `--local-command` / `ASR.LocalCommand` 显式指定。
 

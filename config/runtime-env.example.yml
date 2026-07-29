@@ -1,0 +1,8 @@
+RuntimeEnv:
+  Enabled: true
+  Variables:
+    DIGCRAWL_MYSQL_HOST: "127.0.0.1"
+    DIGCRAWL_MYSQL_DATABASE: "dig_crawl"
+    DIGCRAWL_MYSQL_USER: "root"
+    DIGCRAWL_MYSQL_PASSWORD: "<mysql-password>"
+    DIGFLOW_SUMMARY_API_KEY: "<llm-api-key>"

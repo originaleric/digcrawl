@@ -306,8 +306,15 @@ func (s *Store) migrate() error {
 			return err
 		}
 	}
-	_ = s.addColumnIfMissing("dc_watchlist_delivery", "message_title", s.textColumnType())
-	_ = s.addColumnIfMissing("dc_watchlist_delivery", "message_text", s.textColumnType())
+	if err := s.addColumnIfMissing("dc_watchlist_delivery", "message_title", s.textColumnType()); err != nil {
+		return err
+	}
+	if err := s.addColumnIfMissing("dc_watchlist_delivery", "message_text", s.textColumnType()); err != nil {
+		return err
+	}
+	if err := s.addColumnIfMissing("dc_watchlist_delivery", "message_provider", s.shortTextColumnType()); err != nil {
+		return err
+	}
 	if s.dialect == "sqlite" {
 		if err := s.migrateLegacyTables(); err != nil {
 			return err
@@ -319,6 +326,13 @@ func (s *Store) migrate() error {
 func (s *Store) textColumnType() string {
 	if s.dialect == "mysql" {
 		return "LONGTEXT"
+	}
+	return "TEXT"
+}
+
+func (s *Store) shortTextColumnType() string {
+	if s.dialect == "mysql" {
+		return "VARCHAR(64)"
 	}
 	return "TEXT"
 }
@@ -396,6 +410,7 @@ func sqliteMigrationStatements() []string {
 	  notify_error TEXT,
 	  message_title TEXT,
 	  message_text TEXT,
+	  message_provider TEXT,
 	  PRIMARY KEY (watch_id, content_key, channel_id)
 )`,
 		`CREATE TABLE IF NOT EXISTS dc_tasks_runtime (
@@ -522,6 +537,7 @@ func mysqlMigrationStatements() []string {
   notify_error TEXT,
   message_title TEXT,
   message_text LONGTEXT,
+  message_provider VARCHAR(64),
   PRIMARY KEY (watch_id, content_key, channel_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 		`CREATE TABLE IF NOT EXISTS dc_tasks_runtime (
@@ -623,8 +639,8 @@ FROM watchlist_items`); err != nil {
 			return err
 		}
 		if _, err := s.db.Exec(`INSERT OR IGNORE INTO dc_watchlist_delivery (
-  watch_id, content_key, channel_id, status, notified_at, retry_count, next_retry_at, notify_error, message_title, message_text
-) SELECT watch_id, content_key, channel_id, status, notified_at, retry_count, next_retry_at, notify_error, message_title, message_text
+  watch_id, content_key, channel_id, status, notified_at, retry_count, next_retry_at, notify_error, message_title, message_text, message_provider
+) SELECT watch_id, content_key, channel_id, status, notified_at, retry_count, next_retry_at, notify_error, message_title, message_text, ''
 FROM watchlist_delivery`); err != nil {
 			return err
 		}
@@ -968,14 +984,20 @@ func (s *Store) ItemStatus(ctx context.Context, watchID, key string) (string, er
 }
 
 type PendingDelivery struct {
-	WatchID    string
-	ContentKey string
-	ChannelID  string
-	Title      string
-	Text       string
+	WatchID         string
+	ContentKey      string
+	ChannelID       string
+	Title           string
+	Text            string
+	ContentType     string
+	MessageProvider string
 }
 
 func (s *Store) UpsertDelivery(ctx context.Context, watchID, contentKey, channelID, status, errText string, retryable bool, messageTitle, messageText string) error {
+	return s.UpsertDeliveryWithProvider(ctx, watchID, contentKey, channelID, status, errText, retryable, messageTitle, messageText, "")
+}
+
+func (s *Store) UpsertDeliveryWithProvider(ctx context.Context, watchID, contentKey, channelID, status, errText string, retryable bool, messageTitle, messageText, messageProvider string) error {
 	now := time.Now().UTC()
 	var notified any
 	if status == StatusNotified || status == "notified" {
@@ -990,8 +1012,8 @@ func (s *Store) UpsertDelivery(ctx context.Context, watchID, contentKey, channel
 	}
 	if s.dialect == "mysql" {
 		_, err := s.db.ExecContext(ctx, `INSERT INTO dc_watchlist_delivery (
-  watch_id, content_key, channel_id, status, notified_at, retry_count, next_retry_at, notify_error, message_title, message_text
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  watch_id, content_key, channel_id, status, notified_at, retry_count, next_retry_at, notify_error, message_title, message_text, message_provider
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON DUPLICATE KEY UPDATE
   status = VALUES(status),
   notified_at = COALESCE(VALUES(notified_at), notified_at),
@@ -999,13 +1021,14 @@ ON DUPLICATE KEY UPDATE
   next_retry_at = VALUES(next_retry_at),
   notify_error = VALUES(notify_error),
   message_title = COALESCE(VALUES(message_title), message_title),
-  message_text = COALESCE(VALUES(message_text), message_text)`,
-			watchID, contentKey, channelID, status, notified, 0, nullStr(nextRetry), nullStr(errText), nullStr(messageTitle), nullStr(messageText), StatusNotifyFailed)
+  message_text = COALESCE(VALUES(message_text), message_text),
+  message_provider = COALESCE(VALUES(message_provider), message_provider)`,
+			watchID, contentKey, channelID, status, notified, 0, nullStr(nextRetry), nullStr(errText), nullStr(messageTitle), nullStr(messageText), nullStr(messageProvider), StatusNotifyFailed)
 		return err
 	}
 	_, err := s.db.ExecContext(ctx, `INSERT INTO dc_watchlist_delivery (
-  watch_id, content_key, channel_id, status, notified_at, retry_count, next_retry_at, notify_error, message_title, message_text
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  watch_id, content_key, channel_id, status, notified_at, retry_count, next_retry_at, notify_error, message_title, message_text, message_provider
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(watch_id, content_key, channel_id) DO UPDATE SET
   status = excluded.status,
   notified_at = COALESCE(excluded.notified_at, dc_watchlist_delivery.notified_at),
@@ -1013,8 +1036,9 @@ ON CONFLICT(watch_id, content_key, channel_id) DO UPDATE SET
   next_retry_at = excluded.next_retry_at,
   notify_error = excluded.notify_error,
   message_title = COALESCE(excluded.message_title, dc_watchlist_delivery.message_title),
-  message_text = COALESCE(excluded.message_text, dc_watchlist_delivery.message_text)`,
-		watchID, contentKey, channelID, status, notified, 0, nullStr(nextRetry), nullStr(errText), nullStr(messageTitle), nullStr(messageText), StatusNotifyFailed)
+  message_text = COALESCE(excluded.message_text, dc_watchlist_delivery.message_text),
+  message_provider = COALESCE(excluded.message_provider, dc_watchlist_delivery.message_provider)`,
+		watchID, contentKey, channelID, status, notified, 0, nullStr(nextRetry), nullStr(errText), nullStr(messageTitle), nullStr(messageText), nullStr(messageProvider), StatusNotifyFailed)
 	return err
 }
 
@@ -1024,10 +1048,12 @@ func (s *Store) ListPendingDeliveries(ctx context.Context, watchID string, limit
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
 	rows, err := s.db.QueryContext(ctx, `
-SELECT watch_id, content_key, channel_id, COALESCE(message_title, ''), COALESCE(message_text, '')
-FROM dc_watchlist_delivery
-WHERE watch_id = ? AND status = ? AND next_retry_at IS NOT NULL AND next_retry_at != '' AND next_retry_at <= ?
-ORDER BY next_retry_at, content_key
+SELECT d.watch_id, d.content_key, d.channel_id, COALESCE(d.message_title, ''), COALESCE(d.message_text, ''),
+  COALESCE(i.content_type, ''), COALESCE(d.message_provider, '')
+FROM dc_watchlist_delivery d
+LEFT JOIN dc_watchlist_items i ON i.watch_id = d.watch_id AND i.content_key = d.content_key
+WHERE d.watch_id = ? AND d.status = ? AND d.next_retry_at IS NOT NULL AND d.next_retry_at != '' AND d.next_retry_at <= ?
+ORDER BY d.next_retry_at, d.content_key
 LIMIT ?`, watchID, StatusNotifyFailed, now, limit)
 	if err != nil {
 		return nil, err
@@ -1036,7 +1062,7 @@ LIMIT ?`, watchID, StatusNotifyFailed, now, limit)
 	var out []PendingDelivery
 	for rows.Next() {
 		var d PendingDelivery
-		if err := rows.Scan(&d.WatchID, &d.ContentKey, &d.ChannelID, &d.Title, &d.Text); err != nil {
+		if err := rows.Scan(&d.WatchID, &d.ContentKey, &d.ChannelID, &d.Title, &d.Text, &d.ContentType, &d.MessageProvider); err != nil {
 			return nil, err
 		}
 		out = append(out, d)

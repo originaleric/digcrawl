@@ -63,6 +63,11 @@ func (p *localProvider) Transcribe(ctx context.Context, audioPath string) (*Resu
 	}
 	defer cancel()
 	cmd := exec.CommandContext(cmdCtx, p.command, args...)
+	env, envErr := localASREnv(os.Environ())
+	if envErr != nil {
+		return nil, envErr
+	}
+	cmd.Env = env
 	stdout, err := cmd.Output()
 	if err != nil {
 		if ee, ok := err.(*exec.ExitError); ok {
@@ -84,6 +89,46 @@ func (p *localProvider) Transcribe(ctx context.Context, audioPath string) (*Resu
 	}
 	result.Audio.SizeBytes = info.Size()
 	return result, nil
+}
+
+func localASREnv(base []string) ([]string, error) {
+	env := append([]string{}, base...)
+	if !envHasValue(env, "HF_HOME") && !envHasValue(env, "HUGGINGFACE_HUB_CACHE") {
+		cacheDir, err := defaultLocalASRCacheDir()
+		if err != nil {
+			return nil, err
+		}
+		if err := os.MkdirAll(cacheDir, 0o755); err != nil {
+			return nil, fmt.Errorf("create local ASR model cache dir: %w", err)
+		}
+		env = append(env, "HF_HOME="+cacheDir)
+	}
+	if !envHasValue(env, "HF_HUB_DISABLE_PROGRESS_BARS") {
+		env = append(env, "HF_HUB_DISABLE_PROGRESS_BARS=1")
+	}
+	return env, nil
+}
+
+func defaultLocalASRCacheDir() (string, error) {
+	wd, err := os.Getwd()
+	if err == nil && strings.TrimSpace(wd) != "" {
+		return filepath.Join(wd, ".cache", "huggingface"), nil
+	}
+	tmp := os.TempDir()
+	if strings.TrimSpace(tmp) == "" {
+		return "", fmt.Errorf("resolve local ASR model cache dir: empty temp dir")
+	}
+	return filepath.Join(tmp, "digcrawl-huggingface"), nil
+}
+
+func envHasValue(env []string, key string) bool {
+	prefix := key + "="
+	for _, item := range env {
+		if strings.HasPrefix(item, prefix) && strings.TrimSpace(strings.TrimPrefix(item, prefix)) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func localCommandFallback(command string, args []string) (string, []string, bool) {

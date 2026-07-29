@@ -58,7 +58,7 @@ func TestStoreDeliveryRetryState(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer st.Close()
-	if err := st.UpsertDelivery(ctx, "w1", "k1", "c1", StatusNotifyFailed, "http 500", true, "title", "body"); err != nil {
+	if err := st.UpsertDeliveryWithProvider(ctx, "w1", "k1", "c1", StatusNotifyFailed, "http 500", true, "title", "body", "digflow_runtime"); err != nil {
 		t.Fatal(err)
 	}
 	pending, err := st.ListPendingDeliveries(ctx, "w1", 10)
@@ -85,7 +85,7 @@ func TestStoreDeliveryRetryState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(pending) != 1 || pending[0].Text != "body" {
+	if len(pending) != 1 || pending[0].Text != "body" || pending[0].MessageProvider != "digflow_runtime" {
 		t.Fatalf("expected due retryable delivery: %+v", pending)
 	}
 	if err := st.UpsertDelivery(ctx, "w1", "k1", "c1", StatusNotified, "", false, "title", "body"); err != nil {

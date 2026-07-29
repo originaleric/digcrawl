@@ -3,6 +3,7 @@
 #
 # Usage:
 #   ./scripts/digcrawl-watchlist-service.sh install
+#   ./scripts/digcrawl-watchlist-service.sh build
 #   ./scripts/digcrawl-watchlist-service.sh start|stop|restart|status|logs|uninstall
 #
 # Optional environment overrides:
@@ -12,6 +13,10 @@
 #   DIGCRAWL_LOG_DIR=/path/to/logs
 #   DIGCRAWL_SERVICE_NAME=digcrawl-watchlist
 #   DIGCRAWL_SERVICE_LABEL=com.digcrawl.watchlist
+#   DIGCRAWL_AUTO_BUILD=1
+#   DIGCRAWL_BUILD_TAGS=digflow_embedded
+#   DIGCRAWL_BUILD_GOCACHE=/private/tmp/digcrawl-gocache
+#   DIGCRAWL_BUILD_GOMODCACHE=<workdir>/.tmp/go-mod-watchlist
 
 set -euo pipefail
 
@@ -23,9 +28,15 @@ SERVICE_LABEL="${DIGCRAWL_SERVICE_LABEL:-com.digcrawl.watchlist}"
 WORKDIR="${DIGCRAWL_WORKDIR:-${ROOT_DIR}}"
 CONFIG_PATH="${DIGCRAWL_CONFIG:-${WORKDIR}/config/config.yaml}"
 LOG_DIR="${DIGCRAWL_LOG_DIR:-${WORKDIR}/logs}"
+DIGCRAWL_AUTO_BUILD="${DIGCRAWL_AUTO_BUILD:-1}"
+DIGCRAWL_BUILD_TAGS="${DIGCRAWL_BUILD_TAGS:-digflow_embedded}"
+DIGCRAWL_BUILD_GOCACHE="${DIGCRAWL_BUILD_GOCACHE:-/private/tmp/digcrawl-gocache}"
+DIGCRAWL_BUILD_GOMODCACHE="${DIGCRAWL_BUILD_GOMODCACHE:-${WORKDIR}/.tmp/go-mod-watchlist}"
 
 if [[ -n "${DIGCRAWL_BIN:-}" ]]; then
   BIN_PATH="${DIGCRAWL_BIN}"
+elif [[ "${DIGCRAWL_AUTO_BUILD}" == "1" ]]; then
+  BIN_PATH="${WORKDIR}/bin/digcrawl-watchlist"
 elif [[ -x "${WORKDIR}/digcrawl" ]]; then
   BIN_PATH="${WORKDIR}/digcrawl"
 else
@@ -37,7 +48,7 @@ OS_NAME="$(uname -s)"
 
 usage() {
   cat <<EOF
-Usage: $(basename "$0") <install|start|stop|restart|status|logs|uninstall|run-foreground>
+Usage: $(basename "$0") <install|build|start|stop|restart|status|logs|uninstall|run-foreground>
 
 Environment:
   DIGCRAWL_BIN            default: ${BIN_PATH:-<not found>}
@@ -46,6 +57,10 @@ Environment:
   DIGCRAWL_LOG_DIR        default: ${LOG_DIR}
   DIGCRAWL_SERVICE_NAME   default: ${SERVICE_NAME}
   DIGCRAWL_SERVICE_LABEL  default: ${SERVICE_LABEL}
+  DIGCRAWL_AUTO_BUILD     default: ${DIGCRAWL_AUTO_BUILD}
+  DIGCRAWL_BUILD_TAGS     default: ${DIGCRAWL_BUILD_TAGS}
+  DIGCRAWL_BUILD_GOCACHE  default: ${DIGCRAWL_BUILD_GOCACHE}
+  DIGCRAWL_BUILD_GOMODCACHE default: ${DIGCRAWL_BUILD_GOMODCACHE}
 EOF
 }
 
@@ -61,6 +76,22 @@ require_binary() {
 
 require_config() {
   [[ -f "${CONFIG_PATH}" ]] || fail "config file not found: ${CONFIG_PATH}"
+}
+
+build_binary() {
+  if [[ "${DIGCRAWL_AUTO_BUILD}" != "1" ]]; then
+    require_binary
+    return
+  fi
+  mkdir -p "$(dirname "${BIN_PATH}")"
+  local go_bin
+  go_bin="${GO:-go}"
+  local build_args=()
+  if [[ -n "${DIGCRAWL_BUILD_TAGS}" ]]; then
+    build_args+=("-tags" "${DIGCRAWL_BUILD_TAGS}")
+  fi
+  GOCACHE="${DIGCRAWL_BUILD_GOCACHE}" GOMODCACHE="${DIGCRAWL_BUILD_GOMODCACHE}" "${go_bin}" build "${build_args[@]}" -o "${BIN_PATH}" ./cmd/digcrawl
+  [[ -x "${BIN_PATH}" ]] || fail "failed to build digcrawl binary: ${BIN_PATH}"
 }
 
 xml_escape() {
@@ -90,8 +121,8 @@ linux_unit_path() {
 }
 
 install_macos() {
-  require_binary
   require_config
+  build_binary
   mkdir -p "${HOME}/Library/LaunchAgents" "${LOG_DIR}"
   local plist
   plist="$(mac_plist_path)"
@@ -119,6 +150,14 @@ install_macos() {
     <string>$(xml_escape "${WORKDIR}")</string>
     <key>DIGCRAWL_LOG_DIR</key>
     <string>$(xml_escape "${LOG_DIR}")</string>
+    <key>DIGCRAWL_AUTO_BUILD</key>
+    <string>$(xml_escape "${DIGCRAWL_AUTO_BUILD}")</string>
+    <key>DIGCRAWL_BUILD_TAGS</key>
+    <string>$(xml_escape "${DIGCRAWL_BUILD_TAGS}")</string>
+    <key>DIGCRAWL_BUILD_GOCACHE</key>
+    <string>$(xml_escape "${DIGCRAWL_BUILD_GOCACHE}")</string>
+    <key>DIGCRAWL_BUILD_GOMODCACHE</key>
+    <string>$(xml_escape "${DIGCRAWL_BUILD_GOMODCACHE}")</string>
   </dict>
   <key>RunAtLoad</key>
   <true/>
@@ -135,8 +174,8 @@ EOF
 }
 
 install_linux() {
-  require_binary
   require_config
+  build_binary
   mkdir -p "${HOME}/.config/systemd/user" "${LOG_DIR}"
   local unit
   unit="$(linux_unit_path)"
@@ -152,6 +191,10 @@ Environment=$(systemd_quote "DIGCRAWL_BIN=${BIN_PATH}")
 Environment=$(systemd_quote "DIGCRAWL_CONFIG=${CONFIG_PATH}")
 Environment=$(systemd_quote "DIGCRAWL_WORKDIR=${WORKDIR}")
 Environment=$(systemd_quote "DIGCRAWL_LOG_DIR=${LOG_DIR}")
+Environment=$(systemd_quote "DIGCRAWL_AUTO_BUILD=${DIGCRAWL_AUTO_BUILD}")
+Environment=$(systemd_quote "DIGCRAWL_BUILD_TAGS=${DIGCRAWL_BUILD_TAGS}")
+Environment=$(systemd_quote "DIGCRAWL_BUILD_GOCACHE=${DIGCRAWL_BUILD_GOCACHE}")
+Environment=$(systemd_quote "DIGCRAWL_BUILD_GOMODCACHE=${DIGCRAWL_BUILD_GOMODCACHE}")
 ExecStart=$(systemd_quote "${SELF_PATH}") run-foreground
 Restart=always
 RestartSec=10
@@ -230,8 +273,8 @@ logs_file() {
 }
 
 run_foreground() {
-  require_binary
   require_config
+  require_binary
   mkdir -p "${LOG_DIR}"
   cd "${WORKDIR}"
   exec "${BIN_PATH}" watchlist serve --config "${CONFIG_PATH}"
@@ -256,6 +299,10 @@ cmd="${1:-}"
 case "${cmd}" in
   install)
     dispatch_platform install
+    ;;
+  build)
+    require_config
+    build_binary
     ;;
   start)
     dispatch_platform start

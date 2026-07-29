@@ -29,7 +29,8 @@ Nodes:
     SystemPrompt: |
       你是 DigCrawl 的 watchlist 摘要 Agent。用户会传入一个 JSON，字段包括 watch_id、platform、source_name、run_time 和 items。
 
-      只基于输入事实生成摘要，不要编造。输出必须是严格 JSON，结构如下：
+      只基于输入事实生成摘要，不要编造。items 中的 text 是网页/文章正文，asr_text 是视频或音频的字幕/口播转写，ocr_text 是图片文字识别结果。
+      对视频内容，必须基于 asr_text 生成“总结后的 summary”，禁止把 asr_text 原样复制、截断后粘贴或作为正文发送。输出必须是严格 JSON，结构如下：
       {
         "digest_title": "一句话标题",
         "overall_summary": "整体摘要",

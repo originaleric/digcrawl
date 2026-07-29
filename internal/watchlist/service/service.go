@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/go-sql-driver/mysql"
 	"github.com/originaleric/digcrawl/collect"
@@ -546,6 +547,11 @@ func (s *Service) RunItem(ctx context.Context, item WatchItem) (RunSummary, erro
 			sum.Errors = append(sum.Errors, err.Error())
 			continue
 		}
+		if err := validateSummaryResultForCollectedItem(collected, res); err != nil {
+			_ = s.store.UpdateItemStatus(ctx, item.ID, key, StatusSummaryFailed, "", err.Error())
+			sum.Errors = append(sum.Errors, err.Error())
+			continue
+		}
 		collected.Summary = res
 		sum.Summarized++
 		_ = s.store.UpdateItemStatus(ctx, item.ID, key, StatusSummarized, "", res.Error)
@@ -554,7 +560,7 @@ func (s *Service) RunItem(ctx context.Context, item WatchItem) (RunSummary, erro
 		if notifyResult.Status == "notified" || notifyResult.Status == StatusNotified {
 			sum.Notified++
 			_ = s.store.UpdateItemStatus(ctx, item.ID, key, StatusNotified, "", "")
-			_ = s.store.UpsertDelivery(ctx, item.ID, key, notifyResult.ChannelID, StatusNotified, "", false, msg.Title, msg.Text)
+			_ = s.store.UpsertDeliveryWithProvider(ctx, item.ID, key, notifyResult.ChannelID, StatusNotified, "", false, msg.Title, msg.Text, res.Provider)
 			continue
 		}
 		status := StatusNotifyFailed
@@ -562,7 +568,7 @@ func (s *Service) RunItem(ctx context.Context, item WatchItem) (RunSummary, erro
 			status = StatusNotifyFinalFail
 		}
 		_ = s.store.UpdateItemStatus(ctx, item.ID, key, status, "", "")
-		_ = s.store.UpsertDelivery(ctx, item.ID, key, notifyResult.ChannelID, StatusNotifyFailed, notifyResult.Error, notifyResult.Retryable, msg.Title, msg.Text)
+		_ = s.store.UpsertDeliveryWithProvider(ctx, item.ID, key, notifyResult.ChannelID, StatusNotifyFailed, notifyResult.Error, notifyResult.Retryable, msg.Title, msg.Text, res.Provider)
 		sum.Errors = append(sum.Errors, notifyResult.Error)
 	}
 	if !baseline && sum.NewItems == 0 {
@@ -649,11 +655,16 @@ func (s *Service) retryPendingDeliveries(ctx context.Context, item WatchItem) (i
 			_ = s.store.UpdateItemStatus(ctx, d.WatchID, d.ContentKey, StatusNotifyFinalFail, "", "")
 			continue
 		}
+		if stale, reason := isStaleVideoPendingDelivery(d); stale {
+			_ = s.store.UpsertDeliveryWithProvider(ctx, d.WatchID, d.ContentKey, d.ChannelID, StatusNotifyFailed, reason, false, d.Title, d.Text, d.MessageProvider)
+			_ = s.store.UpdateItemStatus(ctx, d.WatchID, d.ContentKey, StatusSummaryFailed, "", reason)
+			continue
+		}
 		res := s.notifier.Send(ctx, d.ChannelID, notify.Message{Title: d.Title, Text: d.Text})
 		if res.Status == StatusNotified || res.Status == "notified" {
 			notified++
 			_ = s.store.UpdateItemStatus(ctx, d.WatchID, d.ContentKey, StatusNotified, "", "")
-			_ = s.store.UpsertDelivery(ctx, d.WatchID, d.ContentKey, d.ChannelID, StatusNotified, "", false, d.Title, d.Text)
+			_ = s.store.UpsertDeliveryWithProvider(ctx, d.WatchID, d.ContentKey, d.ChannelID, StatusNotified, "", false, d.Title, d.Text, d.MessageProvider)
 			continue
 		}
 		status := StatusNotifyFailed
@@ -661,7 +672,7 @@ func (s *Service) retryPendingDeliveries(ctx context.Context, item WatchItem) (i
 			status = StatusNotifyFinalFail
 		}
 		_ = s.store.UpdateItemStatus(ctx, d.WatchID, d.ContentKey, status, "", "")
-		_ = s.store.UpsertDelivery(ctx, d.WatchID, d.ContentKey, d.ChannelID, StatusNotifyFailed, res.Error, res.Retryable, d.Title, d.Text)
+		_ = s.store.UpsertDeliveryWithProvider(ctx, d.WatchID, d.ContentKey, d.ChannelID, StatusNotifyFailed, res.Error, res.Retryable, d.Title, d.Text, d.MessageProvider)
 	}
 	return notified, nil
 }
@@ -884,29 +895,100 @@ func (s *Service) collectFeedItem(ctx context.Context, feed FeedItem) (Collected
 		return CollectedItem{Feed: feed}, fmt.Errorf("decode collect json: %w", err)
 	}
 	asrText := extractMetadataText(out, "asr_text")
+	text, err := summaryTextForCollectedItem(feed, out, asrText)
+	if err != nil {
+		return CollectedItem{Feed: feed}, err
+	}
 	return CollectedItem{
-		Feed: feed, Title: str(out["title"]), Text: summaryTextForCollectedItem(feed, out, asrText),
+		Feed: feed, Title: str(out["title"]), Text: text,
 		ASRText: asrText, OCRText: extractOCRText(out),
 		Metadata: extractMetadata(out),
 	}, nil
 }
 
-func summaryTextForCollectedItem(feed FeedItem, out map[string]any, asrText string) string {
-	text := firstNonEmpty(str(out["text"]), str(out["markdown"]))
-	if isVideoCollectedItem(feed, out) && strings.TrimSpace(asrText) != "" {
-		return strings.TrimSpace(asrText)
+func summaryTextForCollectedItem(feed FeedItem, out map[string]any, asrText string) (string, error) {
+	if isVideoCollectedItem(feed, out) {
+		if strings.TrimSpace(asrText) == "" {
+			return "", fmt.Errorf("video transcript unavailable: ASR/subtitles are required for video summary")
+		}
+		return "", nil
 	}
-	return text
+	return firstNonEmpty(str(out["text"]), str(out["markdown"])), nil
+}
+
+func validateSummaryResultForCollectedItem(collected CollectedItem, res *summary.Result) error {
+	if !isVideoFeedItem(collected.Feed) {
+		return nil
+	}
+	if res == nil {
+		return fmt.Errorf("video summary requires agent provider; got empty result")
+	}
+	provider := strings.ToLower(strings.TrimSpace(res.Provider))
+	if provider == "" || provider == "extractive" {
+		if strings.TrimSpace(res.Error) != "" {
+			return fmt.Errorf("video summary requires agent provider; got %q: %s", provider, strings.TrimSpace(res.Error))
+		}
+		return fmt.Errorf("video summary requires agent provider; got %q", provider)
+	}
+	if len(res.Items) == 0 {
+		return fmt.Errorf("video summary agent returned no item summary")
+	}
+	itemSummary := strings.TrimSpace(res.Items[0].Summary)
+	if itemSummary == "" {
+		return fmt.Errorf("video summary agent returned empty item summary")
+	}
+	if utf8.RuneCountInString(itemSummary) > 240 {
+		return fmt.Errorf("video summary agent returned overlong item summary")
+	}
+	if compactForCompare(itemSummary) == compactForCompare(collected.ASRText) {
+		return fmt.Errorf("video summary agent copied ASR transcript verbatim")
+	}
+	return nil
+}
+
+func isVideoFeedItem(feed FeedItem) bool {
+	return isVideoContentType(feed.ContentType)
+}
+
+func isVideoContentType(contentType string) bool {
+	switch strings.ToLower(strings.TrimSpace(contentType)) {
+	case "video", "toutiao_video", "douyin_video":
+		return true
+	default:
+		return false
+	}
+}
+
+func isAgentSummaryProvider(provider string) bool {
+	switch strings.ToLower(strings.TrimSpace(provider)) {
+	case "digflow_runtime", "digflow_http", "llm_direct":
+		return true
+	default:
+		return false
+	}
+}
+
+func isStaleVideoPendingDelivery(d watchlist.PendingDelivery) (bool, string) {
+	if !isVideoContentType(d.ContentType) {
+		return false, ""
+	}
+	if isAgentSummaryProvider(d.MessageProvider) {
+		return false, ""
+	}
+	return true, fmt.Sprintf("stale video delivery requires regenerated agent summary; message_provider=%q", strings.TrimSpace(d.MessageProvider))
 }
 
 func isVideoCollectedItem(feed FeedItem, out map[string]any) bool {
 	for _, v := range []string{feed.ContentType, str(out["content_type"])} {
-		switch strings.ToLower(strings.TrimSpace(v)) {
-		case "video", "toutiao_video", "douyin_video":
+		if isVideoContentType(v) {
 			return true
 		}
 	}
 	return false
+}
+
+func compactForCompare(s string) string {
+	return strings.Join(strings.Fields(strings.TrimSpace(s)), "")
 }
 
 func retryableItemStatus(status string) bool {

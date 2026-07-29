@@ -119,5 +119,6 @@ CREATE TABLE IF NOT EXISTS `dc_watchlist_delivery` (
   `notify_error` text NULL,
   `message_title` text NULL,
   `message_text` longtext NULL,
+  `message_provider` varchar(64) NULL,
   PRIMARY KEY (`watch_id`, `content_key`, `channel_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

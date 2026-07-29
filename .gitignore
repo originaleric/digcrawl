@@ -33,3 +33,4 @@
 *.pem
 config/gorm.yml
 config/feishu.yml
+config/runtime-env.yml

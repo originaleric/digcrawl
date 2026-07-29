@@ -288,3 +288,90 @@ Feishu:
 		t.Fatalf("local channels not merged: %+v", feishu.Channels)
 	}
 }
+
+func TestLoadAppliesRuntimeEnvWhenEnabled(t *testing.T) {
+	t.Setenv("DIGCRAWL_RUNTIME_ENV_TEST", "")
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	data := []byte(`
+RuntimeEnv:
+  Enabled: true
+  Variables:
+    DIGCRAWL_RUNTIME_ENV_TEST: from-config
+`)
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path); err != nil {
+		t.Fatal(err)
+	}
+	if got := os.Getenv("DIGCRAWL_RUNTIME_ENV_TEST"); got != "from-config" {
+		t.Fatalf("runtime env not applied: %q", got)
+	}
+}
+
+func TestLoadDoesNotApplyRuntimeEnvUnlessEnabled(t *testing.T) {
+	t.Setenv("DIGCRAWL_RUNTIME_ENV_DISABLED_TEST", "before")
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	data := []byte(`
+RuntimeEnv:
+  Enabled: false
+  Variables:
+    DIGCRAWL_RUNTIME_ENV_DISABLED_TEST: after
+`)
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path); err != nil {
+		t.Fatal(err)
+	}
+	if got := os.Getenv("DIGCRAWL_RUNTIME_ENV_DISABLED_TEST"); got != "before" {
+		t.Fatalf("disabled runtime env should not override process env: %q", got)
+	}
+}
+
+func TestLoadRejectsInvalidRuntimeEnvName(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	data := []byte(`
+RuntimeEnv:
+  Enabled: true
+  Variables:
+    "BAD-NAME": value
+`)
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path); err == nil {
+		t.Fatal("expected invalid runtime env name to fail")
+	}
+}
+
+func TestLoadMergesLocalRuntimeEnvConfig(t *testing.T) {
+	t.Setenv("DIGCRAWL_LOCAL_RUNTIME_ENV_TEST", "")
+	dir := t.TempDir()
+	localPath := filepath.Join(dir, "runtime-env.yml")
+	configPath := filepath.Join(dir, "config.yaml")
+	data := []byte(`
+RuntimeEnv:
+  ConfigPath: "` + localPath + `"
+  Variables:
+    DIGCRAWL_LOCAL_RUNTIME_ENV_TEST: from-main
+`)
+	if err := os.WriteFile(configPath, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	local := []byte(`
+RuntimeEnv:
+  Enabled: true
+  Variables:
+    DIGCRAWL_LOCAL_RUNTIME_ENV_TEST: from-local
+`)
+	if err := os.WriteFile(localPath, local, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(configPath); err != nil {
+		t.Fatal(err)
+	}
+	if got := os.Getenv("DIGCRAWL_LOCAL_RUNTIME_ENV_TEST"); got != "from-local" {
+		t.Fatalf("local runtime env not merged: %q", got)
+	}
+}

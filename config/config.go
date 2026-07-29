@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,6 +16,7 @@ type Config struct {
 	Collector     CollectorConfig     `yaml:"Collector" json:"Collector"`
 	Collect       CollectConfig       `yaml:"Collect" json:"Collect"`
 	LocalBrowser  LocalBrowserConfig  `yaml:"LocalBrowser" json:"LocalBrowser"`
+	RuntimeEnv    RuntimeEnvConfig    `yaml:"RuntimeEnv" json:"RuntimeEnv,omitempty"`
 	Platform      PlatformConfig      `yaml:"Platform" json:"Platform"`
 	OCR           OCRConfig           `yaml:"OCR" json:"OCR"`
 	ASR           ASRConfig           `yaml:"ASR" json:"ASR"`
@@ -101,6 +103,21 @@ type LocalBrowserConfig struct {
 	UserDataDir            string   `yaml:"UserDataDir" json:"UserDataDir,omitempty"`
 	ProxyURL               string   `yaml:"ProxyURL" json:"ProxyURL,omitempty"`
 	ExtraArgs              []string `yaml:"ExtraArgs" json:"ExtraArgs,omitempty"`
+}
+
+// RuntimeEnvConfig controls explicit, config-file based runtime variable
+// injection for embedded components that still consume process environment.
+type RuntimeEnvConfig struct {
+	Enabled    *bool             `yaml:"Enabled" json:"Enabled,omitempty"`
+	ConfigPath string            `yaml:"ConfigPath" json:"ConfigPath,omitempty"`
+	Variables  map[string]string `yaml:"Variables" json:"Variables,omitempty"`
+}
+
+func (c RuntimeEnvConfig) EnabledOrDefault() bool {
+	if c.Enabled == nil {
+		return false
+	}
+	return *c.Enabled
 }
 
 // PlatformConfig platform read/retry/health settings.
@@ -1195,8 +1212,98 @@ func Load(path string) (*Config, error) {
 	if err := mergeLocalFeishuConfig(&cfg); err != nil {
 		return nil, err
 	}
+	if err := mergeLocalRuntimeEnvConfig(&cfg); err != nil {
+		return nil, err
+	}
+	if err := applyRuntimeEnvConfig(cfg.RuntimeEnv); err != nil {
+		return nil, err
+	}
 	defaultCfg = cfg
 	return &defaultCfg, nil
+}
+
+func applyRuntimeEnvConfig(cfg RuntimeEnvConfig) error {
+	if !cfg.EnabledOrDefault() {
+		return nil
+	}
+	for k, v := range cfg.Variables {
+		name := strings.TrimSpace(k)
+		if !isValidEnvName(name) {
+			return fmt.Errorf("RuntimeEnv variable %q is invalid", k)
+		}
+		if strings.IndexByte(v, 0) >= 0 {
+			return fmt.Errorf("RuntimeEnv variable %q contains NUL byte", name)
+		}
+		if err := os.Setenv(name, v); err != nil {
+			return fmt.Errorf("set RuntimeEnv variable %q: %w", name, err)
+		}
+	}
+	return nil
+}
+
+func isValidEnvName(name string) bool {
+	if name == "" {
+		return false
+	}
+	for i, r := range name {
+		if i == 0 {
+			if (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') || r == '_' {
+				continue
+			}
+			return false
+		}
+		if (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '_' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func mergeLocalRuntimeEnvConfig(cfg *Config) error {
+	path := strings.TrimSpace(cfg.RuntimeEnv.ConfigPath)
+	if path == "" {
+		return nil
+	}
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var local struct {
+		RuntimeEnv RuntimeEnvConfig  `yaml:"RuntimeEnv"`
+		Enabled    *bool             `yaml:"Enabled"`
+		Variables  map[string]string `yaml:"Variables"`
+	}
+	if err := yaml.Unmarshal(data, &local); err != nil {
+		return err
+	}
+	override := local.RuntimeEnv
+	if override.Enabled == nil && len(override.Variables) == 0 && (local.Enabled != nil || len(local.Variables) > 0) {
+		override.Enabled = local.Enabled
+		override.Variables = local.Variables
+	}
+	mergeRuntimeEnvConfig(&cfg.RuntimeEnv, override)
+	return nil
+}
+
+func mergeRuntimeEnvConfig(dst *RuntimeEnvConfig, src RuntimeEnvConfig) {
+	if src.Enabled != nil {
+		dst.Enabled = src.Enabled
+	}
+	if strings.TrimSpace(src.ConfigPath) != "" {
+		dst.ConfigPath = src.ConfigPath
+	}
+	if len(src.Variables) > 0 {
+		if dst.Variables == nil {
+			dst.Variables = map[string]string{}
+		}
+		for k, v := range src.Variables {
+			dst.Variables[k] = v
+		}
+	}
 }
 
 func mergeLocalFeishuConfig(cfg *Config) error {
