@@ -12,7 +12,7 @@ DigCrawl 的核心目标不是“提供一个网关”，而是把公众号、�
 - 私有环境采集：在用户电脑或内网机器上执行读取，利用本机登录态、Cookie 和网络环境
 - 数据管道入口：把多平台内容统一成稳定 JSON，再进入后续清洗、分析、RAG 或审核流程
 
-完整参数、配置和 API 细节见 [USAGE.md](USAGE.md)。
+完整参数、配置和 API 细节见 [USAGE.md](USAGE.md)。面向日常维护和业务接入的功能说明见 [DigCrawl 功能与使用手册](docs/DigCrawl功能与使用手册.md)。
 
 ## 业务能力
 
@@ -23,7 +23,7 @@ DigCrawl 的核心目标不是“提供一个网关”，而是把公众号、�
 | 静态解析/API/RSS 优先 + 浏览器兜底 | 微信公众号优先使用 HTTP HTML 静态解析；小红书、抖音、头条优先尝试页面上下文 API；X 优先尝试官方 Tweet lookup，再回落到公开 oEmbed 和浏览器；RSS/Atom 由通用 Feed service 读取；Reddit 优先官方 API，再兜底 RSS，最后按配置兜底公开页面 |
 | 登录态复用 | 支持通过有头浏览器完成平台登录，后续采集复用本机 Cookie |
 | 批量采集与收件箱 | 支持 URL 文件批处理、`collect-inbox` 收件箱和 `--watch` 轮询 |
-| Watchlist 定时监控 | 复用 `internal/source` 定期检查 RSS/sitemap、头条固定文章/作者页/视频列表页、X/Twitter 单帖、平台主页和 Reddit subreddit/user/post comments 的新增内容，并通过通知通道推送 |
+| Watchlist 定时监控 | 复用 `internal/source` 定期检查 RSS/sitemap、头条固定文章/作者页/视频列表页、X/Twitter 单帖、B站/微博/快手/知乎等平台主页和 Reddit subreddit/user/post comments 的新增内容，并通过通知通道推送 |
 | 多格式导出 | 同时导出 Markdown、HTML、JSON，可选下载媒体到 `.assets/` |
 | OCR 图片文字提取 | 可通过配置接入 OCR provider，对正文图片、截图、平台媒体和本地 assets 提取文字并写入结构化元数据 |
 | ASR 视频语音转写 | 通过 `ffmpeg` 抽音频后，支持 OpenAI-compatible API 或本地 `faster-whisper` 命令转写 |
@@ -53,6 +53,8 @@ Watchlist 能力通过 `digcrawl watchlist run --once`、`digcrawl watchlist run
 - 2026-07-17：将平台发现逻辑抽象到 `internal/source`，Watchlist 复用头条、X、Reddit、RSS 等来源发现；同时修复本机浏览器兜底路径，完成头条和 X 的 Watchlist dry-run 验证。
 - 2026-07-18：新增持久化 Watchlist 清单，支持 `yaml` / `database` / `mixed` 来源模式，清单可写入 SQLite 或 MySQL；补齐 `digcrawl watchlist source` CLI 和 `/admin/watchlist/*` HTTP 运维接口，并同步 MySQL / SQLite full DDL。
 - 2026-07-28：新增今日头条视频详情读取 `toutiao.video.read`、视频列表页发现、Collect 下载视频后自动 ASR enrich，并补齐本地 `faster-whisper` Python runner 兜底。
+- 2026-07-29：参考 MediaCrawler 的平台能力边界，新增 B站、微博、快手、知乎详情读取和 Watchlist 列表发现接入；不复用其 Python 代码和贴吧逻辑。
+- 2026-07-30：补齐 B站/微博 Watchlist 列表 API-first 发现和 HTML/browser fallback，修复微博 `ok:0` 错误分类；明确新增平台 provider 的本机浏览器路径与头条共用同一套 `BrowserBrowse`、Cookie 和 Chrome 配置。
 
 ## 支持的平台
 
@@ -65,6 +67,10 @@ Watchlist 能力通过 `digcrawl watchlist run --once`、`digcrawl watchlist run
 | 今日头条视频 | `toutiao.com/video/...` | `toutiao.video.read` |
 | X | `x.com`、`twitter.com` | `x.post.read` |
 | Reddit | `reddit.com`、`old.reddit.com`、`new.reddit.com`、`redd.it` | `reddit.post.read`、`reddit.subreddit.read`、`reddit.user.read` |
+| B站 | `bilibili.com`、`b23.tv` | `bilibili.video.read` |
+| 微博 | `weibo.com`、`m.weibo.cn` | `weibo.post.read` |
+| 快手 | `kuaishou.com`、`v.kuaishou.com` | `kuaishou.video.read` |
+| 知乎 | `zhihu.com`、`zhuanlan.zhihu.com` | `zhihu.content.read` |
 | RSS / Atom | `.rss`、`.atom`、`.xml`、`/feed`、`/rss` | `feed.read` |
 | 普通网页 | 任意 `http(s)` URL | `browser.browse` |
 
@@ -79,6 +85,8 @@ X 读取面向公开单帖，先尝试官方 Tweet lookup API；当账号套餐�
 RSS / Atom 读取由通用 Feed service 提供，输出 feed 标题、条目列表、作者、时间、摘要和 Markdown/JSON。该能力被 Watchlist、Collect 和平台 fallback 复用，避免各平台重复解析 XML。
 
 Reddit 读取面向公开单帖、subreddit listing 和用户 submitted/comments。单帖优先使用 Reddit OAuth API 读取正文、元数据和可配置评论树；API 临时失败或 OAuth 未配置时，会尝试 Reddit `.rss` 读取公开内容；RSS 不可用时才按配置使用本机浏览器兜底公开页面。401/403/429、私有社区、登录墙、受限内容不会通过浏览器绕过。
+
+B站、微博、快手、知乎读取先落地为 Go 内置平台包，输出统一 `platform.Content`、结构化 metadata 和媒体候选。B站、微博详情为 HTTP API 优先、浏览器兜底；B站/微博用户列表在 Watchlist 中同样 API-first，失败后回落到 HTML/browser 列表发现。快手、知乎现阶段使用本机浏览器读取，列表发现会使用平台级默认 selector 等待动态内容。新增平台和头条共用同一套本机 `BrowserBrowse`、Cookie store、Chrome/Chromium 配置和 allowed domain 安全边界；区别在于头条详情 provider 已有更完整的多策略 `BrowseWithFallbacks`，新增平台详情 provider 会逐步补齐到同等成熟度。Watchlist 支持从这些平台的列表/主页发现详情 URL，再交给对应 provider 采集；短链会先解析到允许域名内的真实内容页。
 
 ## 快速开始
 
@@ -95,6 +103,10 @@ go build -o digcollect ./cmd/digcollect
 ./digcrawl collect "https://www.toutiao.com/video/..." --format md,json
 ./digcrawl collect "https://www.reddit.com/r/golang/comments/abc123/title/" --format md,json
 ./digcrawl collect "https://www.reddit.com/r/artificial/.rss" --format md,json
+./digcrawl collect "https://www.bilibili.com/video/BV..." --format md,json
+./digcrawl collect "https://m.weibo.cn/detail/..." --format md,json
+./digcrawl collect "https://www.kuaishou.com/short-video/..." --format md,json
+./digcrawl collect "https://www.zhihu.com/question/.../answer/..." --format md,json
 ./digcrawl collect "https://example.com/article" --out ./collect-output
 ```
 
@@ -150,7 +162,7 @@ DIGCRAWL_CONFIG="$PWD/config/config.yaml" \
 
 Watchlist 清单支持 `Watchlist.Source.Mode` 选择来源：`yaml` 从 `Watchlist.Items` 和根级 `Tasks` 读取，`database` 从 `dc_watchlist_sources` 读取，`mixed` 同时读取且同 ID 时数据库覆盖 YAML。长清单建议使用 `database`，YAML 只保留调度、通知和持久化配置。持久化后端由 `Watchlist.Persistence.Driver` 决定，支持 `sqlite` 和 `mysql`；MySQL 可直接配置 `MySQLDSN`，也可通过 `GormConfigPath` 读取 `config/gorm.yml` 的写库配置。
 
-Watchlist 建议优先配置来源页或列表页，而不是最终文章/帖子 URL。来源页会定期 Discover 最新内容 URL，并按 source 级 `content_key` 去重后只采集新增内容；最终详情页类 source 仍可用于单次归档、评论或互动变更监控。当前对外 source kind 包括 `rss`、`sitemap`、`reddit_subreddit`、`reddit_user`、`reddit_post_comments`、`toutiao_author`、`toutiao_article`、`toutiao_video`、`x_user`、`x_post`、`douyin_user`、`douyin_video`、`xiaohongshu_user`、`xiaohongshu_note`、`wechat_list`、`wechat_article`、`web_list`。
+Watchlist 建议优先配置来源页或列表页，而不是最终文章/帖子 URL。来源页会定期 Discover 最新内容 URL，并按 source 级 `content_key` 去重后只采集新增内容；最终详情页类 source 仍可用于单次归档、评论或互动变更监控。当前对外 source kind 包括 `rss`、`sitemap`、`reddit_subreddit`、`reddit_user`、`reddit_post_comments`、`toutiao_author`、`toutiao_article`、`toutiao_video`、`x_user`、`x_post`、`douyin_user`、`douyin_video`、`xiaohongshu_user`、`xiaohongshu_note`、`wechat_list`、`wechat_article`、`bilibili_user`、`bilibili_video`、`weibo_user`、`weibo_post`、`kuaishou_user`、`kuaishou_video`、`zhihu_user`、`zhihu_answer`、`zhihu_article`、`zhihu_zvideo`、`web_list`。
 
 需要在没有新增内容时仍发送通知，可在对应 Task/Source 的 `Options` 中配置 `notify_no_update: true`。该通知只在发现流程成功且本轮新增为 0 时发送，不会把抓取失败误报为“今日无更新”。
 

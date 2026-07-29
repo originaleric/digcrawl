@@ -128,6 +128,94 @@ func TestDetectRedditListingFallsBackToWeb(t *testing.T) {
 	}
 }
 
+func TestDetectBilibiliVideo(t *testing.T) {
+	t.Parallel()
+	m, err := Detect("https://www.bilibili.com/video/BV1xx411c7mD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.Platform != "bilibili" || m.Tool != platformprov.ToolBilibiliVideoRead {
+		t.Fatalf("got %+v", m)
+	}
+}
+
+func TestDetectBilibiliUserFallsBackToWeb(t *testing.T) {
+	t.Parallel()
+	m, err := Detect("https://space.bilibili.com/123456/video")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.Platform != "web" || m.Tool != browserprov.ToolBrowserBrowse {
+		t.Fatalf("got %+v", m)
+	}
+}
+
+func TestDetectWeiboPost(t *testing.T) {
+	t.Parallel()
+	m, err := Detect("https://m.weibo.cn/detail/502233445566")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.Platform != "weibo" || m.Tool != platformprov.ToolWeiboPostRead {
+		t.Fatalf("got %+v", m)
+	}
+}
+
+func TestDetectWeiboUserFallsBackToWeb(t *testing.T) {
+	t.Parallel()
+	m, err := Detect("https://m.weibo.cn/u/123456")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.Platform != "web" || m.Tool != browserprov.ToolBrowserBrowse {
+		t.Fatalf("got %+v", m)
+	}
+}
+
+func TestDetectKuaishouVideo(t *testing.T) {
+	t.Parallel()
+	m, err := Detect("https://www.kuaishou.com/short-video/3xf6abc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.Platform != "kuaishou" || m.Tool != platformprov.ToolKuaishouVideoRead {
+		t.Fatalf("got %+v", m)
+	}
+}
+
+func TestDetectKuaishouUserFallsBackToWeb(t *testing.T) {
+	t.Parallel()
+	m, err := Detect("https://www.kuaishou.com/profile/3xuser")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.Platform != "web" || m.Tool != browserprov.ToolBrowserBrowse {
+		t.Fatalf("got %+v", m)
+	}
+}
+
+func TestDetectZhihuContent(t *testing.T) {
+	t.Parallel()
+	m, err := Detect("https://www.zhihu.com/question/123/answer/456")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.Platform != "zhihu" || m.Tool != platformprov.ToolZhihuContentRead {
+		t.Fatalf("got %+v", m)
+	}
+}
+
+func TestDetectZhihuUserFallsBackToWeb(t *testing.T) {
+	t.Parallel()
+	m, err := Detect("https://www.zhihu.com/people/alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.Platform != "web" || m.Tool != browserprov.ToolBrowserBrowse {
+		t.Fatalf("got %+v", m)
+	}
+}
+
 func TestDetectUnsupported(t *testing.T) {
 	t.Parallel()
 	_, err := Detect("ftp://example.com/page")

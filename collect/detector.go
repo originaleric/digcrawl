@@ -54,6 +54,18 @@ func Detect(rawURL string) (Match, error) {
 		}
 		return Match{Platform: "toutiao", Tool: platformprov.ToolToutiaoArticleRead}, nil
 	}
+	if isBilibiliVideoHostPath(host, u.EscapedPath()) {
+		return Match{Platform: "bilibili", Tool: platformprov.ToolBilibiliVideoRead}, nil
+	}
+	if isWeiboPostHostPath(host, u.EscapedPath()) {
+		return Match{Platform: "weibo", Tool: platformprov.ToolWeiboPostRead}, nil
+	}
+	if isKuaishouVideoHostPath(host, u.EscapedPath()) {
+		return Match{Platform: "kuaishou", Tool: platformprov.ToolKuaishouVideoRead}, nil
+	}
+	if isZhihuContentHostPath(host, u.EscapedPath()) {
+		return Match{Platform: "zhihu", Tool: platformprov.ToolZhihuContentRead}, nil
+	}
 	for _, r := range rules {
 		if hostMatches(host, r.hosts) {
 			return Match{Platform: r.platform, Tool: r.tool}, nil
@@ -74,4 +86,39 @@ func hostMatches(host string, allowed []string) bool {
 		}
 	}
 	return false
+}
+
+func isBilibiliVideoHostPath(host, path string) bool {
+	path = strings.ToLower(path)
+	return host == "b23.tv" || strings.HasSuffix(host, ".b23.tv") || ((host == "bilibili.com" || strings.HasSuffix(host, ".bilibili.com")) && strings.Contains(path, "/video/"))
+}
+
+func isWeiboPostHostPath(host, path string) bool {
+	if !(host == "m.weibo.cn" || host == "weibo.com" || strings.HasSuffix(host, ".weibo.com")) {
+		return false
+	}
+	path = strings.ToLower(path)
+	if strings.Contains(path, "/detail/") || strings.Contains(path, "/status/") {
+		return true
+	}
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	if len(parts) < 2 || strings.TrimSpace(parts[0]) == "" || strings.TrimSpace(parts[1]) == "" {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(parts[0])) {
+	case "u", "profile", "login", "signup", "search", "tv", "p":
+		return false
+	default:
+		return true
+	}
+}
+
+func isKuaishouVideoHostPath(host, path string) bool {
+	path = strings.ToLower(path)
+	return host == "v.kuaishou.com" || ((host == "kuaishou.com" || strings.HasSuffix(host, ".kuaishou.com")) && (strings.Contains(path, "/short-video/") || strings.Contains(path, "/photo/")))
+}
+
+func isZhihuContentHostPath(host, path string) bool {
+	path = strings.ToLower(path)
+	return (host == "zhihu.com" || strings.HasSuffix(host, ".zhihu.com")) && (strings.Contains(path, "/question/") || strings.Contains(path, "/p/") || strings.Contains(path, "/zvideo/"))
 }

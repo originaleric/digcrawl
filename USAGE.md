@@ -119,7 +119,7 @@ go install ./cmd/digcollect
 | `DBPath` | SQLite 库路径，默认 `storage/digcrawl/collect.db` |
 | `IndexEnabled` | `index`/`both` 模式下是否写 `index.json`（同 URL 覆盖更新） |
 | `RateLimitMs` | inbox 批处理时 URL 之间的间隔（毫秒） |
-| `PlatformRateLimits` | 按平台覆盖批处理间隔，如 `xiaohongshu`、`douyin`、`toutiao`、`reddit` |
+| `PlatformRateLimits` | 按平台覆盖批处理间隔，如 `xiaohongshu`、`douyin`、`toutiao`、`reddit`、`bilibili`、`weibo`、`kuaishou`、`zhihu` |
 | `InboxPollIntervalSec` | `inbox --watch` 轮询间隔 |
 
 ### LocalBrowser（本地浏览器）
@@ -316,9 +316,9 @@ Watchlist 用于按配置定期检查指定来源的新增内容，复用 Collec
 
 `Tasks[].Schedule.Mode` 当前支持 `interval` 和 `daily`。`interval` 使用 `Every` 的 Go duration，例如 `6h`、`24h`、`30m`；`daily` 使用本机时区的 `At: "HH:MM"`，例如每天上午 9 点写 `At: "09:00"`。调度状态写入通用 `dc_tasks_runtime` / `dc_task_runs` / `dc_task_locks` / `dc_task_events`：任务完成后会按当前 schedule 更新 `next_run_at` 并判断是否到期。
 
-Watchlist 的来源发现由 `internal/source.Service` 统一承载，当前覆盖 RSS/Atom、sitemap、HTML 链接发现、今日头条固定文章/作者页/视频列表页、X/Twitter 单帖/用户页链接发现、抖音作品/用户页链接发现、小红书笔记/用户页链接发现、微信公众号文章/列表页链接发现和 Reddit listing/comment 来源。Watchlist 只负责调度、去重、详情采集、摘要和通知，因此后续新增渠道应优先接入 `internal/source`，再由 Watchlist、Tasks 或其他 domain 复用。
+Watchlist 的来源发现由 `internal/source.Service` 统一承载，当前覆盖 RSS/Atom、sitemap、HTML 链接发现、今日头条固定文章/作者页/视频列表页、X/Twitter 单帖/用户页链接发现、抖音作品/用户页链接发现、小红书笔记/用户页链接发现、微信公众号文章/列表页链接发现、Reddit listing/comment 来源，以及 B站、微博、快手、知乎的主页/列表页链接发现。Watchlist 只负责调度、去重、详情采集、摘要和通知，因此后续新增渠道应优先接入 `internal/source`，再由 Watchlist、Tasks 或其他 domain 复用。
 
-推荐维护来源页或列表页 source，例如 `rss`、`sitemap`、`reddit_subreddit`、`reddit_user`、`toutiao_author`、`x_user`、`douyin_user`、`xiaohongshu_user`、`wechat_list`、`web_list`。`toutiao_article`、`toutiao_video`、`x_post`、`douyin_video`、`xiaohongshu_note`、`wechat_article`、`reddit_post_comments` 属于详情页或评论变更监控，适合单次归档、评论更新或互动状态检查，不适合作为“新增 po 文”主来源。
+推荐维护来源页或列表页 source，例如 `rss`、`sitemap`、`reddit_subreddit`、`reddit_user`、`toutiao_author`、`x_user`、`douyin_user`、`xiaohongshu_user`、`wechat_list`、`bilibili_user`、`weibo_user`、`kuaishou_user`、`zhihu_user`、`web_list`。`toutiao_article`、`toutiao_video`、`x_post`、`douyin_video`、`xiaohongshu_note`、`wechat_article`、`reddit_post_comments`、`bilibili_video`、`weibo_post`、`kuaishou_video`、`zhihu_answer`、`zhihu_article`、`zhihu_zvideo` 属于详情页或评论变更监控，适合单次归档、评论更新或互动状态检查，不适合作为“新增 po 文”主来源。
 
 上线前可以先做 discover-only 验证，只检查来源页能否发现内容，不写入 `dc_watchlist_items`，也不会触发 collect、summary 或 notify：
 
@@ -355,6 +355,28 @@ X / Twitter 已支持：
 
 - `xiaohongshu_note` / `xhs_note`：固定笔记 URL 监控，例如 `https://www.xiaohongshu.com/explore/...` 或 `/discovery/item/...`，发现结果使用 `xiaohongshu:<note_id>` 去重。
 - `xiaohongshu_user` / `xhs_user`：用户页或列表页笔记链接发现，发现结果会规范化为 `/explore/<note_id>` 并使用稳定 note id 去重；登录态平台建议先执行 `digcrawl browser login --platform xiaohongshu`。
+
+B站已支持：
+
+- `bilibili_video` / `bili_video`：固定视频 URL 监控，例如 `https://www.bilibili.com/video/BV...`、`/video/av...` 或 `b23.tv` 短链。该模式复用 `bilibili.video.read`。
+- `bilibili_user` / `bili_user`：空间页或视频列表页链接发现，当前从静态链接、hydration URL 和 browser fallback metadata 中抽取 `/video/BV...`、`/video/av...` 内容链接。
+
+微博已支持：
+
+- `weibo_post`：固定微博详情 URL 监控，例如 `https://m.weibo.cn/detail/...`、`/status/...` 或 `https://weibo.com/{uid}/{mid}`。该模式复用 `weibo.post.read`。
+- `weibo_user`：用户页或列表页链接发现，只抽取微博详情链接，不会把 `/u/...`、`/profile/...` 用户页当作 po 文。
+
+快手已支持：
+
+- `kuaishou_video` / `ks_video`：固定视频 URL 监控，例如 `https://www.kuaishou.com/short-video/...`、`/photo/...` 或 `v.kuaishou.com` 短链。该模式复用 `kuaishou.video.read`。
+- `kuaishou_user` / `ks_user`：主页或列表页链接发现，抽取 `/short-video/...` 和 `/photo/...` 内容链接。
+
+知乎已支持：
+
+- `zhihu_answer`：固定回答 URL 监控，例如 `https://www.zhihu.com/question/.../answer/...`。
+- `zhihu_article`：固定专栏文章 URL 监控，例如 `https://zhuanlan.zhihu.com/p/...`。
+- `zhihu_zvideo`：固定知乎视频 URL 监控，例如 `https://www.zhihu.com/zvideo/...`。
+- `zhihu_user`：用户页或列表页链接发现，抽取回答、专栏文章和知乎视频链接。
 
 微信公众号已支持：
 
@@ -827,10 +849,14 @@ Collect 在**无云端宿主**的情况下，把链接抓取并导出到本地�
 | 今日头条文章 | `toutiao.com`、`m.toutiao.com` 等 | `toutiao.article.read` |
 | 今日头条视频 | `toutiao.com/video/...` | `toutiao.video.read` |
 | X / Twitter | `x.com`、`twitter.com` 等 | `x.post.read` |
+| B站 | `bilibili.com`、`b23.tv` 等 | `bilibili.video.read` |
+| 微博 | `weibo.com`、`m.weibo.cn` 等 | `weibo.post.read` |
+| 快手 | `kuaishou.com`、`v.kuaishou.com` 等 | `kuaishou.video.read` |
+| 知乎 | `zhihu.com`、`zhuanlan.zhihu.com` 等 | `zhihu.content.read` |
 | RSS / Atom | `.rss`、`.atom`、`.xml`、`/feed`、`/rss` | `feed.read` |
 | 任意网页 | 其他 `http(s)` URL | `browser.browse`（通用网页） |
 
-小红书、抖音、头条采用 **API 优先 + Browser 兜底** 的 strategy chain：先尝试页面运行时 `fetch(credentials:"include")`，失败时回落到 hydration/meta/DOM 提取。X 采用 Tweet lookup API 优先、公开 oEmbed 次优先、Browser 最后兜底。Reddit 采用 OAuth API 优先、RSS 次优先、Browser 最后兜底。输出 JSON 的 `platform_metadata` 会包含 `read_channel`、`extraction_source`、`api_http_status`、`api_error_code` 等诊断字段。`LOGIN_REQUIRED`、`CAPTCHA_REQUIRED`、`RATE_LIMITED`、内容删除/私密会作为结构化错误返回。
+小红书、抖音、头条采用 **API 优先 + Browser 兜底** 的 strategy chain：先尝试页面运行时 `fetch(credentials:"include")`，失败时回落到 hydration/meta/DOM 提取。B站、微博详情采用公开 HTTP API 优先、Browser 兜底。X 采用 Tweet lookup API 优先、公开 oEmbed 次优先、Browser 最后兜底。Reddit 采用 OAuth API 优先、RSS 次优先、Browser 最后兜底。输出 JSON 的 `platform_metadata` 会包含 `read_channel`、`extraction_source`、`api_http_status`、`api_error_code` 等诊断字段。`LOGIN_REQUIRED`、`CAPTCHA_REQUIRED`、`RATE_LIMITED`、内容删除/私密会作为结构化错误返回。
 
 ### 单条 URL
 
@@ -839,6 +865,10 @@ digcrawl collect "https://mp.weixin.qq.com/s/xxxx"
 digcrawl collect "https://www.toutiao.com/article/xxxx"
 digcrawl collect "https://www.toutiao.com/video/xxxx"
 digcrawl collect "https://www.reddit.com/r/artificial/.rss" --format md,json
+digcrawl collect "https://www.bilibili.com/video/BVxxxx"
+digcrawl collect "https://m.weibo.cn/detail/xxxx"
+digcrawl collect "https://www.kuaishou.com/short-video/xxxx"
+digcrawl collect "https://www.zhihu.com/question/123/answer/456"
 digcrawl collect "https://example.com/article" --format md,html,json --out ./my-output
 ```
 
@@ -952,6 +982,10 @@ collect-inbox/
 | `toutiao.article.read` | 今日头条文章 |
 | `toutiao.video.read` | 今日头条视频 |
 | `x.post.read` | X 帖子 |
+| `bilibili.video.read` | B站视频页 |
+| `weibo.post.read` | 微博详情页 |
+| `kuaishou.video.read` | 快手视频页 |
+| `zhihu.content.read` | 知乎回答 / 专栏文章 / 视频 |
 
 ### 浏览器（browser）
 

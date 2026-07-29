@@ -12,7 +12,7 @@ import (
 
 const Name = "platform"
 
-// Provider registers platform content read tools (WeChat, Xiaohongshu, Douyin, X).
+// Provider registers platform content read tools.
 type Provider struct {
 	ConfigDomains []string
 	ArtifactStore artifact.Store
@@ -36,6 +36,10 @@ func (p *Provider) Register(_ context.Context, reg *registry.Registry) error {
 	reg.Register(RedditPostReadEntry(domains, store))
 	reg.Register(RedditSubredditReadEntry(domains))
 	reg.Register(RedditUserReadEntry(domains))
+	reg.Register(BilibiliVideoReadEntry(domains, store))
+	reg.Register(WeiboPostReadEntry(domains, store))
+	reg.Register(KuaishouVideoReadEntry(domains, store))
+	reg.Register(ZhihuContentReadEntry(domains, store))
 	return nil
 }
 

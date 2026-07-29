@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -17,11 +18,15 @@ import (
 	"github.com/originaleric/digcrawl/internal/browser"
 	"github.com/originaleric/digcrawl/internal/feed"
 	"github.com/originaleric/digcrawl/internal/platform"
+	bilibiliplatform "github.com/originaleric/digcrawl/internal/platform/bilibili"
 	douyinplatform "github.com/originaleric/digcrawl/internal/platform/douyin"
+	kuaishouplatform "github.com/originaleric/digcrawl/internal/platform/kuaishou"
 	"github.com/originaleric/digcrawl/internal/platform/reddit"
 	toutiaoplatform "github.com/originaleric/digcrawl/internal/platform/toutiao"
+	weiboplatform "github.com/originaleric/digcrawl/internal/platform/weibo"
 	xplatform "github.com/originaleric/digcrawl/internal/platform/x"
 	xhsplatform "github.com/originaleric/digcrawl/internal/platform/xiaohongshu"
+	zhihuplatform "github.com/originaleric/digcrawl/internal/platform/zhihu"
 )
 
 type Service struct {
@@ -65,6 +70,14 @@ func (r Service) ListLatest(ctx context.Context, item Source) ([]Item, error) {
 		return r.readXiaohongshu(ctx, item)
 	case platform == "douyin":
 		return r.readDouyin(ctx, item)
+	case platform == "bilibili" || platform == "bili":
+		return r.readBilibili(ctx, item)
+	case platform == "weibo":
+		return r.readWeibo(ctx, item)
+	case platform == "kuaishou" || platform == "ks":
+		return r.readKuaishou(ctx, item)
+	case platform == "zhihu":
+		return r.readZhihu(ctx, item)
 	case platform == "reddit":
 		return r.readReddit(ctx, item)
 	case platform == "x" || platform == "twitter":
@@ -360,6 +373,511 @@ func (r Service) readX(ctx context.Context, item Source) ([]Item, error) {
 	}
 }
 
+func (r Service) readBilibili(ctx context.Context, item Source) ([]Item, error) {
+	switch inferBilibiliWatchlistType(ctx, item) {
+	case "bilibili_video", "bili_video", "video", "post":
+		return feedItemFromBilibiliVideo(ctx, item)
+	case "bilibili_user", "bili_user", "user", "profile", "author", "list":
+		return r.readBilibiliUserList(ctx, item)
+	default:
+		if isBilibiliVideoURL(ctx, item.URL) {
+			return feedItemFromBilibiliVideo(ctx, item)
+		}
+		return r.readBilibiliUserList(ctx, item)
+	}
+}
+
+func inferBilibiliWatchlistType(ctx context.Context, item Source) string {
+	typ := strings.ToLower(strings.TrimSpace(item.Type))
+	if typ != "" {
+		return typ
+	}
+	if isBilibiliVideoURL(ctx, item.URL) {
+		return "bilibili_video"
+	}
+	return "bilibili_user"
+}
+
+func isBilibiliVideoURL(ctx context.Context, rawURL string) bool {
+	norm, err := bilibiliplatform.NormalizeURL(ctx, rawURL)
+	return err == nil && norm.PlatformID != "" && norm.ContentKind != "user"
+}
+
+func feedItemFromBilibiliVideo(ctx context.Context, item Source) ([]Item, error) {
+	norm, err := bilibiliplatform.NormalizeURL(ctx, item.URL)
+	if err != nil {
+		return nil, err
+	}
+	if norm.PlatformID == "" || norm.ContentKind == "user" {
+		return nil, fmt.Errorf("bilibili video url is required")
+	}
+	link := firstNonEmpty(norm.CanonicalURL, item.URL)
+	key := "bilibili:" + norm.PlatformID
+	return []Item{{
+		ID:           key,
+		ContentKey:   key,
+		URL:          link,
+		CanonicalURL: link,
+		Title:        item.Name,
+		ContentType:  "video",
+		Raw: map[string]any{
+			"platform_id": norm.PlatformID,
+			"source_url":  item.URL,
+		},
+	}}, nil
+}
+
+func (r Service) readBilibiliUserList(ctx context.Context, item Source) ([]Item, error) {
+	apiItems, apiErr := r.fetchBilibiliUserVideos(ctx, item)
+	if apiErr == nil && len(apiItems) > 0 {
+		return apiItems, nil
+	}
+	item = withBrowserListDefaults(item, `a[href*="/video/"]`, "body")
+	htmlItems, htmlErr := r.readHTMLLinks(ctx, item, "bilibili")
+	if htmlErr == nil {
+		return htmlItems, nil
+	}
+	if apiErr != nil {
+		return nil, fmt.Errorf("%v; html fallback: %w", apiErr, htmlErr)
+	}
+	return nil, htmlErr
+}
+
+type bilibiliArcListResponse struct {
+	Code    int    `json:"code"`
+	Message string `json:"message"`
+	Data    struct {
+		List struct {
+			VList []bilibiliArcListItem `json:"vlist"`
+		} `json:"list"`
+	} `json:"data"`
+}
+
+type bilibiliArcListItem struct {
+	BVID        string `json:"bvid"`
+	AID         int64  `json:"aid"`
+	Title       string `json:"title"`
+	Author      string `json:"author"`
+	MID         int64  `json:"mid"`
+	Created     int64  `json:"created"`
+	Pic         string `json:"pic"`
+	Description string `json:"description"`
+	Play        int    `json:"play"`
+	Comment     int    `json:"comment"`
+	Favorites   int    `json:"favorites"`
+}
+
+func (r Service) fetchBilibiliUserVideos(ctx context.Context, item Source) ([]Item, error) {
+	mid := firstNonEmpty(optionString(item.Options, "mid"), optionString(item.Options, "platform_id"), optionString(item.Options, "user_id"))
+	if mid == "" {
+		if norm, err := bilibiliplatform.NormalizeURL(ctx, item.URL); err == nil && norm.ContentKind == "user" {
+			mid = norm.PlatformID
+		}
+	}
+	if mid == "" {
+		return nil, fmt.Errorf("missing bilibili user id")
+	}
+	limit := sourceLimit(item.Options, 20, 50)
+	baseURL := firstNonEmpty(optionString(item.Options, "bilibili_api_base_url"), optionString(item.Options, "api_base_url"), "https://api.bilibili.com")
+	endpointURL, err := url.Parse(strings.TrimRight(baseURL, "/") + "/x/space/wbi/arc/search")
+	if err != nil {
+		return nil, err
+	}
+	q := endpointURL.Query()
+	q.Set("mid", mid)
+	q.Set("pn", "1")
+	q.Set("ps", strconv.Itoa(limit))
+	q.Set("order", "pubdate")
+	endpointURL.RawQuery = q.Encode()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpointURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", "application/json,text/plain,*/*")
+	req.Header.Set("Referer", "https://space.bilibili.com/"+mid)
+	req.Header.Set("User-Agent", "Mozilla/5.0 DigCrawl Watchlist")
+	resp, err := r.httpClient().Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	var parsed bilibiliArcListResponse
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return nil, err
+	}
+	attempt := platform.ClassifyAPIResponse("bilibili", resp.StatusCode, map[string]any{
+		"code":       parsed.Code,
+		"message":    parsed.Message,
+		"data_count": len(parsed.Data.List.VList),
+	}, func(map[string]any) bool {
+		return len(parsed.Data.List.VList) == 0
+	})
+	attempt.Meta["api_endpoint"] = endpointURL.String()
+	attempt.Meta["api_fetch_mode"] = "http"
+	if !attempt.OK {
+		return nil, attempt.Error()
+	}
+	out := make([]Item, 0, len(parsed.Data.List.VList))
+	for _, v := range parsed.Data.List.VList {
+		id := firstNonEmpty(v.BVID, strconv.FormatInt(v.AID, 10))
+		if id == "" {
+			continue
+		}
+		canonical := "https://www.bilibili.com/video/" + id
+		if v.BVID == "" && v.AID > 0 {
+			canonical = "https://www.bilibili.com/video/av" + strconv.FormatInt(v.AID, 10)
+		}
+		published := time.Time{}
+		if v.Created > 0 {
+			published = time.Unix(v.Created, 0)
+		}
+		out = append(out, Item{
+			ID:           "bilibili:" + id,
+			ContentKey:   "bilibili:" + id,
+			URL:          canonical,
+			CanonicalURL: canonical,
+			Title:        strings.TrimSpace(v.Title),
+			Author:       strings.TrimSpace(v.Author),
+			PublishedAt:  published,
+			ContentType:  "video",
+			Raw: map[string]any{
+				"platform_id":       id,
+				"source_url":        item.URL,
+				"author_mid":        v.MID,
+				"cover":             v.Pic,
+				"description":       v.Description,
+				"extraction_source": "api",
+			},
+		})
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("CONTENT_NOT_FOUND: no bilibili videos found")
+	}
+	return out, nil
+}
+
+func (r Service) readWeibo(ctx context.Context, item Source) ([]Item, error) {
+	switch inferWeiboWatchlistType(ctx, item) {
+	case "weibo_post", "post", "status":
+		return feedItemFromWeiboPost(ctx, item)
+	case "weibo_user", "user", "profile", "author", "list":
+		return r.readWeiboUserList(ctx, item)
+	default:
+		if isWeiboPostURL(ctx, item.URL) {
+			return feedItemFromWeiboPost(ctx, item)
+		}
+		return r.readWeiboUserList(ctx, item)
+	}
+}
+
+func inferWeiboWatchlistType(ctx context.Context, item Source) string {
+	typ := strings.ToLower(strings.TrimSpace(item.Type))
+	if typ != "" {
+		return typ
+	}
+	if isWeiboPostURL(ctx, item.URL) {
+		return "weibo_post"
+	}
+	return "weibo_user"
+}
+
+func isWeiboPostURL(ctx context.Context, rawURL string) bool {
+	norm, err := weiboplatform.NormalizeURL(ctx, rawURL)
+	return err == nil && norm.PlatformID != "" && norm.ContentKind != "user"
+}
+
+func feedItemFromWeiboPost(ctx context.Context, item Source) ([]Item, error) {
+	norm, err := weiboplatform.NormalizeURL(ctx, item.URL)
+	if err != nil {
+		return nil, err
+	}
+	if norm.PlatformID == "" || norm.ContentKind == "user" {
+		return nil, fmt.Errorf("weibo post url is required")
+	}
+	link := firstNonEmpty(norm.CanonicalURL, item.URL)
+	key := "weibo:" + norm.PlatformID
+	return []Item{{
+		ID:           key,
+		ContentKey:   key,
+		URL:          link,
+		CanonicalURL: link,
+		Title:        item.Name,
+		ContentType:  "post",
+		Raw: map[string]any{
+			"platform_id": norm.PlatformID,
+			"source_url":  item.URL,
+		},
+	}}, nil
+}
+
+func (r Service) readWeiboUserList(ctx context.Context, item Source) ([]Item, error) {
+	apiItems, apiErr := r.fetchWeiboUserPosts(ctx, item)
+	if apiErr == nil && len(apiItems) > 0 {
+		return apiItems, nil
+	}
+	item = withBrowserListDefaults(item, `a[href*="/detail/"], a[href*="/status/"]`, "body")
+	htmlItems, htmlErr := r.readHTMLLinks(ctx, item, "weibo")
+	if htmlErr == nil {
+		return htmlItems, nil
+	}
+	if apiErr != nil {
+		return nil, fmt.Errorf("%v; html fallback: %w", apiErr, htmlErr)
+	}
+	return nil, htmlErr
+}
+
+type weiboTimelineResponse struct {
+	OK      int    `json:"ok"`
+	Msg     string `json:"msg"`
+	Message string `json:"message"`
+	Data    struct {
+		Cards []weiboTimelineCard `json:"cards"`
+	} `json:"data"`
+}
+
+type weiboTimelineCard struct {
+	Mblog *weiboTimelineMblog `json:"mblog"`
+}
+
+type weiboTimelineMblog struct {
+	ID            string            `json:"id"`
+	MID           string            `json:"mid"`
+	Text          string            `json:"text"`
+	TextRaw       string            `json:"text_raw"`
+	CreatedAt     string            `json:"created_at"`
+	User          weiboTimelineUser `json:"user"`
+	RepostsCount  int               `json:"reposts_count"`
+	CommentsCount int               `json:"comments_count"`
+	Attitudes     int               `json:"attitudes_count"`
+}
+
+type weiboTimelineUser struct {
+	ID         int64  `json:"id"`
+	ScreenName string `json:"screen_name"`
+}
+
+func (r Service) fetchWeiboUserPosts(ctx context.Context, item Source) ([]Item, error) {
+	uid := firstNonEmpty(optionString(item.Options, "uid"), optionString(item.Options, "platform_id"), optionString(item.Options, "user_id"))
+	if uid == "" {
+		if norm, err := weiboplatform.NormalizeURL(ctx, item.URL); err == nil && norm.ContentKind == "user" {
+			uid = norm.PlatformID
+		}
+	}
+	if uid == "" {
+		return nil, fmt.Errorf("missing weibo user id")
+	}
+	limit := sourceLimit(item.Options, 20, 50)
+	baseURL := firstNonEmpty(optionString(item.Options, "weibo_api_base_url"), optionString(item.Options, "api_base_url"), "https://m.weibo.cn")
+	endpointURL, err := url.Parse(strings.TrimRight(baseURL, "/") + "/api/container/getIndex")
+	if err != nil {
+		return nil, err
+	}
+	q := endpointURL.Query()
+	q.Set("type", "uid")
+	q.Set("value", uid)
+	q.Set("containerid", "107603"+uid)
+	endpointURL.RawQuery = q.Encode()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpointURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", "application/json,text/plain,*/*")
+	req.Header.Set("Referer", "https://m.weibo.cn/u/"+uid)
+	req.Header.Set("User-Agent", "Mozilla/5.0 DigCrawl Watchlist")
+	resp, err := r.httpClient().Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	var parsed weiboTimelineResponse
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return nil, err
+	}
+	attempt := platform.ClassifyAPIResponse("weibo", resp.StatusCode, map[string]any{
+		"success":    parsed.OK == 1,
+		"ok":         parsed.OK,
+		"message":    firstNonEmpty(parsed.Msg, parsed.Message),
+		"data_count": len(parsed.Data.Cards),
+	}, func(map[string]any) bool {
+		return len(parsed.Data.Cards) == 0
+	})
+	attempt.Meta["api_endpoint"] = endpointURL.String()
+	attempt.Meta["api_fetch_mode"] = "http"
+	if !attempt.OK {
+		return nil, attempt.Error()
+	}
+	out := make([]Item, 0, len(parsed.Data.Cards))
+	for _, card := range parsed.Data.Cards {
+		if card.Mblog == nil {
+			continue
+		}
+		post := card.Mblog
+		id := firstNonEmpty(post.ID, post.MID)
+		if id == "" {
+			continue
+		}
+		text := firstNonEmpty(post.TextRaw, feed.TextFromHTML(post.Text))
+		canonical := "https://m.weibo.cn/detail/" + id
+		out = append(out, Item{
+			ID:           "weibo:" + id,
+			ContentKey:   "weibo:" + id,
+			URL:          canonical,
+			CanonicalURL: canonical,
+			Title:        firstNonEmpty(shortText(text, 80), item.Name),
+			Author:       strings.TrimSpace(post.User.ScreenName),
+			PublishedAt:  parseTime(post.CreatedAt),
+			ContentType:  "post",
+			Raw: map[string]any{
+				"platform_id":       id,
+				"mid":               post.MID,
+				"source_url":        item.URL,
+				"author_id":         post.User.ID,
+				"text":              text,
+				"extraction_source": "api",
+			},
+		})
+		if len(out) >= limit {
+			break
+		}
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("CONTENT_NOT_FOUND: no weibo posts found")
+	}
+	return out, nil
+}
+
+func (r Service) readKuaishou(ctx context.Context, item Source) ([]Item, error) {
+	switch inferKuaishouWatchlistType(ctx, item) {
+	case "kuaishou_video", "ks_video", "video", "post":
+		return feedItemFromKuaishouVideo(ctx, item)
+	case "kuaishou_user", "ks_user", "user", "profile", "author", "list":
+		return r.readKuaishouUserList(ctx, item)
+	default:
+		if isKuaishouVideoURL(ctx, item.URL) {
+			return feedItemFromKuaishouVideo(ctx, item)
+		}
+		return r.readKuaishouUserList(ctx, item)
+	}
+}
+
+func inferKuaishouWatchlistType(ctx context.Context, item Source) string {
+	typ := strings.ToLower(strings.TrimSpace(item.Type))
+	if typ != "" {
+		return typ
+	}
+	if isKuaishouVideoURL(ctx, item.URL) {
+		return "kuaishou_video"
+	}
+	return "kuaishou_user"
+}
+
+func isKuaishouVideoURL(ctx context.Context, rawURL string) bool {
+	norm, err := kuaishouplatform.NormalizeURL(ctx, rawURL)
+	return err == nil && norm.PlatformID != "" && norm.ContentKind != "user"
+}
+
+func feedItemFromKuaishouVideo(ctx context.Context, item Source) ([]Item, error) {
+	norm, err := kuaishouplatform.NormalizeURL(ctx, item.URL)
+	if err != nil {
+		return nil, err
+	}
+	if norm.PlatformID == "" || norm.ContentKind == "user" {
+		return nil, fmt.Errorf("kuaishou video url is required")
+	}
+	link := firstNonEmpty(norm.CanonicalURL, item.URL)
+	key := "kuaishou:" + norm.PlatformID
+	return []Item{{
+		ID:           key,
+		ContentKey:   key,
+		URL:          link,
+		CanonicalURL: link,
+		Title:        item.Name,
+		ContentType:  "video",
+		Raw: map[string]any{
+			"platform_id": norm.PlatformID,
+			"source_url":  item.URL,
+		},
+	}}, nil
+}
+
+func (r Service) readKuaishouUserList(ctx context.Context, item Source) ([]Item, error) {
+	item = withBrowserListDefaults(item, `a[href*="/short-video/"], a[href*="/photo/"]`, "body")
+	return r.readHTMLLinks(ctx, item, "kuaishou")
+}
+
+func (r Service) readZhihu(ctx context.Context, item Source) ([]Item, error) {
+	switch inferZhihuWatchlistType(ctx, item) {
+	case "zhihu_answer", "answer", "zhihu_article", "article", "zhihu_zvideo", "zvideo", "video", "question":
+		return feedItemFromZhihuContent(ctx, item)
+	case "zhihu_user", "user", "profile", "author", "list":
+		return r.readZhihuUserList(ctx, item)
+	default:
+		if isZhihuContentURL(ctx, item.URL) {
+			return feedItemFromZhihuContent(ctx, item)
+		}
+		return r.readZhihuUserList(ctx, item)
+	}
+}
+
+func inferZhihuWatchlistType(ctx context.Context, item Source) string {
+	typ := strings.ToLower(strings.TrimSpace(item.Type))
+	if typ != "" {
+		return typ
+	}
+	if isZhihuContentURL(ctx, item.URL) {
+		return "zhihu_content"
+	}
+	return "zhihu_user"
+}
+
+func isZhihuContentURL(ctx context.Context, rawURL string) bool {
+	norm, err := zhihuplatform.NormalizeURL(ctx, rawURL)
+	return err == nil && norm.PlatformID != "" && norm.ContentKind != "user"
+}
+
+func feedItemFromZhihuContent(ctx context.Context, item Source) ([]Item, error) {
+	norm, err := zhihuplatform.NormalizeURL(ctx, item.URL)
+	if err != nil {
+		return nil, err
+	}
+	if norm.PlatformID == "" || norm.ContentKind == "user" {
+		return nil, fmt.Errorf("zhihu content url is required")
+	}
+	link := firstNonEmpty(norm.CanonicalURL, item.URL)
+	key := "zhihu:" + norm.ContentKind + ":" + norm.PlatformID
+	contentType := norm.ContentKind
+	if contentType == "question" {
+		contentType = "article"
+	}
+	return []Item{{
+		ID:           key,
+		ContentKey:   key,
+		URL:          link,
+		CanonicalURL: link,
+		Title:        item.Name,
+		ContentType:  contentType,
+		Raw: map[string]any{
+			"platform_id": norm.PlatformID,
+			"source_url":  item.URL,
+		},
+	}}, nil
+}
+
+func (r Service) readZhihuUserList(ctx context.Context, item Source) ([]Item, error) {
+	item = withBrowserListDefaults(item, `a[href*="/question/"], a[href*="/p/"], a[href*="/zvideo/"]`, "body")
+	return r.readHTMLLinks(ctx, item, "zhihu")
+}
+
 func inferXWatchlistType(item Source) string {
 	typ := strings.ToLower(strings.TrimSpace(item.Type))
 	if typ != "" {
@@ -614,7 +1132,7 @@ func watchItemsFromDocument(doc *feed.Document, contentType string) []Item {
 
 var hrefRe = regexp.MustCompile(`(?i)href=["']([^"']+)["']`)
 var absoluteURLRe = regexp.MustCompile(`(?i)https?://[^"'<>\\\s]+`)
-var relativeContentPathRe = regexp.MustCompile(`(?i)/(?:article|group|video|w)/[0-9]+/?|/[A-Za-z0-9_]{1,32}/status/[0-9]+/?`)
+var relativeContentPathRe = regexp.MustCompile(`(?i)/(?:article|group|video|w)/[0-9]+/?|/[A-Za-z0-9_]{1,32}/status/[0-9]+/?|/video/(?:BV[0-9A-Za-z]+|av[0-9]+)/?|/(?:detail|status)/[0-9A-Za-z]+/?|/(?:short-video|photo)/[0-9A-Za-z_-]+/?|/question/[0-9]+/answer/[0-9]+/?|/p/[0-9]+/?|/zvideo/[0-9]+/?`)
 
 func (r Service) readHTMLLinks(ctx context.Context, item Source, platform string) ([]Item, error) {
 	data, _, err := r.feedService().Fetch(ctx, item.URL)
@@ -821,6 +1339,24 @@ func browserFallbackEnabled(opts map[string]any) bool {
 	return true
 }
 
+func withBrowserListDefaults(item Source, waitSelector, contentSelector string) Source {
+	if strings.TrimSpace(waitSelector) == "" && strings.TrimSpace(contentSelector) == "" {
+		return item
+	}
+	opts := map[string]any{}
+	for k, v := range item.Options {
+		opts[k] = v
+	}
+	if _, ok := opts["wait_selector"]; !ok && optionString(opts, "browser_wait_selector") == "" && strings.TrimSpace(waitSelector) != "" {
+		opts["wait_selector"] = waitSelector
+	}
+	if _, ok := opts["content_selector"]; !ok && optionString(opts, "browser_content_selector") == "" && strings.TrimSpace(contentSelector) != "" {
+		opts["content_selector"] = contentSelector
+	}
+	item.Options = opts
+	return item
+}
+
 func browserCookieDomain(platform, rawURL string) string {
 	switch platform {
 	case "toutiao":
@@ -833,6 +1369,14 @@ func browserCookieDomain(platform, rawURL string) string {
 		return "www.xiaohongshu.com"
 	case "wechat", "weixin":
 		return "mp.weixin.qq.com"
+	case "bilibili", "bili":
+		return "www.bilibili.com"
+	case "weibo":
+		return "m.weibo.cn"
+	case "kuaishou", "ks":
+		return "www.kuaishou.com"
+	case "zhihu":
+		return "www.zhihu.com"
 	}
 	u, err := url.Parse(strings.TrimSpace(rawURL))
 	if err != nil {
@@ -989,6 +1533,30 @@ func discoveredLinkItem(ctx context.Context, platform, link, title string) Item 
 			key = id
 			canonical = firstNonEmpty(norm.CanonicalURL, link)
 		}
+	case "bilibili":
+		if norm, err := bilibiliplatform.NormalizeURL(ctx, link); err == nil && norm.PlatformID != "" && norm.ContentKind != "user" {
+			id = "bilibili:" + norm.PlatformID
+			key = id
+			canonical = firstNonEmpty(norm.CanonicalURL, link)
+		}
+	case "weibo":
+		if norm, err := weiboplatform.NormalizeURL(ctx, link); err == nil && norm.PlatformID != "" && norm.ContentKind != "user" {
+			id = "weibo:" + norm.PlatformID
+			key = id
+			canonical = firstNonEmpty(norm.CanonicalURL, link)
+		}
+	case "kuaishou":
+		if norm, err := kuaishouplatform.NormalizeURL(ctx, link); err == nil && norm.PlatformID != "" && norm.ContentKind != "user" {
+			id = "kuaishou:" + norm.PlatformID
+			key = id
+			canonical = firstNonEmpty(norm.CanonicalURL, link)
+		}
+	case "zhihu":
+		if norm, err := zhihuplatform.NormalizeURL(ctx, link); err == nil && norm.PlatformID != "" && norm.ContentKind != "user" {
+			id = "zhihu:" + norm.ContentKind + ":" + norm.PlatformID
+			key = id
+			canonical = firstNonEmpty(norm.CanonicalURL, link)
+		}
 	case "xiaohongshu", "xhs":
 		if norm, err := xhsplatform.NormalizeURL(ctx, link); err == nil && norm.PlatformID != "" {
 			id = "xiaohongshu:" + norm.PlatformID
@@ -1038,6 +1606,14 @@ func platformLink(platform string, base *url.URL, link string) bool {
 		return strings.Contains(host, "toutiao.com") && (strings.Contains(path, "/article/") || strings.Contains(path, "/group/") || strings.Contains(path, "/video/") || strings.Contains(path, "/w/"))
 	case "douyin":
 		return (strings.Contains(host, "douyin.com") || strings.Contains(host, "iesdouyin.com")) && (strings.Contains(path, "/video/") || strings.Contains(path, "/note/") || strings.Contains(path, "/share/video/"))
+	case "bilibili":
+		return (strings.Contains(host, "bilibili.com") || host == "b23.tv" || strings.HasSuffix(host, ".b23.tv")) && strings.Contains(path, "/video/")
+	case "weibo":
+		return (host == "m.weibo.cn" || strings.HasSuffix(host, ".weibo.com") || host == "weibo.com") && (strings.Contains(path, "/detail/") || strings.Contains(path, "/status/") || webWeiboPostPath(path))
+	case "kuaishou":
+		return (strings.Contains(host, "kuaishou.com")) && (strings.Contains(path, "/short-video/") || strings.Contains(path, "/photo/"))
+	case "zhihu":
+		return (host == "www.zhihu.com" || host == "zhihu.com" || host == "zhuanlan.zhihu.com") && (strings.Contains(path, "/question/") || strings.Contains(path, "/p/") || strings.Contains(path, "/zvideo/"))
 	case "xiaohongshu", "xhs":
 		if host == "xhslink.com" || host == "www.xhslink.com" {
 			return true
@@ -1067,10 +1643,41 @@ func contentTypeFor(platform, link string) string {
 		}
 		return "video"
 	}
+	if platform == "bilibili" || strings.Contains(link, "bilibili.com/video/") {
+		return "video"
+	}
+	if platform == "kuaishou" || strings.Contains(link, "kuaishou.com/short-video/") || strings.Contains(link, "kuaishou.com/photo/") {
+		return "video"
+	}
+	if platform == "weibo" || strings.Contains(link, "weibo.cn/detail/") {
+		return "post"
+	}
+	if platform == "zhihu" || strings.Contains(link, "zhihu.com/question/") || strings.Contains(link, "zhihu.com/zvideo/") || strings.Contains(link, "zhuanlan.zhihu.com/p/") {
+		if strings.Contains(link, "/zvideo/") {
+			return "video"
+		}
+		if strings.Contains(link, "zhuanlan.zhihu.com/p/") {
+			return "article"
+		}
+		return "answer"
+	}
 	if platform == "x" || platform == "twitter" || strings.Contains(link, "/status/") {
 		return "x_post"
 	}
 	return "article"
+}
+
+func webWeiboPostPath(path string) bool {
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	if len(parts) < 2 || strings.TrimSpace(parts[0]) == "" || strings.TrimSpace(parts[1]) == "" {
+		return false
+	}
+	first := strings.ToLower(strings.TrimSpace(parts[0]))
+	switch first {
+	case "u", "profile", "login", "signup", "search", "tv", "p":
+		return false
+	}
+	return true
 }
 
 func xUsernameFromURL(rawURL string) string {
@@ -1087,7 +1694,7 @@ func xUsernameFromURL(rawURL string) string {
 
 func parseTime(s string) time.Time {
 	s = strings.TrimSpace(s)
-	for _, layout := range []string{time.RFC3339, time.RFC1123Z, time.RFC1123, "2006-01-02", "2006-01-02 15:04:05"} {
+	for _, layout := range []string{time.RFC3339, time.RFC1123Z, time.RFC1123, time.RubyDate, "2006-01-02", "2006-01-02 15:04:05"} {
 		if t, err := time.Parse(layout, s); err == nil {
 			return t
 		}
@@ -1148,6 +1755,29 @@ func optionInt(opts map[string]any, key string) int {
 	default:
 		return 0
 	}
+}
+
+func sourceLimit(opts map[string]any, defaultLimit, maxLimit int) int {
+	limit := optionInt(opts, "limit")
+	if limit <= 0 {
+		limit = defaultLimit
+	}
+	if maxLimit > 0 && limit > maxLimit {
+		return maxLimit
+	}
+	return limit
+}
+
+func shortText(value string, maxRunes int) string {
+	value = strings.TrimSpace(value)
+	if value == "" || maxRunes <= 0 {
+		return value
+	}
+	runes := []rune(value)
+	if len(runes) <= maxRunes {
+		return value
+	}
+	return strings.TrimSpace(string(runes[:maxRunes])) + "..."
 }
 
 func optionBool(opts map[string]any, key string) bool {

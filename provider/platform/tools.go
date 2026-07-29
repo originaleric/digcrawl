@@ -11,5 +11,9 @@ const (
 	ToolRedditPostRead      = "reddit.post.read"
 	ToolRedditSubredditRead = "reddit.subreddit.read"
 	ToolRedditUserRead      = "reddit.user.read"
+	ToolBilibiliVideoRead   = "bilibili.video.read"
+	ToolWeiboPostRead       = "weibo.post.read"
+	ToolKuaishouVideoRead   = "kuaishou.video.read"
+	ToolZhihuContentRead    = "zhihu.content.read"
 	ToolFeedRead            = "feed.read"
 )

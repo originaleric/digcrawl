@@ -275,6 +275,256 @@ func TestServiceExtractsXiaohongshuNoteLinks(t *testing.T) {
 	}
 }
 
+func TestServiceReadsFixedBilibiliVideo(t *testing.T) {
+	items, err := Service{}.ListLatest(context.Background(), Source{
+		ID:       "bili1",
+		Platform: "bilibili",
+		Type:     "bilibili_video",
+		URL:      "https://www.bilibili.com/video/BV1xx411c7mD?spm_id_from=333",
+		Name:     "Bili video",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("expected 1 item, got %+v", items)
+	}
+	if items[0].URL != "https://www.bilibili.com/video/BV1xx411c7mD" || items[0].ContentKey != "bilibili:BV1xx411c7mD" || items[0].ContentType != "video" {
+		t.Fatalf("unexpected bilibili item: %+v", items[0])
+	}
+}
+
+func TestServiceExtractsBilibiliVideoLinks(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`<html><body><a href="https://www.bilibili.com/video/BV1xx411c7mD?spm_id_from=333">A</a><script>{"url":"https:\/\/www.bilibili.com\/video\/av170001"}</script></body></html>`))
+	}))
+	defer srv.Close()
+	items, err := Service{}.ListLatest(context.Background(), Source{ID: "bili-user", Platform: "bilibili", Type: "bilibili_user", URL: srv.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("expected 2 bilibili video links, got %+v", items)
+	}
+	if items[0].ContentKey != "bilibili:BV1xx411c7mD" || items[1].ContentKey != "bilibili:170001" {
+		t.Fatalf("unexpected bilibili keys: %+v", items)
+	}
+}
+
+func TestServiceReadsBilibiliUserViaAPI(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/x/space/wbi/arc/search" || r.URL.Query().Get("mid") != "123456" {
+			t.Fatalf("unexpected API request: %s", r.URL.String())
+		}
+		_, _ = w.Write([]byte(`{"code":0,"message":"0","data":{"list":{"vlist":[{"bvid":"BV1api111","aid":1001,"title":"API视频1","author":"UP主","mid":123456,"created":1785231600},{"aid":1002,"title":"API视频2","author":"UP主","mid":123456,"created":1785231700}]}}}`))
+	}))
+	defer srv.Close()
+	items, err := Service{}.ListLatest(context.Background(), Source{
+		ID:       "bili-user",
+		Platform: "bilibili",
+		Type:     "bilibili_user",
+		URL:      "https://space.bilibili.com/123456",
+		Options:  map[string]any{"api_base_url": srv.URL, "limit": 2},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("expected 2 API items, got %+v", items)
+	}
+	if items[0].ContentKey != "bilibili:BV1api111" || items[1].ContentKey != "bilibili:1002" {
+		t.Fatalf("unexpected API bilibili keys: %+v", items)
+	}
+	if items[0].Raw["extraction_source"] != "api" {
+		t.Fatalf("expected api extraction source, got %+v", items[0].Raw)
+	}
+}
+
+func TestServiceFallsBackToBilibiliHTMLWhenAPIUnavailable(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/x/space/wbi/arc/search" {
+			_, _ = w.Write([]byte(`{"code":-352,"message":"风控校验失败","data":{"list":{"vlist":[]}}}`))
+			return
+		}
+		_, _ = w.Write([]byte(`<html><body><a href="https://www.bilibili.com/video/BV1fallback">A</a></body></html>`))
+	}))
+	defer srv.Close()
+	items, err := Service{}.ListLatest(context.Background(), Source{
+		ID:       "bili-user",
+		Platform: "bilibili",
+		Type:     "bilibili_user",
+		URL:      srv.URL + "/space",
+		Options:  map[string]any{"api_base_url": srv.URL, "platform_id": "123456", "browser_fallback": false},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 || items[0].ContentKey != "bilibili:BV1fallback" {
+		t.Fatalf("expected HTML fallback item, got %+v", items)
+	}
+}
+
+func TestServiceReadsFixedWeiboPost(t *testing.T) {
+	items, err := Service{}.ListLatest(context.Background(), Source{
+		ID:       "wb1",
+		Platform: "weibo",
+		Type:     "weibo_post",
+		URL:      "https://m.weibo.cn/detail/502233445566",
+		Name:     "Weibo post",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("expected 1 item, got %+v", items)
+	}
+	if items[0].URL != "https://m.weibo.cn/detail/502233445566" || items[0].ContentKey != "weibo:502233445566" || items[0].ContentType != "post" {
+		t.Fatalf("unexpected weibo item: %+v", items[0])
+	}
+}
+
+func TestServiceExtractsWeiboPostLinks(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`<html><body><a href="https://m.weibo.cn/detail/502233445566?foo=1">A</a><a href="https://weibo.com/123456/NabcDEF">B</a><a href="https://m.weibo.cn/u/123456">user</a></body></html>`))
+	}))
+	defer srv.Close()
+	items, err := Service{}.ListLatest(context.Background(), Source{ID: "wb-user", Platform: "weibo", Type: "weibo_user", URL: srv.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("expected 2 weibo links, got %+v", items)
+	}
+	if items[0].ContentKey != "weibo:502233445566" || items[1].ContentKey != "weibo:NabcDEF" {
+		t.Fatalf("unexpected weibo keys: %+v", items)
+	}
+}
+
+func TestServiceReadsWeiboUserViaAPI(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/container/getIndex" || r.URL.Query().Get("value") != "123456" {
+			t.Fatalf("unexpected API request: %s", r.URL.String())
+		}
+		_, _ = w.Write([]byte(`{"ok":1,"data":{"cards":[{"mblog":{"id":"502233445566","mid":"NabcDEF","text":"<p>微博正文&nbsp;1</p>","created_at":"Wed Jul 29 09:00:00 +0800 2026","user":{"id":123456,"screen_name":"博主"}}},{"mblog":{"id":"502233445567","text_raw":"微博正文2","user":{"id":123456,"screen_name":"博主"}}}]}}`))
+	}))
+	defer srv.Close()
+	items, err := Service{}.ListLatest(context.Background(), Source{
+		ID:       "wb-user",
+		Platform: "weibo",
+		Type:     "weibo_user",
+		URL:      srv.URL + "/u/123456",
+		Options:  map[string]any{"api_base_url": srv.URL, "platform_id": "123456", "limit": 2},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("expected 2 API items, got %+v", items)
+	}
+	if items[0].ContentKey != "weibo:502233445566" || items[1].ContentKey != "weibo:502233445567" {
+		t.Fatalf("unexpected API weibo keys: %+v", items)
+	}
+	if items[0].Title != "微博正文 1" || items[0].Raw["extraction_source"] != "api" {
+		t.Fatalf("unexpected API weibo item: %+v", items[0])
+	}
+}
+
+func TestServiceFallsBackToWeiboHTMLWhenAPIUnavailable(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/container/getIndex" {
+			_, _ = w.Write([]byte(`{"ok":0,"msg":"登录后查看更多","data":{"cards":[]}}`))
+			return
+		}
+		_, _ = w.Write([]byte(`<html><body><a href="https://m.weibo.cn/detail/502233445566">A</a></body></html>`))
+	}))
+	defer srv.Close()
+	items, err := Service{}.ListLatest(context.Background(), Source{
+		ID:       "wb-user",
+		Platform: "weibo",
+		Type:     "weibo_user",
+		URL:      srv.URL + "/u/123456",
+		Options:  map[string]any{"api_base_url": srv.URL, "platform_id": "123456", "browser_fallback": false},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 || items[0].ContentKey != "weibo:502233445566" {
+		t.Fatalf("expected HTML fallback item, got %+v", items)
+	}
+}
+
+func TestServiceReadsFixedKuaishouVideo(t *testing.T) {
+	items, err := Service{}.ListLatest(context.Background(), Source{
+		ID:       "ks1",
+		Platform: "kuaishou",
+		Type:     "kuaishou_video",
+		URL:      "https://www.kuaishou.com/short-video/3xf6abc",
+		Name:     "Kuaishou video",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("expected 1 item, got %+v", items)
+	}
+	if items[0].URL != "https://www.kuaishou.com/short-video/3xf6abc" || items[0].ContentKey != "kuaishou:3xf6abc" || items[0].ContentType != "video" {
+		t.Fatalf("unexpected kuaishou item: %+v", items[0])
+	}
+}
+
+func TestServiceExtractsKuaishouVideoLinks(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`<html><body><a href="https://www.kuaishou.com/short-video/3xf6abc">A</a><script>{"url":"https:\/\/www.kuaishou.com\/photo\/3xf6def"}</script></body></html>`))
+	}))
+	defer srv.Close()
+	items, err := Service{}.ListLatest(context.Background(), Source{ID: "ks-user", Platform: "kuaishou", Type: "kuaishou_user", URL: srv.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("expected 2 kuaishou links, got %+v", items)
+	}
+	if items[0].ContentKey != "kuaishou:3xf6abc" || items[1].ContentKey != "kuaishou:3xf6def" {
+		t.Fatalf("unexpected kuaishou keys: %+v", items)
+	}
+}
+
+func TestServiceReadsFixedZhihuContent(t *testing.T) {
+	items, err := Service{}.ListLatest(context.Background(), Source{
+		ID:       "zh1",
+		Platform: "zhihu",
+		Type:     "zhihu_answer",
+		URL:      "https://www.zhihu.com/question/123/answer/456",
+		Name:     "Zhihu answer",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("expected 1 item, got %+v", items)
+	}
+	if items[0].URL != "https://www.zhihu.com/question/123/answer/456" || items[0].ContentKey != "zhihu:answer:456" || items[0].ContentType != "answer" {
+		t.Fatalf("unexpected zhihu item: %+v", items[0])
+	}
+}
+
+func TestServiceExtractsZhihuContentLinks(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`<html><body><a href="https://www.zhihu.com/question/123/answer/456">A</a><a href="https://zhuanlan.zhihu.com/p/789">B</a><a href="https://www.zhihu.com/zvideo/101112">C</a></body></html>`))
+	}))
+	defer srv.Close()
+	items, err := Service{}.ListLatest(context.Background(), Source{ID: "zh-user", Platform: "zhihu", Type: "zhihu_user", URL: srv.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 3 {
+		t.Fatalf("expected 3 zhihu links, got %+v", items)
+	}
+	if items[0].ContentKey != "zhihu:answer:456" || items[1].ContentKey != "zhihu:article:789" || items[2].ContentKey != "zhihu:video:101112" {
+		t.Fatalf("unexpected zhihu keys: %+v", items)
+	}
+}
+
 func TestXiaohongshuPlatformLinkAllowsShortLinks(t *testing.T) {
 	if !platformLink("xiaohongshu", nil, "https://xhslink.com/a/AbCdEf") {
 		t.Fatal("expected xhslink short link to pass platform filter")
