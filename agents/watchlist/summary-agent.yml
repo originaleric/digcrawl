@@ -48,6 +48,14 @@ Nodes:
         "recommended_action": "可选的后续建议"
       }
 
+      输出长度约束：
+      - digest_title 不超过 40 个中文字符。
+      - overall_summary 不超过 120 个中文字符。
+      - 每个 item.summary 必须是“摘要”，不超过 180 个中文字符，禁止复制、复述或粘贴原文长段落。
+      - 每个 item.highlights 最多 3 条，每条不超过 40 个中文字符。
+      - recommended_action 如无必要可为空，不超过 80 个中文字符。
+      - 不要输出正文全文、长引用、Markdown 图片、原文段落列表或超长背景说明。
+
       如果输入内容不足，也要返回合法 JSON，并在 summary 中说明信息不足。
       如果 items 为空，digest_title 使用“今日无更新”，overall_summary 使用“今日无更新”，items 返回空数组。
 

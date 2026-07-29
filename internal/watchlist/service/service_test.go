@@ -243,6 +243,83 @@ func TestSummaryTextForArticlePrefersPageText(t *testing.T) {
 	}
 }
 
+func TestShouldNotifyNoUpdateRequiresConfiguredLimitCompleteness(t *testing.T) {
+	opts := map[string]any{"notify_no_update": true, "limit": 2}
+	if shouldNotifyNoUpdate(opts, 1) {
+		t.Fatal("no-update notification should be suppressed when discovery is below configured limit")
+	}
+	if reason := noUpdateSuppressedReason(opts, 1); !strings.Contains(reason, "discovered 1 below no-update threshold 2") {
+		t.Fatalf("expected suppression reason, got %q", reason)
+	}
+	if !shouldNotifyNoUpdate(opts, 2) {
+		t.Fatal("no-update notification should be allowed when discovery reaches configured limit")
+	}
+	if reason := noUpdateSuppressedReason(opts, 2); reason != "" {
+		t.Fatalf("complete discovery should not report suppression, got %q", reason)
+	}
+}
+
+func TestShouldNotifyNoUpdateUsesExplicitMinimum(t *testing.T) {
+	opts := map[string]any{"notify_no_update": true, "limit": 5, "min_discovered_for_no_update": 2}
+	if shouldNotifyNoUpdate(opts, 1) {
+		t.Fatal("no-update notification should respect explicit minimum")
+	}
+	if !shouldNotifyNoUpdate(opts, 2) {
+		t.Fatal("no-update notification should allow explicit minimum below source limit")
+	}
+}
+
+func TestShouldNotifyNoUpdateWithoutLimitKeepsCompatibility(t *testing.T) {
+	if !shouldNotifyNoUpdate(map[string]any{"notify_no_update": true}, 0) {
+		t.Fatal("no-update notification without a discovery threshold should keep existing behavior")
+	}
+}
+
+func TestRunItemReportsSuppressedNoUpdateWhenDiscoveryIncomplete(t *testing.T) {
+	ctx := context.Background()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`<?xml version="1.0"?><rss><channel><item><title>A</title><link>https://example.com/a</link><guid>g1</guid></item></channel></rss>`))
+	}))
+	defer srv.Close()
+
+	st, err := watchlist.OpenStore(filepath.Join(t.TempDir(), "watch.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	item := WatchItem{
+		ID: "rss-local", Platform: "rss", Type: "rss", URL: srv.URL,
+		Options: map[string]any{"notify_no_update": true, "limit": 2},
+	}
+	if _, err := st.UpsertDiscovered(ctx, item.ID, FeedItem{
+		ID: "g1", ContentKey: "g1", URL: "https://example.com/a", Title: "A",
+	}, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.UpdateItemStatus(ctx, item.ID, "g1", StatusNotified, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	svc := &Service{
+		cfg:   &config.Config{Watchlist: config.WatchlistConfig{DefaultInterval: "6h"}},
+		store: st,
+		feeds: FeedRegistry{Client: srv.Client()},
+	}
+	sum, err := svc.RunItem(ctx, item)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !sum.NoUpdateSuppressed {
+		t.Fatalf("expected suppressed no-update state, got %+v", sum)
+	}
+	if !strings.Contains(sum.NoUpdateSuppressedReason, "discovered 1 below no-update threshold 2") {
+		t.Fatalf("unexpected suppression reason: %+v", sum)
+	}
+	if sum.Notified != 0 || len(sum.Errors) != 0 {
+		t.Fatalf("suppressed no-update should be observable but not a notify/error result: %+v", sum)
+	}
+}
+
 func TestConfiguredItemsLoadsDatabaseSources(t *testing.T) {
 	ctx := context.Background()
 	st, err := watchlist.OpenStore(filepath.Join(t.TempDir(), "watch.db"))

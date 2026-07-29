@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -613,7 +614,7 @@ func watchItemsFromDocument(doc *feed.Document, contentType string) []Item {
 
 var hrefRe = regexp.MustCompile(`(?i)href=["']([^"']+)["']`)
 var absoluteURLRe = regexp.MustCompile(`(?i)https?://[^"'<>\\\s]+`)
-var relativeContentPathRe = regexp.MustCompile(`(?i)/(?:article|group|video)/[0-9]+/?|/[A-Za-z0-9_]{1,32}/status/[0-9]+/?`)
+var relativeContentPathRe = regexp.MustCompile(`(?i)/(?:article|group|video|w)/[0-9]+/?|/[A-Za-z0-9_]{1,32}/status/[0-9]+/?`)
 
 func (r Service) readHTMLLinks(ctx context.Context, item Source, platform string) ([]Item, error) {
 	data, _, err := r.feedService().Fetch(ctx, item.URL)
@@ -697,14 +698,66 @@ func (r Service) itemsFromLinkCandidates(ctx context.Context, item Source, platf
 		}
 		seen[seenKey] = true
 		out = append(out, discovered)
-		if limit > 0 && len(out) >= limit {
-			break
-		}
 	}
 	if len(out) == 0 {
 		return nil, fmt.Errorf("CONTENT_NOT_FOUND: no %s content links found", platform)
 	}
+	rankDiscoveredItems(platform, out)
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
+	}
 	return out, nil
+}
+
+func rankDiscoveredItems(platform string, items []Item) {
+	if platform != "toutiao" || len(items) < 2 {
+		return
+	}
+	sort.SliceStable(items, func(i, j int) bool {
+		left, lok := toutiaoNumericContentID(items[i])
+		right, rok := toutiaoNumericContentID(items[j])
+		if !lok || !rok {
+			return lok && !rok
+		}
+		return left > right
+	})
+}
+
+func toutiaoNumericContentID(item Item) (uint64, bool) {
+	for _, value := range []string{item.ContentKey, item.ID, item.CanonicalURL, item.URL} {
+		if id, ok := trailingNumericToken(value); ok {
+			return id, true
+		}
+	}
+	return 0, false
+}
+
+func trailingNumericToken(value string) (uint64, bool) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0, false
+	}
+	end := len(value)
+	for end > 0 {
+		ch := value[end-1]
+		if ch >= '0' && ch <= '9' {
+			break
+		}
+		end--
+	}
+	start := end
+	for start > 0 {
+		ch := value[start-1]
+		if ch < '0' || ch > '9' {
+			break
+		}
+		start--
+	}
+	if start == end {
+		return 0, false
+	}
+	id, err := strconv.ParseUint(value[start:end], 10, 64)
+	return id, err == nil
 }
 
 func (r Service) readHTMLLinksBrowser(ctx context.Context, item Source, platform string, base *url.URL) ([]Item, error) {
@@ -982,7 +1035,7 @@ func platformLink(platform string, base *url.URL, link string) bool {
 	path := strings.ToLower(u.Path)
 	switch platform {
 	case "toutiao":
-		return strings.Contains(host, "toutiao.com") && (strings.Contains(path, "/article/") || strings.Contains(path, "/group/") || strings.Contains(path, "/video/"))
+		return strings.Contains(host, "toutiao.com") && (strings.Contains(path, "/article/") || strings.Contains(path, "/group/") || strings.Contains(path, "/video/") || strings.Contains(path, "/w/"))
 	case "douyin":
 		return (strings.Contains(host, "douyin.com") || strings.Contains(host, "iesdouyin.com")) && (strings.Contains(path, "/video/") || strings.Contains(path, "/note/") || strings.Contains(path, "/share/video/"))
 	case "xiaohongshu", "xhs":

@@ -37,6 +37,7 @@ func runWatchlistRun(args []string) {
 	fs := flag.NewFlagSet("watchlist run", flag.ExitOnError)
 	configPath := fs.String("config", "config/config.yaml", "path to config.yaml")
 	once := fs.Bool("once", false, "run one watchlist round and exit")
+	id := fs.String("id", "", "run one configured watchlist item by id")
 	_ = fs.Parse(args)
 
 	cfg, err := loadConfig(*configPath)
@@ -58,10 +59,17 @@ func runWatchlistRun(args []string) {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	run := func() error {
+		if strings.TrimSpace(*id) != "" {
+			s, err := svc.RunConfiguredItem(ctx, *id)
+			logWatchlistRunSummary(s)
+			if err != nil {
+				log.Printf("watchlist run error: %v", err)
+			}
+			return err
+		}
 		summaries, err := svc.RunOnce(ctx)
 		for _, s := range summaries {
-			log.Printf("watchlist run=%s watch=%s discovered=%d new=%d collected=%d summarized=%d notified=%d locked=%v errors=%s",
-				s.RunID, s.WatchID, s.Discovered, s.NewItems, s.Collected, s.Summarized, s.Notified, s.SkippedLocked, strings.Join(s.Errors, " | "))
+			logWatchlistRunSummary(s)
 		}
 		if err != nil {
 			log.Printf("watchlist run error: %v", err)
@@ -89,6 +97,15 @@ func runWatchlistRun(args []string) {
 			run()
 		}
 	}
+}
+
+func logWatchlistRunSummary(s watchlistservice.RunSummary) {
+	suppressed := ""
+	if s.NoUpdateSuppressed {
+		suppressed = s.NoUpdateSuppressedReason
+	}
+	log.Printf("watchlist run=%s watch=%s discovered=%d new=%d collected=%d summarized=%d notified=%d locked=%v no_update_suppressed=%v no_update_suppressed_reason=%q errors=%s",
+		s.RunID, s.WatchID, s.Discovered, s.NewItems, s.Collected, s.Summarized, s.Notified, s.SkippedLocked, s.NoUpdateSuppressed, suppressed, strings.Join(s.Errors, " | "))
 }
 
 func runWatchlistServe(args []string) {

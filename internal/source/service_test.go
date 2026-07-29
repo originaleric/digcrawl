@@ -77,6 +77,55 @@ func TestServiceExtractsToutiaoVideoLinks(t *testing.T) {
 	}
 }
 
+func TestServiceRanksToutiaoLinksBeforeApplyingLimit(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`<html><body>
+<a href="https://www.toutiao.com/article/7404301050942997043/">old-a</a>
+<a href="https://www.toutiao.com/article/7590162030313603590/">old-b</a>
+<script>{"url":"https:\/\/www.toutiao.com\/video\/7667703322668745258\/","url2":"https:\/\/www.toutiao.com\/video\/7667693400077894178\/"}</script>
+</body></html>`))
+	}))
+	defer srv.Close()
+	items, err := Service{}.ListLatest(context.Background(), Source{
+		ID:       "w1",
+		Platform: "toutiao",
+		Type:     "toutiao_author",
+		URL:      srv.URL,
+		Options:  map[string]any{"limit": 2},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("expected limited items, got %+v", items)
+	}
+	if items[0].ContentKey != "toutiao:video:7667703322668745258" || items[1].ContentKey != "toutiao:video:7667693400077894178" {
+		t.Fatalf("expected newest toutiao IDs before older page links, got %+v", items)
+	}
+}
+
+func TestServiceExtractsToutiaoMicroPostLinks(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`<html><body><a href="https://www.toutiao.com/w/1870280855070795/?log_from=a">micro</a></body></html>`))
+	}))
+	defer srv.Close()
+	items, err := Service{}.ListLatest(context.Background(), Source{
+		ID:       "w1",
+		Platform: "toutiao",
+		Type:     "toutiao_author",
+		URL:      srv.URL,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("expected micro post link, got %+v", items)
+	}
+	if items[0].ContentKey != "toutiao:1870280855070795" {
+		t.Fatalf("unexpected micro post item: %+v", items[0])
+	}
+}
+
 func TestServiceReadsFixedToutiaoVideo(t *testing.T) {
 	items, err := Service{}.ListLatest(context.Background(), Source{
 		ID:       "tt-video",

@@ -67,15 +67,17 @@ type FeedReader interface {
 }
 
 type RunSummary struct {
-	RunID         string
-	WatchID       string
-	Discovered    int
-	NewItems      int
-	Collected     int
-	Summarized    int
-	Notified      int
-	SkippedLocked bool
-	Errors        []string
+	RunID                    string
+	WatchID                  string
+	Discovered               int
+	NewItems                 int
+	Collected                int
+	Summarized               int
+	Notified                 int
+	SkippedLocked            bool
+	NoUpdateSuppressed       bool
+	NoUpdateSuppressedReason string
+	Errors                   []string
 }
 
 type TaskDefinition struct {

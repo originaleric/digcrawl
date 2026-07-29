@@ -565,11 +565,16 @@ func (s *Service) RunItem(ctx context.Context, item WatchItem) (RunSummary, erro
 		_ = s.store.UpsertDelivery(ctx, item.ID, key, notifyResult.ChannelID, StatusNotifyFailed, notifyResult.Error, notifyResult.Retryable, msg.Title, msg.Text)
 		sum.Errors = append(sum.Errors, notifyResult.Error)
 	}
-	if !baseline && sum.NewItems == 0 && shouldNotifyNoUpdate(item.Options) {
-		if err := s.notifyNoUpdate(ctx, item, time.Now()); err != nil {
-			sum.Errors = append(sum.Errors, err.Error())
-		} else {
-			sum.Notified++
+	if !baseline && sum.NewItems == 0 {
+		if shouldNotifyNoUpdate(item.Options, sum.Discovered) {
+			if err := s.notifyNoUpdate(ctx, item, time.Now()); err != nil {
+				sum.Errors = append(sum.Errors, err.Error())
+			} else {
+				sum.Notified++
+			}
+		} else if reason := noUpdateSuppressedReason(item.Options, sum.Discovered); reason != "" {
+			sum.NoUpdateSuppressed = true
+			sum.NoUpdateSuppressedReason = reason
 		}
 	}
 	if len(sum.Errors) > 0 {
@@ -599,15 +604,17 @@ func (s *Service) runScheduledTask(ctx context.Context, item WatchItem, def Task
 	errText := ""
 	defer func() {
 		metadata := map[string]any{
-			"watch_id":       sum.WatchID,
-			"watch_run_id":   sum.RunID,
-			"discovered":     sum.Discovered,
-			"new_items":      sum.NewItems,
-			"collected":      sum.Collected,
-			"summarized":     sum.Summarized,
-			"notified":       sum.Notified,
-			"skipped_locked": sum.SkippedLocked,
-			"errors":         sum.Errors,
+			"watch_id":                    sum.WatchID,
+			"watch_run_id":                sum.RunID,
+			"discovered":                  sum.Discovered,
+			"new_items":                   sum.NewItems,
+			"collected":                   sum.Collected,
+			"summarized":                  sum.Summarized,
+			"notified":                    sum.Notified,
+			"skipped_locked":              sum.SkippedLocked,
+			"no_update_suppressed":        sum.NoUpdateSuppressed,
+			"no_update_suppressed_reason": sum.NoUpdateSuppressedReason,
+			"errors":                      sum.Errors,
 		}
 		data, _ := json.Marshal(metadata)
 		_ = s.store.FinishTaskRun(context.Background(), taskRunID, def, status, errText, string(data), time.Now())
@@ -943,13 +950,99 @@ func optionString(opts map[string]any, key string) string {
 	}
 }
 
-func shouldNotifyNoUpdate(opts map[string]any) bool {
+func shouldNotifyNoUpdate(opts map[string]any, discovered int) bool {
+	if !notifyNoUpdateEnabled(opts) {
+		return false
+	}
+	return noUpdateDiscoveryComplete(opts, discovered)
+}
+
+func noUpdateSuppressedReason(opts map[string]any, discovered int) string {
+	if !notifyNoUpdateEnabled(opts) {
+		return ""
+	}
+	minDiscovered := noUpdateMinDiscovered(opts)
+	if minDiscovered > 0 && discovered < minDiscovered {
+		return fmt.Sprintf("discovery incomplete: discovered %d below no-update threshold %d", discovered, minDiscovered)
+	}
+	return ""
+}
+
+func notifyNoUpdateEnabled(opts map[string]any) bool {
 	for _, key := range []string{"notify_no_update", "NotifyNoUpdate", "notifyOnNoUpdate", "notify_on_no_update"} {
 		if optionBool(opts, key) {
 			return true
 		}
 	}
 	return false
+}
+
+func noUpdateDiscoveryComplete(opts map[string]any, discovered int) bool {
+	minDiscovered := noUpdateMinDiscovered(opts)
+	return minDiscovered <= 0 || discovered >= minDiscovered
+}
+
+func noUpdateMinDiscovered(opts map[string]any) int {
+	minDiscovered := firstPositiveOptionInt(opts,
+		"min_discovered_for_no_update",
+		"no_update_min_discovered",
+		"noUpdateMinDiscovered",
+	)
+	if minDiscovered <= 0 {
+		minDiscovered = firstPositiveOptionInt(opts, "limit", "Limit")
+	}
+	return minDiscovered
+}
+
+func firstPositiveOptionInt(opts map[string]any, keys ...string) int {
+	for _, key := range keys {
+		if n := optionInt(opts, key); n > 0 {
+			return n
+		}
+	}
+	return 0
+}
+
+func optionInt(opts map[string]any, key string) int {
+	if opts == nil {
+		return 0
+	}
+	v, ok := opts[key]
+	if !ok {
+		return 0
+	}
+	switch value := v.(type) {
+	case int:
+		return value
+	case int8:
+		return int(value)
+	case int16:
+		return int(value)
+	case int32:
+		return int(value)
+	case int64:
+		return int(value)
+	case uint:
+		return int(value)
+	case uint8:
+		return int(value)
+	case uint16:
+		return int(value)
+	case uint32:
+		return int(value)
+	case uint64:
+		return int(value)
+	case float32:
+		return int(value)
+	case float64:
+		return int(value)
+	case string:
+		n, _ := strconv.Atoi(strings.TrimSpace(value))
+		return n
+	default:
+		n, _ := strconv.Atoi(strings.TrimSpace(fmt.Sprint(value)))
+		return n
+	}
 }
 
 func optionBool(opts map[string]any, key string) bool {
