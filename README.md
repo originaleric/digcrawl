@@ -152,11 +152,13 @@ DIGCRAWL_CONFIG="$PWD/config/config.yaml" \
 ./scripts/digcrawl-watchlist-service.sh start
 ./scripts/digcrawl-watchlist-service.sh status
 ./scripts/digcrawl-watchlist-service.sh logs
+./scripts/digcrawl-watchlist-service.sh rebuild
+./scripts/digcrawl-watchlist-service.sh rebuild-restart
 ./scripts/digcrawl-watchlist-service.sh restart
 ./scripts/digcrawl-watchlist-service.sh uninstall
 ```
 
-脚本 `install` 时默认会自动构建 `bin/digcrawl-watchlist`，并使用 `-tags digflow_embedded`，确保 watchlist 的 `digflow_runtime` summary agent 真正嵌入运行；常驻服务启动时只运行已构建 binary，不会在每次重启时重新 `go build`。需要手动重建可执行 `./scripts/digcrawl-watchlist-service.sh build`。
+脚本 `install` 时默认会自动构建 `bin/digcrawl-watchlist`，并使用 `-tags digflow_embedded`，确保 watchlist 的 `digflow_runtime` summary agent 真正嵌入运行；常驻服务启动时只运行已构建 binary。更新代码或 DigFlow 依赖后，可执行 `./scripts/digcrawl-watchlist-service.sh rebuild` 单独重建，也可执行 `./scripts/digcrawl-watchlist-service.sh rebuild-restart` 重建后重启。脚本会优先读取已安装 launchd plist / systemd unit 中的 `DIGCRAWL_BIN`，重建到服务实际使用的 binary 路径。
 
 使用 `digflow_runtime` summary agent 时，推荐通过 `RuntimeEnv` 做配置文件 opt-in 注入：主配置 `RuntimeEnv.ConfigPath` 指向本地 `config/runtime-env.yml`，真实的 `DIGCRAWL_MYSQL_HOST`、`DIGCRAWL_MYSQL_DATABASE`、`DIGCRAWL_MYSQL_USER`、`DIGCRAWL_MYSQL_PASSWORD` 和 `DIGFLOW_SUMMARY_API_KEY` 放在该本地 YAML 中。仓库提供无密钥模板 `config/runtime-env.example.yml`，真实文件已被 `.gitignore` 忽略，不需要再依赖 shell 环境或服务管理器环境变量。
 
@@ -383,7 +385,7 @@ curl -s http://127.0.0.1:8787/manifest
 | `digcrawl watchlist run` | 执行一轮 watchlist 监控、摘要和通知 |
 | `digcrawl watchlist serve` | 常驻调度，到期执行不同周期的 Tasks / Watchlist items |
 | `digcrawl watchlist source` | 维护持久化 watchlist 清单，写入 `dc_watchlist_sources` |
-| `scripts/digcrawl-watchlist-service.sh` | 将 watchlist 常驻调度安装为 macOS launchd / Linux systemd 用户服务 |
+| `scripts/digcrawl-watchlist-service.sh` | 将 watchlist 常驻调度安装为 macOS launchd / Linux systemd 用户服务，支持 `rebuild-restart` 一键重建并重启 |
 | `digcrawl gateway` | HTTP 工具网关，含 `/admin/watchlist/*` 运维接口 |
 | `digcrawl collector` | WebSocket 反向连接 Collector |
 | `digcrawl connect` | 保存宿主配置并启动 Collector |

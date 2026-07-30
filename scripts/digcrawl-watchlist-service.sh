@@ -4,6 +4,8 @@
 # Usage:
 #   ./scripts/digcrawl-watchlist-service.sh install
 #   ./scripts/digcrawl-watchlist-service.sh build
+#   ./scripts/digcrawl-watchlist-service.sh rebuild
+#   ./scripts/digcrawl-watchlist-service.sh rebuild-restart
 #   ./scripts/digcrawl-watchlist-service.sh start|stop|restart|status|logs|uninstall
 #
 # Optional environment overrides:
@@ -48,7 +50,7 @@ OS_NAME="$(uname -s)"
 
 usage() {
   cat <<EOF
-Usage: $(basename "$0") <install|build|start|stop|restart|status|logs|uninstall|run-foreground>
+Usage: $(basename "$0") <install|build|rebuild|rebuild-restart|start|stop|restart|status|logs|uninstall|run-foreground>
 
 Environment:
   DIGCRAWL_BIN            default: ${BIN_PATH:-<not found>}
@@ -118,6 +120,36 @@ mac_plist_path() {
 
 linux_unit_path() {
   printf '%s/%s.service' "${HOME}/.config/systemd/user" "${SERVICE_NAME}"
+}
+
+installed_bin_path() {
+  case "${OS_NAME}" in
+    Darwin)
+      local plist
+      plist="$(mac_plist_path)"
+      if [[ -f "${plist}" ]] && command -v plutil >/dev/null 2>&1; then
+        plutil -extract EnvironmentVariables.DIGCRAWL_BIN raw -o - "${plist}" 2>/dev/null || true
+      fi
+      ;;
+    Linux)
+      local unit
+      unit="$(linux_unit_path)"
+      if [[ -f "${unit}" ]]; then
+        sed -n 's/^Environment="DIGCRAWL_BIN=\([^"]*\)"$/\1/p' "${unit}" | head -n 1
+      fi
+      ;;
+  esac
+}
+
+use_installed_bin_path_if_available() {
+  if [[ -n "${DIGCRAWL_BIN:-}" ]]; then
+    return
+  fi
+  local installed
+  installed="$(installed_bin_path)"
+  if [[ -n "${installed}" ]]; then
+    BIN_PATH="${installed}"
+  fi
 }
 
 install_macos() {
@@ -216,17 +248,56 @@ start_macos() {
   launchctl bootout "gui/${UID}" "${plist}" >/dev/null 2>&1 || true
   if launchctl bootstrap "gui/${UID}" "${plist}" >/dev/null 2>&1; then
     echo "started ${SERVICE_LABEL}"
-  else
-    launchctl load "${plist}"
+  elif launchctl load "${plist}" >/dev/null 2>&1; then
     echo "started ${SERVICE_LABEL}"
+  else
+    fail "failed to start ${SERVICE_LABEL}; try: launchctl bootstrap gui/$(id -u) ${plist}"
   fi
 }
 
 stop_macos() {
   local plist
   plist="$(mac_plist_path)"
-  launchctl bootout "gui/${UID}" "${plist}" >/dev/null 2>&1 || launchctl unload "${plist}" >/dev/null 2>&1 || true
+  if ! launchctl print "gui/${UID}/${SERVICE_LABEL}" >/dev/null 2>&1; then
+    echo "stopped ${SERVICE_LABEL}"
+    return
+  fi
+  if ! launchctl bootout "gui/${UID}" "${plist}" >/dev/null 2>&1 && ! launchctl unload "${plist}" >/dev/null 2>&1; then
+    fail "failed to stop ${SERVICE_LABEL}; try: launchctl bootout gui/$(id -u) ${plist}"
+  fi
   echo "stopped ${SERVICE_LABEL}"
+}
+
+mac_service_pid() {
+  launchctl print "gui/${UID}/${SERVICE_LABEL}" 2>/dev/null | awk -F'= ' '/pid =/ {print $2; exit}'
+}
+
+restart_macos() {
+  local plist
+  plist="$(mac_plist_path)"
+  [[ -f "${plist}" ]] || fail "plist not found; run install first: ${plist}"
+  local old_pid=""
+  local new_pid=""
+  if launchctl print "gui/${UID}/${SERVICE_LABEL}" >/dev/null 2>&1; then
+    old_pid="$(mac_service_pid)"
+    if launchctl kickstart -k "gui/${UID}/${SERVICE_LABEL}" >/dev/null 2>&1; then
+      sleep 1
+      new_pid="$(mac_service_pid)"
+      if [[ -n "${old_pid}" && "${new_pid}" == "${old_pid}" ]]; then
+        fail "restart did not replace ${SERVICE_LABEL}; pid is still ${old_pid}"
+      fi
+      echo "restarted ${SERVICE_LABEL}"
+      return
+    fi
+    echo "kickstart failed; falling back to bootout/bootstrap" >&2
+  fi
+  stop_macos
+  start_macos
+  sleep 1
+  new_pid="$(mac_service_pid)"
+  if [[ -n "${old_pid}" && "${new_pid}" == "${old_pid}" ]]; then
+    fail "restart did not replace ${SERVICE_LABEL}; pid is still ${old_pid}. Try running this command in a local terminal: launchctl kickstart -k gui/$(id -u)/${SERVICE_LABEL}"
+  fi
 }
 
 status_macos() {
@@ -249,6 +320,10 @@ start_linux() {
 
 stop_linux() {
   systemctl --user stop "${SERVICE_NAME}.service"
+}
+
+restart_linux() {
+  systemctl --user restart "${SERVICE_NAME}.service"
 }
 
 status_linux() {
@@ -300,9 +375,17 @@ case "${cmd}" in
   install)
     dispatch_platform install
     ;;
-  build)
+  build|rebuild)
     require_config
+    use_installed_bin_path_if_available
     build_binary
+    ;;
+  rebuild-restart|deploy)
+    require_config
+    use_installed_bin_path_if_available
+    build_binary
+    dispatch_platform restart
+    dispatch_platform status
     ;;
   start)
     dispatch_platform start
@@ -311,8 +394,7 @@ case "${cmd}" in
     dispatch_platform stop
     ;;
   restart)
-    dispatch_platform stop
-    dispatch_platform start
+    dispatch_platform restart
     ;;
   status)
     dispatch_platform status

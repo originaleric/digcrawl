@@ -648,7 +648,7 @@ digcrawl browser check         # 检查平台会话，可选试读
 digcrawl asr transcribe        # ffmpeg 抽音频并转写
 digcrawl watchlist run         # 执行 watchlist 监控、摘要和通知
 digcrawl watchlist serve       # 常驻调度，到期执行不同周期的 Tasks / Watchlist items
-scripts/digcrawl-watchlist-service.sh install|start|stop|restart|status|logs|uninstall
+scripts/digcrawl-watchlist-service.sh install|rebuild|rebuild-restart|start|stop|restart|status|logs|uninstall
 digcollect <url>              # 轻量采集入口，等价于 digcrawl collect <url>
 digcrawl help
 ```
@@ -672,6 +672,8 @@ DIGCRAWL_CONFIG="$PWD/config/config.yaml" \
 ./scripts/digcrawl-watchlist-service.sh start
 ./scripts/digcrawl-watchlist-service.sh status
 ./scripts/digcrawl-watchlist-service.sh logs
+./scripts/digcrawl-watchlist-service.sh rebuild
+./scripts/digcrawl-watchlist-service.sh rebuild-restart
 ./scripts/digcrawl-watchlist-service.sh restart
 ./scripts/digcrawl-watchlist-service.sh stop
 ./scripts/digcrawl-watchlist-service.sh uninstall
@@ -692,7 +694,7 @@ DIGCRAWL_CONFIG="$PWD/config/config.yaml" \
 | `DIGCRAWL_BUILD_GOCACHE` | 自动构建 Go build cache，默认 `/private/tmp/digcrawl-gocache` |
 | `DIGCRAWL_BUILD_GOMODCACHE` | 自动构建 Go module cache，默认 `.tmp/go-mod-watchlist` |
 
-`install` 会构建 `bin/digcrawl-watchlist`；`run-foreground` 只运行已有 binary，不会在服务重启时重新 build。更新代码或 DigFlow 依赖后，先执行 `./scripts/digcrawl-watchlist-service.sh build` 或重新 `install`。
+`install` 会构建默认 binary 并写入用户级服务配置；`run-foreground` 只运行已有 binary。更新代码或 DigFlow 依赖后，使用 `./scripts/digcrawl-watchlist-service.sh rebuild` 单独重建，或使用 `./scripts/digcrawl-watchlist-service.sh rebuild-restart` 重建后重启。脚本会优先读取已安装 launchd plist / systemd unit 里的 `DIGCRAWL_BIN`，重建到服务实际使用的 binary 路径。`build` 保留兼容，也会使用同样的路径解析逻辑。
 
 使用 `digflow_runtime` summary agent 时，服务进程不再要求 launchd/systemd 注入业务密钥。推荐在主配置中设置 `RuntimeEnv.ConfigPath: config/runtime-env.yml`，并在本地 ignored 的 `config/runtime-env.yml` 中开启 `RuntimeEnv.Enabled: true`，填入 `DIGCRAWL_MYSQL_HOST`、`DIGCRAWL_MYSQL_DATABASE`、`DIGCRAWL_MYSQL_USER`、`DIGCRAWL_MYSQL_PASSWORD` 和 `DIGFLOW_SUMMARY_API_KEY`。仓库只提交 `config/runtime-env.example.yml`。
 
