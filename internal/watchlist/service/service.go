@@ -491,6 +491,7 @@ func (s *Service) RunItem(ctx context.Context, item WatchItem) (RunSummary, erro
 	} else {
 		sum.Notified += retried
 	}
+	contentActivity := retried
 	feeds, err := s.feeds.ListLatest(ctx, item)
 	if err != nil {
 		status = "failed"
@@ -532,12 +533,16 @@ func (s *Service) RunItem(ctx context.Context, item WatchItem) (RunSummary, erro
 			continue
 		}
 		sum.Collected++
+		contentActivity++
+		if err := s.store.UpdateItemCollectedMetadata(ctx, item.ID, key, collected.Title, collected.PublishedAt, collected.ContentType); err != nil {
+			sum.Errors = append(sum.Errors, err.Error())
+		}
 		_ = s.store.UpdateItemStatus(ctx, item.ID, key, StatusCollected, "", "")
 		req := summary.Request{
 			WatchID: item.ID, Platform: item.Platform, SourceName: item.Name, RunTime: time.Now().Format(time.RFC3339),
 			Items: []summary.Item{{
 				ItemID: key, URL: feed.URL, Title: firstNonEmpty(collected.Title, feed.Title),
-				PublishedAt: feed.PublishedAt.Format(time.RFC3339),
+				PublishedAt: firstNonEmpty(collected.PublishedAt, feedPublishedAtText(feed.PublishedAt)),
 				Text:        collected.Text, ASRText: collected.ASRText, OCRText: collected.OCRText, Metadata: collected.Metadata,
 			}},
 		}
@@ -572,13 +577,13 @@ func (s *Service) RunItem(ctx context.Context, item WatchItem) (RunSummary, erro
 		sum.Errors = append(sum.Errors, notifyResult.Error)
 	}
 	if !baseline && sum.NewItems == 0 {
-		if shouldNotifyNoUpdate(item.Options, sum.Discovered) {
+		if shouldNotifyNoUpdateForRun(item.Options, sum.Discovered, sum.Errors, contentActivity) {
 			if err := s.notifyNoUpdate(ctx, item, time.Now()); err != nil {
 				sum.Errors = append(sum.Errors, err.Error())
 			} else {
 				sum.Notified++
 			}
-		} else if reason := noUpdateSuppressedReason(item.Options, sum.Discovered); reason != "" {
+		} else if reason := noUpdateSuppressedReasonForRun(item.Options, sum.Discovered, sum.Errors, contentActivity); reason != "" {
 			sum.NoUpdateSuppressed = true
 			sum.NoUpdateSuppressedReason = reason
 		}
@@ -895,25 +900,55 @@ func (s *Service) collectFeedItem(ctx context.Context, feed FeedItem) (Collected
 		return CollectedItem{Feed: feed}, fmt.Errorf("decode collect json: %w", err)
 	}
 	asrText := extractMetadataText(out, "asr_text")
-	text, err := summaryTextForCollectedItem(feed, out, asrText)
+	text, err := summaryTextForCollectedItem(feed, out, asrText, result.Downloaded)
 	if err != nil {
 		return CollectedItem{Feed: feed}, err
 	}
 	return CollectedItem{
-		Feed: feed, Title: str(out["title"]), Text: text,
-		ASRText: asrText, OCRText: extractOCRText(out),
-		Metadata: extractMetadata(out),
+		Feed: feed, Title: str(out["title"]), PublishedAt: str(out["published_at"]),
+		ContentType: str(out["content_type"]), Text: text, ASRText: asrText,
+		OCRText: extractOCRText(out), Metadata: extractMetadata(out),
 	}, nil
 }
 
-func summaryTextForCollectedItem(feed FeedItem, out map[string]any, asrText string) (string, error) {
+func summaryTextForCollectedItem(feed FeedItem, out map[string]any, asrText string, downloaded []map[string]any) (string, error) {
 	if isVideoCollectedItem(feed, out) {
 		if strings.TrimSpace(asrText) == "" {
-			return "", fmt.Errorf("video transcript unavailable: ASR/subtitles are required for video summary")
+			return "", videoTranscriptUnavailableError(out, downloaded)
 		}
 		return "", nil
 	}
 	return firstNonEmpty(str(out["text"]), str(out["markdown"])), nil
+}
+
+func videoTranscriptUnavailableError(out map[string]any, downloaded []map[string]any) error {
+	reason := firstNonEmpty(extractMetadataText(out, "asr_error"), videoAssetFailureReason(downloaded))
+	if reason == "" {
+		reason = "no downloaded video/audio asset was available for ASR"
+	}
+	return fmt.Errorf("video transcript unavailable: %s", reason)
+}
+
+func videoAssetFailureReason(downloaded []map[string]any) string {
+	var reasons []string
+	sawVideoOrAudio := false
+	for _, item := range downloaded {
+		typ := strings.ToLower(strings.TrimSpace(str(item["type"])))
+		if typ != "video" && typ != "audio" {
+			continue
+		}
+		sawVideoOrAudio = true
+		if errText := str(item["error"]); errText != "" {
+			reasons = append(reasons, fmt.Sprintf("%s download failed: %s", typ, errText))
+		}
+	}
+	if len(reasons) > 0 {
+		return strings.Join(reasons, "; ")
+	}
+	if sawVideoOrAudio {
+		return "downloaded video/audio asset did not produce ASR text"
+	}
+	return ""
 }
 
 func validateSummaryResultForCollectedItem(collected CollectedItem, res *summary.Result) error {
@@ -944,6 +979,13 @@ func validateSummaryResultForCollectedItem(collected CollectedItem, res *summary
 		return fmt.Errorf("video summary agent copied ASR transcript verbatim")
 	}
 	return nil
+}
+
+func feedPublishedAtText(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	return t.Format(time.RFC3339)
 }
 
 func isVideoFeedItem(feed FeedItem) bool {
@@ -1039,6 +1081,16 @@ func shouldNotifyNoUpdate(opts map[string]any, discovered int) bool {
 	return noUpdateDiscoveryComplete(opts, discovered)
 }
 
+func shouldNotifyNoUpdateForRun(opts map[string]any, discovered int, errors []string, contentActivity int) bool {
+	if !shouldNotifyNoUpdate(opts, discovered) {
+		return false
+	}
+	if contentActivity > 0 {
+		return false
+	}
+	return noUpdateErrorSuppressedReason(opts, errors) == ""
+}
+
 func noUpdateSuppressedReason(opts map[string]any, discovered int) string {
 	if !notifyNoUpdateEnabled(opts) {
 		return ""
@@ -1048,6 +1100,26 @@ func noUpdateSuppressedReason(opts map[string]any, discovered int) string {
 		return fmt.Sprintf("discovery incomplete: discovered %d below no-update threshold %d", discovered, minDiscovered)
 	}
 	return ""
+}
+
+func noUpdateSuppressedReasonForRun(opts map[string]any, discovered int, errors []string, contentActivity int) string {
+	if !notifyNoUpdateEnabled(opts) {
+		return ""
+	}
+	if contentActivity > 0 {
+		return fmt.Sprintf("run has %d content activity event(s); no-update notification suppressed", contentActivity)
+	}
+	if reason := noUpdateErrorSuppressedReason(opts, errors); reason != "" {
+		return reason
+	}
+	return noUpdateSuppressedReason(opts, discovered)
+}
+
+func noUpdateErrorSuppressedReason(opts map[string]any, errors []string) string {
+	if !notifyNoUpdateEnabled(opts) || len(errors) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("run has %d error(s); no-update notification suppressed", len(errors))
 }
 
 func notifyNoUpdateEnabled(opts map[string]any) bool {

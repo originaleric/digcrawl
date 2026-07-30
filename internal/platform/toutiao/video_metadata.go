@@ -51,6 +51,58 @@ func VideoMetadataScript() string {
   };
   const meta = (name) => document.querySelector('meta[property="' + name + '"]')?.content
     || document.querySelector('meta[name="' + name + '"]')?.content || '';
+  const validPublished = (raw) => {
+    const s = String(raw || '').trim();
+    if (!s) return '';
+    if (/^\d{1,2}:\d{2}(?::\d{2})?(\s*\/\s*\d{1,2}:\d{2}(?::\d{2})?)?/.test(s)) return '';
+    if (s.includes('/') && /^\d{1,2}:\d{2}/.test(s)) return '';
+    if (s === '直播' || s === '正在直播') return '';
+    return s;
+  };
+  const normalizePublished = (raw) => {
+    const s = validPublished(raw);
+    if (!s) return '';
+    if (/^\d{10}$/.test(s)) {
+      const d = new Date(Number(s) * 1000);
+      return Number.isNaN(d.getTime()) ? '' : d.toISOString();
+    }
+    if (/^\d{13}$/.test(s)) {
+      const d = new Date(Number(s));
+      return Number.isNaN(d.getTime()) ? '' : d.toISOString();
+    }
+    return s;
+  };
+  const jsonPublished = () => {
+    const text = Array.from(document.scripts).map(s => s.textContent || '').join('\n').slice(0, 600000)
+      .replaceAll('\\\"', '"').replaceAll('\\\/', '/').replaceAll('\\u002F', '/');
+    const patterns = [
+      /"(?:publish_time|publishTime|published_at|publishedAt|create_time|createTime|display_time|displayTime|datePublished)"\s*:\s*"([^"]+)"/ig,
+      /"(?:publish_time|publishTime|published_at|publishedAt|create_time|createTime)"\s*:\s*(\d{10,13})/ig
+    ];
+    for (const re of patterns) {
+      let m;
+      while ((m = re.exec(text))) {
+        const v = normalizePublished(m[1]);
+        if (v) return v;
+      }
+    }
+    return '';
+  };
+  const domPublished = () => {
+    const candidates = [
+      meta('article:published_time'),
+      meta('publish_time'),
+      meta('datePublished'),
+      document.querySelector('[itemprop="datePublished"]')?.content,
+      document.querySelector('[datetime]')?.getAttribute('datetime'),
+      pick(['[class*="publish-time"]', '[class*="publishTime"]', '[class*="publish"]'])
+    ];
+    for (const candidate of candidates) {
+      const v = normalizePublished(candidate);
+      if (v) return v;
+    }
+    return '';
+  };
   const textLines = () => (document.body?.innerText || '')
     .split(/\n+/).map(s => s.trim()).filter(Boolean);
   const videos = () => uniq(Array.from(document.querySelectorAll('video')).flatMap(v => [
@@ -76,7 +128,7 @@ func VideoMetadataScript() string {
   const video_urls = uniq([...videos(), ...scriptVideoURLs()]).slice(0, 5);
   const cover_url = meta('og:image') || document.querySelector('video')?.poster || '';
   const author_name = pick(['[class*="media"] [class*="name"]', '[class*="author"]', '.name']);
-  const published_at = pick(['time', '[class*="time"]', '[class*="publish"]']);
+  const published_at = jsonPublished() || domPublished();
   const deletedHints = ['内容不存在', '已删除', '找不到', '视频不存在'];
   const fullText = document.body?.innerText || '';
   if (!video_urls.length && deletedHints.some(h => fullText.includes(h))) {

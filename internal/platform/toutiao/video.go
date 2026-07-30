@@ -140,8 +140,11 @@ func normalizeVideo(in platform.ReadInput, norm *platform.NormalizedURL, resp *b
 	}
 	c.Author = platform.AuthorFromMeta(meta)
 	c.Engagement = platform.EngagementFromMeta(meta)
-	if pub := strings.TrimSpace(platform.MetaString(meta, "published_at")); pub != "" {
+	if pub := cleanVideoPublishedAt(platform.MetaString(meta, "published_at")); pub != "" {
 		c.PublishedAt = pub
+		meta["published_at"] = pub
+	} else {
+		delete(meta, "published_at")
 	}
 	if in.IncludeMedia {
 		if cover := platform.MetaString(meta, "cover_url"); cover != "" {
@@ -185,4 +188,54 @@ func hasVideoMedia(items []platform.MediaItem) bool {
 		}
 	}
 	return false
+}
+
+func cleanVideoPublishedAt(raw string) string {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return ""
+	}
+	lower := strings.ToLower(s)
+	if s == "直播" || s == "正在直播" || strings.Contains(lower, "live") {
+		return ""
+	}
+	if strings.Contains(s, "直播") && strings.Contains(s, ":") {
+		return ""
+	}
+	if strings.Contains(s, "/") && looksLikeVideoClock(s) {
+		return ""
+	}
+	if looksLikeVideoClock(s) {
+		return ""
+	}
+	return s
+}
+
+func looksLikeVideoClock(s string) bool {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return false
+	}
+	parts := strings.Split(s, "/")
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			return false
+		}
+		cols := strings.Split(part, ":")
+		if len(cols) < 2 || len(cols) > 3 {
+			return false
+		}
+		for _, col := range cols {
+			if col == "" {
+				return false
+			}
+			for _, r := range col {
+				if r < '0' || r > '9' {
+					return false
+				}
+			}
+		}
+	}
+	return true
 }

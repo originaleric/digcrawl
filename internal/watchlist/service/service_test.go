@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/originaleric/digcrawl/collect"
 	"github.com/originaleric/digcrawl/config"
 	"github.com/originaleric/digcrawl/internal/notify"
 	"github.com/originaleric/digcrawl/internal/summary"
@@ -236,7 +237,7 @@ func TestSummaryTextForVideoKeepsASRSeparateForAgent(t *testing.T) {
 		"text":         "看更多视频，上今日头条。",
 		"markdown":     "页面 Markdown",
 	}
-	got, err := summaryTextForCollectedItem(feed, out, "视频口播文案")
+	got, err := summaryTextForCollectedItem(feed, out, "视频口播文案", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -251,10 +252,25 @@ func TestSummaryTextForVideoRequiresASR(t *testing.T) {
 		"content_type": "video",
 		"text":         "看更多视频，上今日头条。",
 		"markdown":     "页面 Markdown",
+		"platform_metadata": map[string]any{
+			"asr_error": "local ASR produced no JSON transcript",
+		},
 	}
-	_, err := summaryTextForCollectedItem(feed, out, "")
-	if err == nil || !strings.Contains(err.Error(), "ASR/subtitles are required") {
+	_, err := summaryTextForCollectedItem(feed, out, "", nil)
+	if err == nil || !strings.Contains(err.Error(), "local ASR produced no JSON transcript") {
 		t.Fatalf("expected video without ASR to fail, got %v", err)
+	}
+}
+
+func TestSummaryTextForVideoReportsDownloadFailure(t *testing.T) {
+	feed := FeedItem{ContentType: "video"}
+	out := map[string]any{"content_type": "video"}
+	downloaded := []map[string]any{{
+		"type": "video", "url": "https://example.com/a.mp4", "error": "response too large",
+	}}
+	_, err := summaryTextForCollectedItem(feed, out, "", downloaded)
+	if err == nil || !strings.Contains(err.Error(), "video download failed: response too large") {
+		t.Fatalf("expected video download failure reason, got %v", err)
 	}
 }
 
@@ -264,7 +280,7 @@ func TestSummaryTextForArticlePrefersPageText(t *testing.T) {
 		"content_type": "article",
 		"text":         "文章正文",
 	}
-	got, err := summaryTextForCollectedItem(feed, out, "误传 ASR")
+	got, err := summaryTextForCollectedItem(feed, out, "误传 ASR", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -451,6 +467,32 @@ func TestShouldNotifyNoUpdateWithoutLimitKeepsCompatibility(t *testing.T) {
 	}
 }
 
+func TestShouldNotifyNoUpdateForRunSuppressesWhenRunHasErrors(t *testing.T) {
+	opts := map[string]any{"notify_no_update": true, "limit": 2}
+	errors := []string{"video transcript unavailable: ASR/subtitles are required for video summary"}
+	if shouldNotifyNoUpdateForRun(opts, 2, errors, 0) {
+		t.Fatal("no-update notification should be suppressed when the run has item processing errors")
+	}
+	reason := noUpdateSuppressedReasonForRun(opts, 2, errors, 0)
+	if !strings.Contains(reason, "run has 1 error") {
+		t.Fatalf("expected error suppression reason, got %q", reason)
+	}
+	if !shouldNotifyNoUpdateForRun(opts, 2, nil, 0) {
+		t.Fatal("no-update notification should still be allowed for complete, error-free discovery")
+	}
+}
+
+func TestShouldNotifyNoUpdateForRunSuppressesWhenContentWasProcessed(t *testing.T) {
+	opts := map[string]any{"notify_no_update": true, "limit": 2}
+	if shouldNotifyNoUpdateForRun(opts, 2, nil, 2) {
+		t.Fatal("no-update notification should be suppressed when retryable content was processed")
+	}
+	reason := noUpdateSuppressedReasonForRun(opts, 2, nil, 2)
+	if !strings.Contains(reason, "content activity") {
+		t.Fatalf("expected content activity suppression reason, got %q", reason)
+	}
+}
+
 func TestRunItemReportsSuppressedNoUpdateWhenDiscoveryIncomplete(t *testing.T) {
 	ctx := context.Background()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -493,6 +535,58 @@ func TestRunItemReportsSuppressedNoUpdateWhenDiscoveryIncomplete(t *testing.T) {
 	}
 	if sum.Notified != 0 || len(sum.Errors) != 0 {
 		t.Fatalf("suppressed no-update should be observable but not a notify/error result: %+v", sum)
+	}
+}
+
+func TestRunItemSuppressesNoUpdateWhenRetryableItemProcessingFails(t *testing.T) {
+	ctx := context.Background()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`<?xml version="1.0"?><rss><channel><item><title>A</title><link>unsupported://example.com/a</link><guid>g1</guid></item></channel></rss>`))
+	}))
+	defer srv.Close()
+
+	st, err := watchlist.OpenStore(filepath.Join(t.TempDir(), "watch.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	item := WatchItem{
+		ID: "rss-local", Platform: "rss", Type: "rss", URL: srv.URL,
+		Options: map[string]any{"notify_no_update": true, "limit": 1},
+	}
+	if _, err := st.UpsertDiscovered(ctx, item.ID, FeedItem{
+		ID: "g1", ContentKey: "g1", URL: "unsupported://example.com/a", Title: "A",
+	}, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.UpdateItemStatus(ctx, item.ID, "g1", StatusCollectFailed, "previous collect failed", ""); err != nil {
+		t.Fatal(err)
+	}
+	collector, err := collect.NewService(&config.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	notifier := &recordingNotifier{}
+	svc := &Service{
+		cfg:       &config.Config{Watchlist: config.WatchlistConfig{DefaultInterval: "6h"}},
+		store:     st,
+		collector: collector,
+		feeds:     FeedRegistry{Client: srv.Client()},
+		notifier:  notifier,
+	}
+	sum, err := svc.RunItem(ctx, item)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sum.Errors) == 0 {
+		t.Fatalf("expected processing error, got %+v", sum)
+	}
+	if sum.Notified != 0 || notifier.calls != 0 {
+		t.Fatalf("no-update must not notify when item processing fails, summary=%+v calls=%d", sum, notifier.calls)
+	}
+	if !sum.NoUpdateSuppressed || !strings.Contains(sum.NoUpdateSuppressedReason, "run has 1 error") {
+		t.Fatalf("expected no-update suppression reason for run errors, got %+v", sum)
 	}
 }
 

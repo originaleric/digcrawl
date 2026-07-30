@@ -951,7 +951,14 @@ func (s *Store) UpsertDiscovered(ctx context.Context, watchID string, item FeedI
 		return false, err
 	}
 	if err == nil {
-		_, err = s.db.ExecContext(ctx, `UPDATE dc_watchlist_items SET last_seen_at = ?, title = ?, url = ?, canonical_url = ?, published_at = ?, content_type = ? WHERE watch_id = ? AND content_key = ?`,
+		_, err = s.db.ExecContext(ctx, `UPDATE dc_watchlist_items SET
+  last_seen_at = ?,
+  title = COALESCE(?, title),
+  url = ?,
+  canonical_url = COALESCE(?, canonical_url),
+  published_at = COALESCE(?, published_at),
+  content_type = COALESCE(?, content_type)
+WHERE watch_id = ? AND content_key = ?`,
 			now, nullStr(item.Title), item.URL, nullStr(item.CanonicalURL), timeStr(item.PublishedAt), nullStr(item.ContentType), watchID, key)
 		return false, err
 	}
@@ -971,6 +978,22 @@ func (s *Store) UpsertDiscovered(ctx context.Context, watchID string, item FeedI
 func (s *Store) UpdateItemStatus(ctx context.Context, watchID, contentKey, status, collectErr, summaryErr string) error {
 	_, err := s.db.ExecContext(ctx, `UPDATE dc_watchlist_items SET status = ?, collect_error = ?, summary_error = ? WHERE watch_id = ? AND content_key = ?`,
 		status, nullStr(collectErr), nullStr(summaryErr), watchID, contentKey)
+	return err
+}
+
+func (s *Store) UpdateItemCollectedMetadata(ctx context.Context, watchID, contentKey, title, publishedAt, contentType string) error {
+	title = strings.TrimSpace(title)
+	publishedAt = strings.TrimSpace(publishedAt)
+	contentType = strings.TrimSpace(contentType)
+	if title == "" && publishedAt == "" && contentType == "" {
+		return nil
+	}
+	_, err := s.db.ExecContext(ctx, `UPDATE dc_watchlist_items SET
+  title = COALESCE(NULLIF(?, ''), title),
+  published_at = COALESCE(NULLIF(?, ''), published_at),
+  content_type = COALESCE(NULLIF(?, ''), content_type)
+WHERE watch_id = ? AND content_key = ?`,
+		title, publishedAt, contentType, watchID, contentKey)
 	return err
 }
 

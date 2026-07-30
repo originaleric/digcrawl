@@ -37,3 +37,15 @@ func TestValidateVideoContentAllowsMetadataOnlyRead(t *testing.T) {
 		t.Fatalf("metadata-only video read should be allowed: %v", err)
 	}
 }
+
+func TestCleanVideoPublishedAtRejectsPlayerClock(t *testing.T) {
+	t.Parallel()
+	for _, raw := range []string{"00:04 / 01:27 直播", "00:04 / 01:27", "01:27", "直播"} {
+		if got := cleanVideoPublishedAt(raw); got != "" {
+			t.Fatalf("player clock %q should not be accepted as published_at, got %q", raw, got)
+		}
+	}
+	if got := cleanVideoPublishedAt("2026-07-30T09:00:00+08:00"); got == "" {
+		t.Fatal("real published_at should be preserved")
+	}
+}

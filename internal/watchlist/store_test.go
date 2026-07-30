@@ -93,6 +93,42 @@ func TestStoreDeliveryRetryState(t *testing.T) {
 	}
 }
 
+func TestStoreUpdatesCollectedMetadataWithoutBlankingExistingValues(t *testing.T) {
+	ctx := context.Background()
+	st, err := OpenStore(filepath.Join(t.TempDir(), "watch.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	if _, err := st.UpsertDiscovered(ctx, "w1", FeedItem{
+		ContentKey: "k1", URL: "https://www.toutiao.com/video/1/", Title: "list title", ContentType: "video",
+	}, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.UpdateItemCollectedMetadata(ctx, "w1", "k1", "detail title", "2026-07-30T09:00:00+08:00", "video"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.UpsertDiscovered(ctx, "w1", FeedItem{
+		ContentKey: "k1", URL: "https://www.toutiao.com/video/1/?from=list",
+	}, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.UpdateItemCollectedMetadata(ctx, "w1", "k1", "", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	var title, url, publishedAt, contentType string
+	if err := st.db.QueryRowContext(ctx, `SELECT title, url, published_at, content_type FROM dc_watchlist_items WHERE watch_id = ? AND content_key = ?`, "w1", "k1").
+		Scan(&title, &url, &publishedAt, &contentType); err != nil {
+		t.Fatal(err)
+	}
+	if title != "detail title" || publishedAt != "2026-07-30T09:00:00+08:00" || contentType != "video" {
+		t.Fatalf("unexpected collected metadata title=%q published_at=%q content_type=%q", title, publishedAt, contentType)
+	}
+	if url != "https://www.toutiao.com/video/1/?from=list" {
+		t.Fatalf("discovery should still refresh url, got %q", url)
+	}
+}
+
 func TestStoreMigratesLegacyTables(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "watch.db")

@@ -95,11 +95,13 @@ type TaskDefinition struct {
 }
 
 type CollectedItem struct {
-	Feed     FeedItem
-	Title    string
-	Text     string
-	ASRText  string
-	OCRText  string
-	Metadata map[string]any
-	Summary  *summary.Result
+	Feed        FeedItem
+	Title       string
+	PublishedAt string
+	ContentType string
+	Text        string
+	ASRText     string
+	OCRText     string
+	Metadata    map[string]any
+	Summary     *summary.Result
 }
