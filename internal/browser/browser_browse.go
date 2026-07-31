@@ -5,11 +5,13 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	htmlmd "github.com/JohannesKaufmann/html-to-markdown"
@@ -19,6 +21,7 @@ import (
 )
 
 var cookieDomainPattern = regexp.MustCompile(`^[a-zA-Z0-9.-]+$`)
+var cookieFileLocks sync.Map
 
 // BrowserBrowseRequest 本地浏览器抓取请求
 type BrowserBrowseRequest struct {
@@ -300,6 +303,12 @@ func cookieFilePath(cookieStoreDir, domain string) (string, error) {
 	return filepath.Join(cookieStoreDir, d+".json"), nil
 }
 
+func cookieFileMutex(cookiePath string) *sync.Mutex {
+	key := filepath.Clean(cookiePath)
+	mu, _ := cookieFileLocks.LoadOrStore(key, &sync.Mutex{})
+	return mu.(*sync.Mutex)
+}
+
 func loadDomainCookies(page interface {
 	SetCookies(cookies []*proto.NetworkCookieParam) error
 }, domain, cookieStoreDir string, targetURL *url.URL) error {
@@ -307,17 +316,29 @@ func loadDomainCookies(page interface {
 	if err != nil {
 		return err
 	}
-	data, err := os.ReadFile(cookiePath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return fmt.Errorf("读取 cookie 文件失败: %w", err)
-	}
 
-	var cookies []*proto.NetworkCookieParam
-	if err := json.Unmarshal(data, &cookies); err != nil {
-		return fmt.Errorf("解析 cookie 文件失败: %w", err)
+	cookies, loaded, err := readCookieParams(cookiePath)
+	if err != nil {
+		return err
+	}
+	if !loaded {
+		for _, alternate := range alternateCookieDomains(domain) {
+			alternatePath, err := cookieFilePath(cookieStoreDir, alternate)
+			if err != nil {
+				continue
+			}
+			if filepath.Clean(alternatePath) == filepath.Clean(cookiePath) {
+				continue
+			}
+			cookies, loaded, err = readCookieParams(alternatePath)
+			if err != nil {
+				return err
+			}
+			if loaded {
+				log.Printf("[browser-cookie] loaded fallback cookie domain=%s path=%s", alternate, alternatePath)
+				break
+			}
+		}
 	}
 	for _, c := range cookies {
 		if c.URL == "" {
@@ -331,6 +352,47 @@ func loadDomainCookies(page interface {
 		return fmt.Errorf("注入 cookie 失败: %w", err)
 	}
 	return nil
+}
+
+func readCookieParams(cookiePath string) ([]*proto.NetworkCookieParam, bool, error) {
+	mu := cookieFileMutex(cookiePath)
+	mu.Lock()
+	defer mu.Unlock()
+
+	data, err := os.ReadFile(cookiePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, false, nil
+		}
+		return nil, false, fmt.Errorf("读取 cookie 文件失败: %w", err)
+	}
+
+	var cookies []*proto.NetworkCookieParam
+	if err := json.Unmarshal(data, &cookies); err != nil {
+		if quarantineErr := quarantineCookieFile(cookiePath); quarantineErr != nil {
+			return nil, false, fmt.Errorf("解析 cookie 文件失败: %w; 隔离损坏 cookie 文件失败: %v", err, quarantineErr)
+		}
+		log.Printf("[browser-cookie] quarantined corrupted cookie file path=%s err=%v", cookiePath, err)
+		return nil, false, nil
+	}
+	return cookies, true, nil
+}
+
+func alternateCookieDomains(domain string) []string {
+	d, err := sanitizeCookieDomain(domain)
+	if err != nil {
+		return nil
+	}
+	if strings.HasPrefix(d, "www.") {
+		return []string{strings.TrimPrefix(d, "www.")}
+	}
+	return []string{"www." + d}
+}
+
+func quarantineCookieFile(cookiePath string) error {
+	suffix := time.Now().Format("20060102T150405.000000000")
+	target := fmt.Sprintf("%s.bad.%s.%d", cookiePath, suffix, os.Getpid())
+	return os.Rename(cookiePath, target)
 }
 
 func saveDomainCookies(page interface {
@@ -372,9 +434,50 @@ func saveDomainCookies(page interface {
 		return fmt.Errorf("序列化 cookie 失败: %w", err)
 	}
 	cookiePath := filepath.Join(cookieStoreDir, safeDomain+".json")
-	if err := os.WriteFile(cookiePath, data, 0o600); err != nil {
+	if err := writeFileAtomic(cookiePath, data, 0o600); err != nil {
 		return fmt.Errorf("写入 cookie 文件失败: %w", err)
 	}
+	return nil
+}
+
+func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
+	mu := cookieFileMutex(path)
+	mu.Lock()
+	defer mu.Unlock()
+
+	dir := filepath.Dir(path)
+	base := filepath.Base(path)
+	tmp, err := os.CreateTemp(dir, "."+base+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	cleanup := true
+	defer func() {
+		if cleanup {
+			_ = os.Remove(tmpName)
+		}
+	}()
+
+	if err := tmp.Chmod(perm); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		return err
+	}
+	cleanup = false
 	return nil
 }
 
