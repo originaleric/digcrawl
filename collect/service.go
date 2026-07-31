@@ -99,6 +99,15 @@ func (s *Service) collectTimeoutMs() int {
 
 // CollectURL fetches one URL and exports to disk.
 func (s *Service) CollectURL(ctx context.Context, url string, formats []string, outDir string) (ExportResult, error) {
+	return s.CollectURLWithOptions(ctx, url, formats, outDir, CollectURLOptions{})
+}
+
+type CollectURLOptions struct {
+	UseCookieDomain string
+}
+
+// CollectURLWithOptions fetches one URL and exports to disk with runtime read options.
+func (s *Service) CollectURLWithOptions(ctx context.Context, url string, formats []string, outDir string, opts CollectURLOptions) (ExportResult, error) {
 	if len(formats) == 0 {
 		formats = s.cfg.Collect.DefaultFormats
 	}
@@ -110,11 +119,12 @@ func (s *Service) CollectURL(ctx context.Context, url string, formats []string, 
 	}
 
 	out, _, err := Run(ctx, s.rt, RunOptions{
-		URL:          url,
-		Formats:      formats,
-		IncludeMedia: s.cfg.Collect.IncludeMedia == nil || *s.cfg.Collect.IncludeMedia,
-		Match:        match,
-		TimeoutMs:    s.collectTimeoutMs(),
+		URL:             url,
+		Formats:         formats,
+		IncludeMedia:    s.cfg.Collect.IncludeMedia == nil || *s.cfg.Collect.IncludeMedia,
+		Match:           match,
+		TimeoutMs:       s.collectTimeoutMs(),
+		UseCookieDomain: strings.TrimSpace(opts.UseCookieDomain),
 	})
 	if err != nil {
 		return ExportResult{}, err

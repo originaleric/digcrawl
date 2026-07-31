@@ -25,6 +25,7 @@ type Config struct {
 	Summary       SummaryConfig       `yaml:"Summary" json:"Summary"`
 	Notifications NotificationsConfig `yaml:"Notifications" json:"Notifications"`
 	Providers     ProvidersConfig     `yaml:"Providers" json:"Providers"`
+	Social        SocialConfig        `yaml:"Social" json:"Social,omitempty"`
 }
 
 // CollectConfig local content collect and export settings.
@@ -128,6 +129,39 @@ type PlatformConfig struct {
 	HealthProbes           map[string]string `yaml:"HealthProbes" json:"HealthProbes,omitempty"`
 	X                      XAPIConfig        `yaml:"X" json:"X,omitempty"`
 	Reddit                 RedditConfig      `yaml:"Reddit" json:"Reddit,omitempty"`
+}
+
+// SocialConfig controls non-official social platform crawling defaults.
+type SocialConfig struct {
+	Threads   SocialPlatformConfig `yaml:"Threads" json:"Threads,omitempty"`
+	Instagram SocialPlatformConfig `yaml:"Instagram" json:"Instagram,omitempty"`
+}
+
+type SocialPlatformConfig struct {
+	AuthMode          string `yaml:"AuthMode" json:"AuthMode,omitempty"` // public | local_session
+	BrowserFallback   *bool  `yaml:"BrowserFallback" json:"BrowserFallback,omitempty"`
+	RequestTimeoutSec int    `yaml:"RequestTimeoutSec" json:"RequestTimeoutSec,omitempty"`
+	RateLimitMs       int    `yaml:"RateLimitMs" json:"RateLimitMs,omitempty"`
+}
+
+func (c SocialPlatformConfig) AuthModeOrDefault() string {
+	switch strings.ToLower(strings.TrimSpace(c.AuthMode)) {
+	case "local_session":
+		return "local_session"
+	default:
+		return "public"
+	}
+}
+
+func (c SocialPlatformConfig) BrowserFallbackOrDefault() bool {
+	if c.BrowserFallback == nil {
+		return false
+	}
+	return *c.BrowserFallback
+}
+
+func (c SocialPlatformConfig) AllowsLocalSession() bool {
+	return c.AuthModeOrDefault() == "local_session"
 }
 
 // OCRConfig controls optional image OCR enrichment.
@@ -988,6 +1022,7 @@ var (
 func init() {
 	once.Do(func() {
 		enabled := true
+		disabled := false
 		defaultCfg = Config{
 			Gateway: GatewayConfig{
 				ListenAddr: "127.0.0.1:8787",
@@ -1001,10 +1036,16 @@ func init() {
 					"douyin.video.read",
 					"toutiao.article.read",
 					"toutiao.video.read",
+					"bilibili.video.read",
+					"weibo.post.read",
+					"kuaishou.video.read",
+					"zhihu.content.read",
 					"x.post.read",
 					"reddit.post.read",
 					"reddit.subreddit.read",
 					"reddit.user.read",
+					"threads.post.read",
+					"instagram.content.read",
 					"asr.transcribe",
 				},
 				ArtifactDir:        "storage/digcrawl/artifacts",
@@ -1033,10 +1074,16 @@ func init() {
 					"douyin.video.read",
 					"toutiao.article.read",
 					"toutiao.video.read",
+					"bilibili.video.read",
+					"weibo.post.read",
+					"kuaishou.video.read",
+					"zhihu.content.read",
 					"x.post.read",
 					"reddit.post.read",
 					"reddit.subreddit.read",
 					"reddit.user.read",
+					"threads.post.read",
+					"instagram.content.read",
 					"asr.transcribe",
 				},
 			},
@@ -1071,8 +1118,14 @@ func init() {
 					"xiaohongshu.com", "www.xiaohongshu.com", "edith.xiaohongshu.com", "xhslink.com",
 					"douyin.com", "www.douyin.com", "iesdouyin.com", "v.douyin.com",
 					"toutiao.com", "www.toutiao.com", "m.toutiao.com",
+					"bilibili.com", "www.bilibili.com", "m.bilibili.com", "space.bilibili.com", "b23.tv",
+					"weibo.com", "www.weibo.com", "m.weibo.cn",
+					"kuaishou.com", "www.kuaishou.com", "v.kuaishou.com",
+					"zhihu.com", "www.zhihu.com", "zhuanlan.zhihu.com",
 					"x.com", "twitter.com", "www.twitter.com",
 					"reddit.com", "www.reddit.com", "old.reddit.com", "new.reddit.com", "redd.it",
+					"threads.net", "www.threads.net", "threads.com", "www.threads.com",
+					"instagram.com", "www.instagram.com",
 				},
 				Headless:       &enabled,
 				CookieStoreDir: "storage/digcrawl/browser_cookies",
@@ -1119,6 +1172,19 @@ func init() {
 						Enabled:           &enabled,
 						AllowWithoutOAuth: nil,
 					},
+				},
+			},
+			Social: SocialConfig{
+				Threads: SocialPlatformConfig{
+					AuthMode:          "public",
+					BrowserFallback:   &disabled,
+					RequestTimeoutSec: 30,
+				},
+				Instagram: SocialPlatformConfig{
+					AuthMode:          "public",
+					BrowserFallback:   &disabled,
+					RequestTimeoutSec: 30,
+					RateLimitMs:       5000,
 				},
 			},
 			OCR: OCRConfig{
@@ -1585,6 +1651,30 @@ func mergeDefaults(cfg *Config) {
 	}
 	if cfg.Platform.Reddit.BrowserFallback.AllowWithoutOAuth == nil {
 		cfg.Platform.Reddit.BrowserFallback.AllowWithoutOAuth = defaultCfg.Platform.Reddit.BrowserFallback.AllowWithoutOAuth
+	}
+	if cfg.Social.Threads.AuthMode == "" {
+		cfg.Social.Threads.AuthMode = defaultCfg.Social.Threads.AuthMode
+	}
+	if cfg.Social.Threads.BrowserFallback == nil {
+		cfg.Social.Threads.BrowserFallback = defaultCfg.Social.Threads.BrowserFallback
+	}
+	if cfg.Social.Threads.RequestTimeoutSec == 0 {
+		cfg.Social.Threads.RequestTimeoutSec = defaultCfg.Social.Threads.RequestTimeoutSec
+	}
+	if cfg.Social.Threads.RateLimitMs == 0 {
+		cfg.Social.Threads.RateLimitMs = defaultCfg.Social.Threads.RateLimitMs
+	}
+	if cfg.Social.Instagram.AuthMode == "" {
+		cfg.Social.Instagram.AuthMode = defaultCfg.Social.Instagram.AuthMode
+	}
+	if cfg.Social.Instagram.BrowserFallback == nil {
+		cfg.Social.Instagram.BrowserFallback = defaultCfg.Social.Instagram.BrowserFallback
+	}
+	if cfg.Social.Instagram.RequestTimeoutSec == 0 {
+		cfg.Social.Instagram.RequestTimeoutSec = defaultCfg.Social.Instagram.RequestTimeoutSec
+	}
+	if cfg.Social.Instagram.RateLimitMs == 0 {
+		cfg.Social.Instagram.RateLimitMs = defaultCfg.Social.Instagram.RateLimitMs
 	}
 	if cfg.OCR.Enabled == nil {
 		cfg.OCR.Enabled = defaultCfg.OCR.Enabled

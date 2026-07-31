@@ -15,13 +15,16 @@ import (
 	"strings"
 	"time"
 
+	"github.com/originaleric/digcrawl/config"
 	"github.com/originaleric/digcrawl/internal/browser"
 	"github.com/originaleric/digcrawl/internal/feed"
 	"github.com/originaleric/digcrawl/internal/platform"
 	bilibiliplatform "github.com/originaleric/digcrawl/internal/platform/bilibili"
 	douyinplatform "github.com/originaleric/digcrawl/internal/platform/douyin"
+	instagramplatform "github.com/originaleric/digcrawl/internal/platform/instagram"
 	kuaishouplatform "github.com/originaleric/digcrawl/internal/platform/kuaishou"
 	"github.com/originaleric/digcrawl/internal/platform/reddit"
+	threadsplatform "github.com/originaleric/digcrawl/internal/platform/threads"
 	toutiaoplatform "github.com/originaleric/digcrawl/internal/platform/toutiao"
 	weiboplatform "github.com/originaleric/digcrawl/internal/platform/weibo"
 	xplatform "github.com/originaleric/digcrawl/internal/platform/x"
@@ -32,6 +35,8 @@ import (
 type Service struct {
 	Client *http.Client
 }
+
+var listKuaishouUserVideosViaAPI = kuaishouplatform.ListUserVideosViaAPI
 
 type Source struct {
 	ID       string
@@ -82,6 +87,10 @@ func (r Service) ListLatest(ctx context.Context, item Source) ([]Item, error) {
 		return r.readReddit(ctx, item)
 	case platform == "x" || platform == "twitter":
 		return r.readX(ctx, item)
+	case platform == "threads":
+		return r.readThreads(ctx, item)
+	case platform == "instagram":
+		return r.readInstagram(ctx, item)
 	case platform == "web":
 		if typ == "web_list" || typ == "list" || typ == "html_links" {
 			return r.readHTMLLinks(ctx, item, "web")
@@ -371,6 +380,110 @@ func (r Service) readX(ctx context.Context, item Source) ([]Item, error) {
 		}
 		return r.readHTMLLinks(ctx, item, "x")
 	}
+}
+
+func (r Service) readThreads(ctx context.Context, item Source) ([]Item, error) {
+	switch inferThreadsWatchlistType(item) {
+	case "threads_post", "post", "thread":
+		return feedItemFromThreadsPost(item)
+	case "threads_user", "user", "profile", "account", "list":
+		return r.readSocialHTMLLinks(ctx, item, "threads", `a[href*="/post/"]`, "body")
+	default:
+		if threadsplatform.IsPostURL(item.URL) {
+			return feedItemFromThreadsPost(item)
+		}
+		return r.readSocialHTMLLinks(ctx, item, "threads", `a[href*="/post/"]`, "body")
+	}
+}
+
+func inferThreadsWatchlistType(item Source) string {
+	typ := strings.ToLower(strings.TrimSpace(item.Type))
+	if typ != "" {
+		return typ
+	}
+	if threadsplatform.IsPostURL(item.URL) {
+		return "threads_post"
+	}
+	return "threads_user"
+}
+
+func feedItemFromThreadsPost(item Source) ([]Item, error) {
+	norm, err := threadsplatform.NormalizeURL(item.URL)
+	if err != nil {
+		return nil, err
+	}
+	if norm.PlatformID == "" || norm.ContentKind != "post" {
+		return nil, fmt.Errorf("threads post url is required")
+	}
+	link := firstNonEmpty(norm.CanonicalURL, item.URL)
+	key := "threads:" + norm.PlatformID
+	return []Item{{
+		ID:           key,
+		ContentKey:   key,
+		URL:          link,
+		CanonicalURL: link,
+		Title:        item.Name,
+		Author:       threadsUsernameFromURL(link),
+		ContentType:  "thread",
+		Raw: socialRaw(item, "threads", map[string]any{
+			"platform_id": norm.PlatformID,
+			"source_url":  item.URL,
+		}),
+	}}, nil
+}
+
+func (r Service) readInstagram(ctx context.Context, item Source) ([]Item, error) {
+	switch inferInstagramWatchlistType(item) {
+	case "instagram_post", "post", "media", "instagram_reel", "reel":
+		return feedItemFromInstagramMedia(item)
+	case "instagram_user", "user", "profile", "account", "list":
+		return r.readSocialHTMLLinks(ctx, item, "instagram", `a[href^="/p/"], a[href^="/reel/"], a[href*="/p/"], a[href*="/reel/"]`, "body")
+	default:
+		if instagramplatform.IsMediaURL(item.URL) {
+			return feedItemFromInstagramMedia(item)
+		}
+		return r.readSocialHTMLLinks(ctx, item, "instagram", `a[href^="/p/"], a[href^="/reel/"], a[href*="/p/"], a[href*="/reel/"]`, "body")
+	}
+}
+
+func inferInstagramWatchlistType(item Source) string {
+	typ := strings.ToLower(strings.TrimSpace(item.Type))
+	if typ != "" {
+		return typ
+	}
+	if instagramplatform.IsMediaURL(item.URL) {
+		return "instagram_post"
+	}
+	return "instagram_user"
+}
+
+func feedItemFromInstagramMedia(item Source) ([]Item, error) {
+	norm, err := instagramplatform.NormalizeURL(item.URL)
+	if err != nil {
+		return nil, err
+	}
+	if norm.PlatformID == "" || norm.ContentKind == "user" {
+		return nil, fmt.Errorf("instagram media url is required")
+	}
+	link := firstNonEmpty(norm.CanonicalURL, item.URL)
+	key := "instagram:" + norm.PlatformID
+	contentType := "instagram_post"
+	if norm.ContentKind == "reel" {
+		contentType = "video"
+	}
+	return []Item{{
+		ID:           key,
+		ContentKey:   key,
+		URL:          link,
+		CanonicalURL: link,
+		Title:        item.Name,
+		ContentType:  contentType,
+		Raw: socialRaw(item, "instagram", map[string]any{
+			"platform_id":  norm.PlatformID,
+			"source_url":   item.URL,
+			"content_kind": norm.ContentKind,
+		}),
+	}}, nil
 }
 
 func (r Service) readBilibili(ctx context.Context, item Source) ([]Item, error) {
@@ -811,8 +924,60 @@ func feedItemFromKuaishouVideo(ctx context.Context, item Source) ([]Item, error)
 }
 
 func (r Service) readKuaishouUserList(ctx context.Context, item Source) ([]Item, error) {
+	items, err := r.readKuaishouUserListViaAPI(ctx, item)
+	if err == nil && len(items) > 0 {
+		return items, nil
+	}
+	if _, stop := platform.ShouldStopStrategy(err); stop {
+		return nil, err
+	}
 	item = withBrowserListDefaults(item, `a[href*="/short-video/"], a[href*="/photo/"]`, "body")
 	return r.readHTMLLinks(ctx, item, "kuaishou")
+}
+
+func (r Service) readKuaishouUserListViaAPI(ctx context.Context, item Source) ([]Item, error) {
+	norm, err := kuaishouplatform.NormalizeURL(ctx, item.URL)
+	if err != nil {
+		return nil, err
+	}
+	if norm.PlatformID == "" || norm.ContentKind != "user" {
+		return nil, fmt.Errorf("kuaishou user url is required")
+	}
+	limit := optionInt(item.Options, "limit")
+	if limit <= 0 {
+		limit = 20
+	}
+	apiItems, _, _, err := listKuaishouUserVideosViaAPI(ctx, norm, platform.ReadInput{
+		URL:             item.URL,
+		UseCookieDomain: optionString(item.Options, "use_cookie_domain"),
+	}, limit)
+	if err != nil {
+		return nil, err
+	}
+	items := make([]Item, 0, len(apiItems))
+	for _, apiItem := range apiItems {
+		if strings.TrimSpace(apiItem.ID) == "" || strings.TrimSpace(apiItem.CanonicalURL) == "" {
+			continue
+		}
+		raw := socialRaw(item, "kuaishou", apiItem.Raw)
+		if !apiItem.PublishedAt.IsZero() {
+			raw["published_at"] = apiItem.PublishedAt.Format(time.RFC3339)
+		}
+		items = append(items, Item{
+			ID:           apiItem.ID,
+			ContentKey:   apiItem.ID,
+			URL:          apiItem.CanonicalURL,
+			CanonicalURL: apiItem.CanonicalURL,
+			Title:        apiItem.Title,
+			ContentType:  apiItem.ContentType,
+			PublishedAt:  apiItem.PublishedAt,
+			Raw:          raw,
+		})
+	}
+	if len(items) == 0 {
+		return nil, fmt.Errorf("CONTENT_NOT_FOUND: no kuaishou api videos found")
+	}
+	return items, nil
 }
 
 func (r Service) readZhihu(ctx context.Context, item Source) ([]Item, error) {
@@ -1132,7 +1297,7 @@ func watchItemsFromDocument(doc *feed.Document, contentType string) []Item {
 
 var hrefRe = regexp.MustCompile(`(?i)href=["']([^"']+)["']`)
 var absoluteURLRe = regexp.MustCompile(`(?i)https?://[^"'<>\\\s]+`)
-var relativeContentPathRe = regexp.MustCompile(`(?i)/(?:article|group|video|w)/[0-9]+/?|/[A-Za-z0-9_]{1,32}/status/[0-9]+/?|/video/(?:BV[0-9A-Za-z]+|av[0-9]+)/?|/(?:detail|status)/[0-9A-Za-z]+/?|/(?:short-video|photo)/[0-9A-Za-z_-]+/?|/question/[0-9]+/answer/[0-9]+/?|/p/[0-9]+/?|/zvideo/[0-9]+/?`)
+var relativeContentPathRe = regexp.MustCompile(`(?i)/(?:article|group|video|w)/[0-9]+/?|/[A-Za-z0-9_]{1,32}/status/[0-9]+/?|/video/(?:BV[0-9A-Za-z]+|av[0-9]+)/?|/(?:detail|status)/[0-9A-Za-z]+/?|/(?:short-video|photo)/[0-9A-Za-z_-]+/?|/question/[0-9]+/answer/[0-9]+/?|/p/[0-9A-Za-z_-]+/?|/reel/[0-9A-Za-z_-]+/?|/@[A-Za-z0-9._]+/post/[0-9A-Za-z_-]+/?|/zvideo/[0-9]+/?`)
 
 func (r Service) readHTMLLinks(ctx context.Context, item Source, platform string) ([]Item, error) {
 	data, _, err := r.feedService().Fetch(ctx, item.URL)
@@ -1183,6 +1348,25 @@ func (r Service) readHTMLLinks(ctx context.Context, item Source, platform string
 	return nil, fmt.Errorf("CONTENT_NOT_FOUND: no %s content links found", platform)
 }
 
+func (r Service) readSocialHTMLLinks(ctx context.Context, item Source, platform, waitSelector, contentSelector string) ([]Item, error) {
+	item = withBrowserListDefaults(item, waitSelector, contentSelector)
+	socialCfg := socialPlatformConfig(platform)
+	if socialCfg.RequestTimeoutSec > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, time.Duration(socialCfg.RequestTimeoutSec)*time.Second)
+		defer cancel()
+	}
+	opts := map[string]any{}
+	for k, v := range item.Options {
+		opts[k] = v
+	}
+	if _, ok := optionBoolValue(opts, "browser_fallback"); !ok {
+		opts["browser_fallback"] = socialCfg.BrowserFallbackOrDefault()
+	}
+	item.Options = opts
+	return r.readHTMLLinks(ctx, item, platform)
+}
+
 func (r Service) itemsFromLinkCandidates(ctx context.Context, item Source, platform string, base *url.URL, candidates []string) ([]Item, error) {
 	includeRe, err := compileOptionalPattern(optionString(item.Options, "include_pattern"))
 	if err != nil {
@@ -1210,6 +1394,7 @@ func (r Service) itemsFromLinkCandidates(ctx context.Context, item Source, platf
 			continue
 		}
 		discovered := discoveredLinkItem(ctx, platform, link, item.Name)
+		discovered.Raw = socialRaw(item, platform, discovered.Raw)
 		seenKey := firstNonEmpty(discovered.ContentKey, discovered.CanonicalURL, discovered.URL)
 		if seenKey == "" || seen[seenKey] {
 			continue
@@ -1287,7 +1472,7 @@ func (r Service) readHTMLLinksBrowser(ctx context.Context, item Source, platform
 		Mode:            "full",
 		WaitSelector:    waitSelector,
 		ContentSelector: contentSelector,
-		UseCookieDomain: browserCookieDomain(platform, item.URL),
+		UseCookieDomain: browserCookieDomain(platform, item.URL, item.Options),
 		MetadataScript:  discoveryMetadataScript(),
 	})
 	if err != nil {
@@ -1357,7 +1542,7 @@ func withBrowserListDefaults(item Source, waitSelector, contentSelector string) 
 	return item
 }
 
-func browserCookieDomain(platform, rawURL string) string {
+func browserCookieDomain(platform, rawURL string, opts map[string]any) string {
 	switch platform {
 	case "toutiao":
 		return "www.toutiao.com"
@@ -1377,12 +1562,63 @@ func browserCookieDomain(platform, rawURL string) string {
 		return "www.kuaishou.com"
 	case "zhihu":
 		return "www.zhihu.com"
+	case "threads":
+		if socialLocalSessionAllowed(platform, opts) {
+			return threadsplatform.CookieDomain
+		}
+		return ""
+	case "instagram":
+		if socialLocalSessionAllowed(platform, opts) {
+			return instagramplatform.CookieDomain
+		}
+		return ""
 	}
 	u, err := url.Parse(strings.TrimSpace(rawURL))
 	if err != nil {
 		return ""
 	}
 	return strings.TrimSpace(u.Hostname())
+}
+
+func socialPlatformConfig(platform string) config.SocialPlatformConfig {
+	switch strings.ToLower(strings.TrimSpace(platform)) {
+	case "threads":
+		return config.Get().Social.Threads
+	case "instagram":
+		return config.Get().Social.Instagram
+	default:
+		return config.SocialPlatformConfig{}
+	}
+}
+
+func socialSourceAuthMode(opts map[string]any) string {
+	mode := strings.ToLower(strings.TrimSpace(optionString(opts, "auth_mode")))
+	if mode == "local_session" {
+		return "local_session"
+	}
+	return "public"
+}
+
+func socialLocalSessionAllowed(platform string, opts map[string]any) bool {
+	return socialSourceAuthMode(opts) == "local_session" && socialPlatformConfig(platform).AllowsLocalSession()
+}
+
+func socialRaw(item Source, platform string, base map[string]any) map[string]any {
+	if base == nil {
+		base = map[string]any{}
+	}
+	switch strings.ToLower(strings.TrimSpace(platform)) {
+	case "threads", "instagram":
+	default:
+		return base
+	}
+	if socialLocalSessionAllowed(platform, item.Options) {
+		base["use_cookie_domain"] = browserCookieDomain(platform, item.URL, item.Options)
+		base["auth_mode"] = "local_session"
+	} else {
+		base["auth_mode"] = "public"
+	}
+	return base
 }
 
 func (r Service) toutiaoAuthorAccessError(ctx context.Context, rawURL string) error {
@@ -1569,6 +1805,18 @@ func discoveredLinkItem(ctx context.Context, platform, link, title string) Item 
 			key = id
 			canonical = firstNonEmpty(norm.CanonicalURL, link)
 		}
+	case "threads":
+		if norm, err := threadsplatform.NormalizeURL(link); err == nil && norm.PlatformID != "" && norm.ContentKind == "post" {
+			id = "threads:" + norm.PlatformID
+			key = id
+			canonical = firstNonEmpty(norm.CanonicalURL, link)
+		}
+	case "instagram":
+		if norm, err := instagramplatform.NormalizeURL(link); err == nil && norm.PlatformID != "" && norm.ContentKind != "user" {
+			id = "instagram:" + norm.PlatformID
+			key = id
+			canonical = firstNonEmpty(norm.CanonicalURL, link)
+		}
 	case "wechat", "weixin":
 		if isWechatArticleURL(link) {
 			canonical = canonicalWechatArticleURL(link)
@@ -1583,6 +1831,7 @@ func discoveredLinkItem(ctx context.Context, platform, link, title string) Item 
 		CanonicalURL: canonical,
 		Title:        title,
 		ContentType:  contentTypeFor(platform, canonical),
+		Raw:          socialRaw(Source{URL: canonical}, platform, nil),
 	}
 }
 
@@ -1623,6 +1872,10 @@ func platformLink(platform string, base *url.URL, link string) bool {
 		return (host == "mp.weixin.qq.com" || host == "weixin.qq.com") && (path == "/s" || strings.HasPrefix(path, "/s/"))
 	case "x", "twitter":
 		return (host == "x.com" || host == "www.x.com" || strings.HasSuffix(host, ".twitter.com") || host == "twitter.com" || host == "www.twitter.com") && strings.Contains(path, "/status/")
+	case "threads":
+		return threadsplatform.IsThreadsHost(host) && strings.Contains(path, "/post/")
+	case "instagram":
+		return (host == "instagram.com" || host == "www.instagram.com") && (strings.Contains(path, "/p/") || strings.Contains(path, "/reel/"))
 	case "web":
 		if base == nil || strings.TrimSpace(base.Hostname()) == "" {
 			return true
@@ -1664,6 +1917,15 @@ func contentTypeFor(platform, link string) string {
 	if platform == "x" || platform == "twitter" || strings.Contains(link, "/status/") {
 		return "x_post"
 	}
+	if platform == "threads" || strings.Contains(link, "threads.net/") || strings.Contains(link, "threads.com/") {
+		return "thread"
+	}
+	if platform == "instagram" || strings.Contains(link, "instagram.com/reel/") {
+		if strings.Contains(link, "/reel/") {
+			return "video"
+		}
+		return "instagram_post"
+	}
 	return "article"
 }
 
@@ -1688,6 +1950,18 @@ func xUsernameFromURL(rawURL string) string {
 	parts := strings.Split(strings.Trim(u.Path, "/"), "/")
 	if len(parts) >= 1 && strings.TrimSpace(parts[0]) != "" {
 		return parts[0]
+	}
+	return ""
+}
+
+func threadsUsernameFromURL(rawURL string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return ""
+	}
+	parts := strings.Split(strings.Trim(u.Path, "/"), "/")
+	if len(parts) > 0 {
+		return strings.TrimPrefix(parts[0], "@")
 	}
 	return ""
 }

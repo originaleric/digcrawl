@@ -97,7 +97,7 @@ func printUsage() {
   digcrawl <url>               等价于 digcrawl collect <url>
   digcrawl connect [flags]     保存宿主配置并启动 Collector
   digcrawl login [flags]       保存 Collector Token 到配置
-  digcrawl browser check --platform xiaohongshu|douyin|toutiao [--url URL] [--trial]
+  digcrawl browser check --platform xiaohongshu|douyin|toutiao|threads|instagram [--url URL] [--trial]
   digcrawl version
   digcrawl help
 

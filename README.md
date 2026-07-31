@@ -67,6 +67,8 @@ Watchlist 能力通过 `digcrawl watchlist run --once`、`digcrawl watchlist run
 | 今日头条视频 | `toutiao.com/video/...` | `toutiao.video.read` |
 | X | `x.com`、`twitter.com` | `x.post.read` |
 | Reddit | `reddit.com`、`old.reddit.com`、`new.reddit.com`、`redd.it` | `reddit.post.read`、`reddit.subreddit.read`、`reddit.user.read` |
+| Threads | `threads.net`、`threads.com` | `threads.post.read` |
+| Instagram | `instagram.com` | `instagram.content.read` |
 | B站 | `bilibili.com`、`b23.tv` | `bilibili.video.read` |
 | 微博 | `weibo.com`、`m.weibo.cn` | `weibo.post.read` |
 | 快手 | `kuaishou.com`、`v.kuaishou.com` | `kuaishou.video.read` |
@@ -86,7 +88,11 @@ RSS / Atom 读取由通用 Feed service 提供，输出 feed 标题、条目列�
 
 Reddit 读取面向公开单帖、subreddit listing 和用户 submitted/comments。单帖优先使用 Reddit OAuth API 读取正文、元数据和可配置评论树；API 临时失败或 OAuth 未配置时，会尝试 Reddit `.rss` 读取公开内容；RSS 不可用时才按配置使用本机浏览器兜底公开页面。401/403/429、私有社区、登录墙、受限内容不会通过浏览器绕过。
 
-B站、微博、快手、知乎读取先落地为 Go 内置平台包，输出统一 `platform.Content`、结构化 metadata 和媒体候选。B站、微博详情为 HTTP API 优先、浏览器兜底；B站/微博用户列表在 Watchlist 中同样 API-first，失败后回落到 HTML/browser 列表发现。快手、知乎现阶段使用本机浏览器读取，列表发现会使用平台级默认 selector 等待动态内容。新增平台和头条共用同一套本机 `BrowserBrowse`、Cookie store、Chrome/Chromium 配置和 allowed domain 安全边界；区别在于头条详情 provider 已有更完整的多策略 `BrowseWithFallbacks`，新增平台详情 provider 会逐步补齐到同等成熟度。Watchlist 支持从这些平台的列表/主页发现详情 URL，再交给对应 provider 采集；短链会先解析到允许域名内的真实内容页。
+Threads 和 Instagram 采用 Go 原生非官方公开网页/浏览器路径，不使用官方 Threads API 或 Instagram Graph API，也不引入 Python 运行时。两者复用和头条一致的 `LocalBrowser`、Cookie store、allowed domain 和 `digcrawl browser login/check` 链路，但权限策略更严格：默认 `auth_mode=public` 且不读取本机 Cookie；只有 watchlist source options 显式 `auth_mode=local_session`，并且本地 `Social.<Platform>.AuthMode=local_session` 允许该平台使用本机会话时，才会加载对应 Cookie 域。provider 解析失败、登录失效、限流或 challenge 会作为错误暴露，不会转换成“今日无更新”。
+
+启用 Threads/Instagram 时需要同时放行 `threads.post.read`、`instagram.content.read`，并把 `threads.net` / `threads.com` / `instagram.com` 加入 `LocalBrowser.AllowedDomains`。默认配置已包含这些项；无密钥示例见 `config/social.example.yml`。
+
+B站、微博、快手、知乎读取先落地为 Go 内置平台包，输出统一 `platform.Content`、结构化 metadata 和媒体候选。B站、微博详情为 HTTP API 优先、浏览器兜底；B站/微博用户列表在 Watchlist 中同样 API-first，失败后回落到 HTML/browser 列表发现。快手参考 MediaCrawler 的 Web GraphQL 路径，详情优先调用 `visionVideoDetail`，用户列表优先调用 `visionProfilePhotoList`，并复用本机 Cookie store；匿名或登录态失效触发风控时会快速返回 `CAPTCHA_REQUIRED`，不会长时间卡在浏览器等待。知乎现阶段使用本机浏览器读取，列表发现会使用平台级默认 selector 等待动态内容。新增平台和头条共用同一套本机 `BrowserBrowse`、Cookie store、Chrome/Chromium 配置和 allowed domain 安全边界；区别在于头条详情 provider 已有更完整的多策略 `BrowseWithFallbacks`，新增平台详情 provider 会逐步补齐到同等成熟度。Watchlist 支持从这些平台的列表/主页发现详情 URL，再交给对应 provider 采集；短链会先解析到允许域名内的真实内容页。
 
 ## 快速开始
 
@@ -164,7 +170,7 @@ DIGCRAWL_CONFIG="$PWD/config/config.yaml" \
 
 Watchlist 清单支持 `Watchlist.Source.Mode` 选择来源：`yaml` 从 `Watchlist.Items` 和根级 `Tasks` 读取，`database` 从 `dc_watchlist_sources` 读取，`mixed` 同时读取且同 ID 时数据库覆盖 YAML。长清单建议使用 `database`，YAML 只保留调度、通知和持久化配置。持久化后端由 `Watchlist.Persistence.Driver` 决定，支持 `sqlite` 和 `mysql`；MySQL 可直接配置 `MySQLDSN`，也可通过 `GormConfigPath` 读取 `config/gorm.yml` 的写库配置。
 
-Watchlist 建议优先配置来源页或列表页，而不是最终文章/帖子 URL。来源页会定期 Discover 最新内容 URL，并按 source 级 `content_key` 去重后只采集新增内容；最终详情页类 source 仍可用于单次归档、评论或互动变更监控。当前对外 source kind 包括 `rss`、`sitemap`、`reddit_subreddit`、`reddit_user`、`reddit_post_comments`、`toutiao_author`、`toutiao_article`、`toutiao_video`、`x_user`、`x_post`、`douyin_user`、`douyin_video`、`xiaohongshu_user`、`xiaohongshu_note`、`wechat_list`、`wechat_article`、`bilibili_user`、`bilibili_video`、`weibo_user`、`weibo_post`、`kuaishou_user`、`kuaishou_video`、`zhihu_user`、`zhihu_answer`、`zhihu_article`、`zhihu_zvideo`、`web_list`。
+Watchlist 建议优先配置来源页或列表页，而不是最终文章/帖子 URL。来源页会定期 Discover 最新内容 URL，并按 source 级 `content_key` 去重后只采集新增内容；最终详情页类 source 仍可用于单次归档、评论或互动变更监控。当前对外 source kind 包括 `rss`、`sitemap`、`reddit_subreddit`、`reddit_user`、`reddit_post_comments`、`threads_user`、`threads_post`、`instagram_user`、`instagram_post`、`instagram_reel`、`toutiao_author`、`toutiao_article`、`toutiao_video`、`x_user`、`x_post`、`douyin_user`、`douyin_video`、`xiaohongshu_user`、`xiaohongshu_note`、`wechat_list`、`wechat_article`、`bilibili_user`、`bilibili_video`、`weibo_user`、`weibo_post`、`kuaishou_user`、`kuaishou_video`、`zhihu_user`、`zhihu_answer`、`zhihu_article`、`zhihu_zvideo`、`web_list`。
 
 需要在没有新增内容时仍发送通知，可在对应 Task/Source 的 `Options` 中配置 `notify_no_update: true`。该通知只在发现流程成功且本轮新增为 0 时发送，不会把抓取失败误报为“今日无更新”。
 
@@ -301,9 +307,15 @@ LocalBrowser:
 ./digcrawl browser login --platform xiaohongshu
 ./digcrawl browser login --platform douyin
 ./digcrawl browser login --platform toutiao
+./digcrawl browser login --platform threads
+./digcrawl browser login --platform instagram
 
 ./digcrawl browser check --platform toutiao \
   --url "https://www.toutiao.com/article/..." --trial
+./digcrawl browser check --platform threads \
+  --url "https://www.threads.com/@zuck/post/..." --trial
+./digcrawl browser check --platform instagram \
+  --url "https://www.instagram.com/reel/..." --trial
 ```
 
 ## 输出结果

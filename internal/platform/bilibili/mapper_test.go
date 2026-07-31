@@ -1,6 +1,7 @@
 package bilibili
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/originaleric/digcrawl/internal/platform"
@@ -30,7 +31,7 @@ func TestMapAPIResponse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if content.Title != "B站测试视频" || content.Text != "视频简介" || content.Author == nil || content.Author.Name != "UP主" {
+	if content.Title != "B站测试视频" || !strings.Contains(content.Text, "简介: 视频简介") || content.Author == nil || content.Author.Name != "UP主" {
 		t.Fatalf("unexpected content: %+v", content)
 	}
 	if content.Engagement == nil || content.Engagement.Likes != 10 || content.Engagement.Bookmarks != 4 {
@@ -41,5 +42,19 @@ func TestMapAPIResponse(t *testing.T) {
 	}
 	if got := platform.MetaString(content.PlatformMetadata, "extraction_source"); got != "api" {
 		t.Fatalf("expected api extraction source, got %q", got)
+	}
+}
+
+func TestBuildSummaryInputKeepsTitleWhenDescriptionIsThin(t *testing.T) {
+	t.Parallel()
+
+	text := buildSummaryInput(viewData{
+		Title: "字幕君交流场所",
+		Desc:  "www",
+		Owner: viewOwner{Name: "UP主"},
+		Stat:  viewStat{View: 100, Like: 10},
+	})
+	if !strings.Contains(text, "标题: 字幕君交流场所") || !strings.Contains(text, "UP主: UP主") {
+		t.Fatalf("summary input lost useful context: %q", text)
 	}
 }

@@ -106,6 +106,85 @@ func TestXAPIConfigHelpers(t *testing.T) {
 	}
 }
 
+func TestSocialConfigDefaultsArePublic(t *testing.T) {
+	t.Parallel()
+
+	threads := SocialPlatformConfig{}
+	if got := threads.AuthModeOrDefault(); got != "public" {
+		t.Fatalf("threads auth=%q", got)
+	}
+	if threads.BrowserFallbackOrDefault() {
+		t.Fatal("threads browser fallback should default to false")
+	}
+	if threads.AllowsLocalSession() {
+		t.Fatal("threads should not allow local session by default")
+	}
+	enabled := true
+	instagram := SocialPlatformConfig{AuthMode: "local_session", BrowserFallback: &enabled}
+	if got := instagram.AuthModeOrDefault(); got != "local_session" {
+		t.Fatalf("instagram auth=%q", got)
+	}
+	if !instagram.BrowserFallbackOrDefault() || !instagram.AllowsLocalSession() {
+		t.Fatal("explicit instagram local session should be allowed")
+	}
+}
+
+func TestDefaultAllowedToolsIncludeSocialAndDomesticProviders(t *testing.T) {
+	t.Parallel()
+
+	cfg := Get()
+	for _, tool := range []string{
+		"threads.post.read",
+		"instagram.content.read",
+		"bilibili.video.read",
+		"weibo.post.read",
+		"kuaishou.video.read",
+		"zhihu.content.read",
+	} {
+		if !stringSliceContains(cfg.Gateway.AllowedTools, tool) {
+			t.Fatalf("gateway allowed tools missing %s", tool)
+		}
+		if !stringSliceContains(cfg.Collector.AllowedTools, tool) {
+			t.Fatalf("collector allowed tools missing %s", tool)
+		}
+	}
+	for _, domain := range []string{
+		"threads.net",
+		"www.threads.net",
+		"threads.com",
+		"www.threads.com",
+		"instagram.com",
+		"www.instagram.com",
+		"bilibili.com",
+		"www.bilibili.com",
+		"m.bilibili.com",
+		"space.bilibili.com",
+		"b23.tv",
+		"weibo.com",
+		"www.weibo.com",
+		"m.weibo.cn",
+		"kuaishou.com",
+		"www.kuaishou.com",
+		"v.kuaishou.com",
+		"zhihu.com",
+		"www.zhihu.com",
+		"zhuanlan.zhihu.com",
+	} {
+		if !stringSliceContains(cfg.LocalBrowser.AllowedDomains, domain) {
+			t.Fatalf("local browser allowed domains missing %s", domain)
+		}
+	}
+}
+
+func stringSliceContains(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}
+
 func TestOCRConfigHelpers(t *testing.T) {
 	t.Parallel()
 

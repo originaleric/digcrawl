@@ -117,7 +117,7 @@ func platformReadHandler(
 		if err != nil {
 			var re *iplatform.ReadError
 			if errors.As(err, &re) {
-				return iplatform.ErrorOutput(re), nil, nil
+				return iplatform.ErrorOutput(re), nil, re
 			}
 			return nil, nil, err
 		}

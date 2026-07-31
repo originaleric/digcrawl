@@ -50,7 +50,13 @@ func ReadPost(ctx context.Context, in platform.ReadInput) (*platform.Content, er
 	if err != nil {
 		return nil, err
 	}
+	if code := platform.MetaErrorCode(resp.Metadata); platform.IsFatalErrorCode(code) {
+		return nil, platform.NewReadError(code, platform.MetaString(resp.Metadata, "error_message"), PlatformName, resp.Metadata)
+	}
 	content := normalizePost(in, norm, resp)
+	if err := validatePostContent(content); err != nil {
+		return nil, err
+	}
 	content.PlatformMetadata = platform.MergeAPIMeta(content.PlatformMetadata, apiAttempt)
 	platform.MergeContentMetrics(content, platform.ReadMetrics{Platform: PlatformName, Channel: "browser", ExtractionSource: platform.MetaString(content.PlatformMetadata, "extraction_source"), APILatencyMs: apiLatency, BrowserLatencyMs: time.Since(start).Milliseconds()})
 	return content, nil

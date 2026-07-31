@@ -14,11 +14,12 @@ import (
 
 // RunOptions configures a single collect execution.
 type RunOptions struct {
-	URL          string
-	Formats      []string
-	IncludeMedia bool
-	Match        Match
-	TimeoutMs    int
+	URL             string
+	Formats         []string
+	IncludeMedia    bool
+	Match           Match
+	TimeoutMs       int
+	UseCookieDomain string
 }
 
 // Run executes a tool via gateway runtime and returns parsed output.
@@ -84,15 +85,17 @@ func Run(ctx context.Context, rt *runtime.Runtime, opts RunOptions) (map[string]
 func buildToolInput(match Match, opts RunOptions) (map[string]any, error) {
 	if match.Tool == browserprov.ToolBrowserBrowse {
 		return map[string]any{
-			"url":    opts.URL,
-			"action": "read",
-			"mode":   "full",
+			"url":               opts.URL,
+			"action":            "read",
+			"mode":              "full",
+			"use_cookie_domain": opts.UseCookieDomain,
 		}, nil
 	}
 	return map[string]any{
-		"url":           opts.URL,
-		"format":        opts.Formats,
-		"include_media": opts.IncludeMedia,
+		"url":               opts.URL,
+		"format":            opts.Formats,
+		"include_media":     opts.IncludeMedia,
+		"use_cookie_domain": opts.UseCookieDomain,
 	}, nil
 }
 

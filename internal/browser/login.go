@@ -48,13 +48,25 @@ var loginSpecs = map[string]LoginSpec{
 		CookieDomain: "www.toutiao.com",
 		CookieURLs:   []string{"https://www.toutiao.com", "https://toutiao.com"},
 	},
+	"threads": {
+		Platform:     "threads",
+		IndexURL:     "https://www.threads.com",
+		CookieDomain: "www.threads.com",
+		CookieURLs:   []string{"https://www.threads.com", "https://threads.com", "https://www.threads.net", "https://threads.net"},
+	},
+	"instagram": {
+		Platform:     "instagram",
+		IndexURL:     "https://www.instagram.com",
+		CookieDomain: "www.instagram.com",
+		CookieURLs:   []string{"https://www.instagram.com", "https://instagram.com"},
+	},
 }
 
 // LoginSpecFor returns login configuration for a platform.
 func LoginSpecFor(platform string) (LoginSpec, error) {
 	spec, ok := loginSpecs[strings.ToLower(strings.TrimSpace(platform))]
 	if !ok {
-		return LoginSpec{}, fmt.Errorf("不支持的平台 %q，可选: xiaohongshu, douyin, toutiao", platform)
+		return LoginSpec{}, fmt.Errorf("不支持的平台 %q，可选: xiaohongshu, douyin, toutiao, threads, instagram", platform)
 	}
 	return spec, nil
 }

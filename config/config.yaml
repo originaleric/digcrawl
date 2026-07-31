@@ -11,10 +11,16 @@ Gateway:
     - douyin.video.read
     - toutiao.article.read
     - toutiao.video.read
+    - bilibili.video.read
+    - weibo.post.read
+    - kuaishou.video.read
+    - zhihu.content.read
     - x.post.read
     - reddit.post.read
     - reddit.subreddit.read
     - reddit.user.read
+    - threads.post.read
+    - instagram.content.read
     - asr.transcribe
   AllowedReadPaths: []
   AllowedDomains: []
@@ -47,10 +53,16 @@ Collector:
     - douyin.video.read
     - toutiao.article.read
     - toutiao.video.read
+    - bilibili.video.read
+    - weibo.post.read
+    - kuaishou.video.read
+    - zhihu.content.read
     - x.post.read
     - reddit.post.read
     - reddit.subreddit.read
     - reddit.user.read
+    - threads.post.read
+    - instagram.content.read
     - asr.transcribe
 
 Collect:
@@ -93,6 +105,20 @@ LocalBrowser:
     - toutiao.com
     - www.toutiao.com
     - m.toutiao.com
+    - bilibili.com
+    - www.bilibili.com
+    - m.bilibili.com
+    - space.bilibili.com
+    - b23.tv
+    - weibo.com
+    - www.weibo.com
+    - m.weibo.cn
+    - kuaishou.com
+    - www.kuaishou.com
+    - v.kuaishou.com
+    - zhihu.com
+    - www.zhihu.com
+    - zhuanlan.zhihu.com
     - x.com
     - twitter.com
     - www.twitter.com
@@ -101,6 +127,12 @@ LocalBrowser:
     - old.reddit.com
     - new.reddit.com
     - redd.it
+    - threads.net
+    - www.threads.net
+    - threads.com
+    - www.threads.com
+    - instagram.com
+    - www.instagram.com
   ChromePath: "/Users/dig/Library/Caches/ms-playwright/chromium_headless_shell-1217/chrome-headless-shell-mac-arm64/chrome-headless-shell"
   Headless: true
   CookieStoreDir: "storage/digcrawl/browser_cookies"
@@ -165,6 +197,17 @@ Platform:
     BrowserFallback:
       Enabled: true
       AllowWithoutOAuth: false
+
+Social:
+  Threads:
+    AuthMode: "public"
+    BrowserFallback: false
+    RequestTimeoutSec: 30
+  Instagram:
+    AuthMode: "public"
+    BrowserFallback: false
+    RequestTimeoutSec: 30
+    RateLimitMs: 5000
 
 OCR:
   Enabled: false

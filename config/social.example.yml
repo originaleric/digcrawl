@@ -1,0 +1,31 @@
+Social:
+  Threads:
+    # public | local_session
+    # public: default, do not load local browser cookies.
+    # local_session: allow watchlist sources that explicitly set
+    # options.auth_mode=local_session to reuse local browser cookies.
+    AuthMode: "public"
+    BrowserFallback: false
+    RequestTimeoutSec: 30
+  Instagram:
+    # public | local_session
+    AuthMode: "public"
+    BrowserFallback: false
+    RequestTimeoutSec: 30
+    RateLimitMs: 5000
+
+# Example source-level opt-in. Keep real watchlist items in YAML only for
+# small local lists; use dc_watchlist_sources for long-term maintenance.
+# Watchlist:
+#   Items:
+#     - ID: threads-user-example
+#       Platform: threads
+#       Type: threads_user
+#       URL: https://www.threads.com/@zuck
+#       Interval: 6h
+#       NotifyTo: feishu-default
+#       Enabled: true
+#       Options:
+#         limit: 10
+#         browser_fallback: true
+#         auth_mode: local_session

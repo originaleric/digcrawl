@@ -124,7 +124,7 @@ func redditPostReadHandler(configDomains []string) func(context.Context, *protoc
 		if err != nil {
 			var re *platform.ReadError
 			if errors.As(err, &re) {
-				return platform.ErrorOutput(re), nil, nil
+				return platform.ErrorOutput(re), nil, re
 			}
 			return nil, nil, err
 		}

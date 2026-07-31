@@ -49,3 +49,18 @@ func normalizeVideo(in platform.ReadInput, norm *platform.NormalizedURL, resp *b
 	}
 	return c
 }
+
+func validateVideoContent(c *platform.Content) error {
+	if c == nil {
+		return platform.NewReadError(platform.ErrPartialContent, "快手视频结果为空", PlatformName, nil)
+	}
+	meta := platform.EnsureMeta(c.PlatformMetadata)
+	if code := platform.MetaErrorCode(meta); platform.IsFatalErrorCode(code) {
+		return platform.NewReadError(code, platform.MetaString(meta, "error_message"), PlatformName, meta)
+	}
+	if strings.TrimSpace(c.Title) == "" && strings.TrimSpace(c.Text) == "" && len(c.Media) == 0 {
+		meta = platform.SetMetaError(meta, platform.ErrPartialContent, "快手视频标题、正文和媒体为空")
+		return platform.NewReadError(platform.ErrPartialContent, platform.MetaString(meta, "error_message"), PlatformName, meta)
+	}
+	return nil
+}

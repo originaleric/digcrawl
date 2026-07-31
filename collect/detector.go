@@ -6,7 +6,9 @@ import (
 	"strings"
 
 	"github.com/originaleric/digcrawl/internal/feed"
+	"github.com/originaleric/digcrawl/internal/platform/instagram"
 	"github.com/originaleric/digcrawl/internal/platform/reddit"
+	"github.com/originaleric/digcrawl/internal/platform/threads"
 	browserprov "github.com/originaleric/digcrawl/provider/browser"
 	platformprov "github.com/originaleric/digcrawl/provider/platform"
 )
@@ -46,6 +48,12 @@ func Detect(rawURL string) (Match, error) {
 	}
 	if reddit.IsRedditHost(host) && reddit.IsPostURL(rawURL) {
 		return Match{Platform: reddit.PlatformName, Tool: platformprov.ToolRedditPostRead}, nil
+	}
+	if threads.IsPostURL(rawURL) {
+		return Match{Platform: threads.PlatformName, Tool: platformprov.ToolThreadsPostRead}, nil
+	}
+	if instagram.IsMediaURL(rawURL) {
+		return Match{Platform: instagram.PlatformName, Tool: platformprov.ToolInstagramContentRead}, nil
 	}
 	if hostMatches(host, []string{"toutiao.com", "www.toutiao.com", "m.toutiao.com"}) {
 		path := strings.ToLower(u.EscapedPath())

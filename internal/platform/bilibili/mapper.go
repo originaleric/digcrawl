@@ -38,8 +38,8 @@ func mapAPIResponse(in platform.ReadInput, norm *platform.NormalizedURL, parsed 
 		SourceURL:        norm.OriginalURL,
 		CanonicalURL:     canonical,
 		Title:            strings.TrimSpace(data.Title),
-		Text:             strings.TrimSpace(data.Desc),
-		Markdown:         strings.TrimSpace(data.Desc),
+		Text:             buildSummaryInput(data),
+		Markdown:         buildSummaryMarkdown(data),
 		CapturedAt:       platform.NowRFC3339(),
 		PlatformMetadata: meta,
 	}
@@ -61,6 +61,36 @@ func mapAPIResponse(in platform.ReadInput, norm *platform.NormalizedURL, parsed 
 		}
 	}
 	return content, nil
+}
+
+func buildSummaryInput(data viewData) string {
+	var parts []string
+	if title := strings.TrimSpace(data.Title); title != "" {
+		parts = append(parts, "标题: "+title)
+	}
+	if desc := strings.TrimSpace(data.Desc); desc != "" {
+		parts = append(parts, "简介: "+desc)
+	}
+	if owner := strings.TrimSpace(data.Owner.Name); owner != "" {
+		parts = append(parts, "UP主: "+owner)
+	}
+	if data.Stat.View > 0 || data.Stat.Like > 0 || data.Stat.Reply > 0 || data.Stat.Share > 0 || data.Stat.Favorite > 0 {
+		parts = append(parts, fmt.Sprintf("互动: 播放%d 点赞%d 评论%d 收藏%d 分享%d", data.Stat.View, data.Stat.Like, data.Stat.Reply, data.Stat.Favorite, data.Stat.Share))
+	}
+	for _, page := range data.Pages {
+		if part := strings.TrimSpace(page.Part); part != "" {
+			parts = append(parts, fmt.Sprintf("分P%d: %s", page.Page, part))
+		}
+	}
+	return strings.TrimSpace(strings.Join(parts, "\n"))
+}
+
+func buildSummaryMarkdown(data viewData) string {
+	text := buildSummaryInput(data)
+	if text == "" {
+		return ""
+	}
+	return text
 }
 
 func normalizeBrowserContent(in platform.ReadInput, norm *platform.NormalizedURL, resp *browser.BrowserBrowseResponse) *platform.Content {

@@ -106,6 +106,28 @@ func TestDetectRedditPost(t *testing.T) {
 	}
 }
 
+func TestDetectThreadsPost(t *testing.T) {
+	t.Parallel()
+	m, err := Detect("https://www.threads.com/@zuck/post/ABC_123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.Platform != "threads" || m.Tool != platformprov.ToolThreadsPostRead {
+		t.Fatalf("got %+v", m)
+	}
+}
+
+func TestDetectInstagramMedia(t *testing.T) {
+	t.Parallel()
+	m, err := Detect("https://www.instagram.com/reel/R123/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.Platform != "instagram" || m.Tool != platformprov.ToolInstagramContentRead {
+		t.Fatalf("got %+v", m)
+	}
+}
+
 func TestDetectRedditPostRSSUsesFeedReader(t *testing.T) {
 	t.Parallel()
 	m, err := Detect("https://www.reddit.com/r/golang/comments/abc123/title/.rss")

@@ -32,8 +32,8 @@ func runBrowser(args []string) {
 
 func printBrowserUsage() {
 	fmt.Fprintf(os.Stderr, `浏览器会话命令:
-  digcrawl browser login --platform xiaohongshu|douyin|toutiao
-  digcrawl browser check --platform xiaohongshu|douyin|toutiao [--url URL] [--trial]
+  digcrawl browser login --platform xiaohongshu|douyin|toutiao|threads|instagram
+  digcrawl browser check --platform xiaohongshu|douyin|toutiao|threads|instagram [--url URL] [--trial]
 
 `)
 }
@@ -41,7 +41,7 @@ func printBrowserUsage() {
 func runBrowserLogin(args []string) {
 	fs := flag.NewFlagSet("browser login", flag.ExitOnError)
 	configPath := fs.String("config", "config/config.yaml", "path to config.yaml")
-	platform := fs.String("platform", "", "platform: xiaohongshu, douyin, toutiao")
+	platform := fs.String("platform", "", "platform: xiaohongshu, douyin, toutiao, threads, instagram")
 	_ = fs.Parse(args)
 
 	cfg, err := loadConfig(*configPath)
@@ -63,7 +63,7 @@ func runBrowserLogin(args []string) {
 func runBrowserCheck(args []string) {
 	fs := flag.NewFlagSet("browser check", flag.ExitOnError)
 	configPath := fs.String("config", "config/config.yaml", "path to config.yaml")
-	platform := fs.String("platform", "", "platform: xiaohongshu, douyin, toutiao")
+	platform := fs.String("platform", "", "platform: xiaohongshu, douyin, toutiao, threads, instagram")
 	probeURL := fs.String("url", "", "optional probe URL for trial read")
 	trial := fs.Bool("trial", false, "require trial read (needs --url or Platform.HealthProbes)")
 	_ = fs.Parse(args)

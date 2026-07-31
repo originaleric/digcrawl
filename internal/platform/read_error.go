@@ -21,6 +21,20 @@ func (e *ReadError) Error() string {
 	return fmt.Sprintf("platform read %s: %s", e.Code, msg)
 }
 
+func (e *ReadError) ToolErrorCode() string {
+	if e == nil {
+		return ""
+	}
+	return e.Code
+}
+
+func (e *ReadError) ToolErrorMessage() string {
+	if e == nil {
+		return ""
+	}
+	return e.Message
+}
+
 // NewReadError 构造平台读取错误。
 func NewReadError(code, message, platform string, meta map[string]any) *ReadError {
 	return &ReadError{

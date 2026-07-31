@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -103,6 +104,14 @@ func (r *Runtime) Execute(ctx context.Context, call *protocol.ToolCall) *protoco
 	if err != nil {
 		result.Status = "error"
 		result.Error = mapError(err)
+		if len(output) > 0 {
+			if outBytes, marshalErr := json.Marshal(output); marshalErr == nil {
+				if maxOut := call.Policy.MaxOutputBytes; maxOut <= 0 || len(outBytes) <= maxOut {
+					result.Output = outBytes
+					result.Artifacts = artifacts
+				}
+			}
+		}
 		return result
 	}
 
@@ -148,6 +157,17 @@ func (r *Runtime) validateCall(call *protocol.ToolCall) error {
 func mapError(err error) *protocol.ToolError {
 	if err == nil {
 		return &protocol.ToolError{Code: "UNKNOWN", Message: "unknown error"}
+	}
+	var coded interface {
+		ToolErrorCode() string
+		ToolErrorMessage() string
+	}
+	if errors.As(err, &coded) && strings.TrimSpace(coded.ToolErrorCode()) != "" {
+		msg := strings.TrimSpace(coded.ToolErrorMessage())
+		if msg == "" {
+			msg = err.Error()
+		}
+		return &protocol.ToolError{Code: strings.TrimSpace(coded.ToolErrorCode()), Message: msg}
 	}
 	msg := err.Error()
 	for _, code := range []string{

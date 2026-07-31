@@ -2,10 +2,14 @@ package source
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
+	"github.com/originaleric/digcrawl/config"
+	"github.com/originaleric/digcrawl/internal/platform"
+	kuaishouplatform "github.com/originaleric/digcrawl/internal/platform/kuaishou"
 	"github.com/originaleric/digcrawl/internal/platform/reddit"
 )
 
@@ -489,6 +493,29 @@ func TestServiceExtractsKuaishouVideoLinks(t *testing.T) {
 	}
 }
 
+func TestServiceStopsKuaishouUserListOnFatalAPIError(t *testing.T) {
+	old := listKuaishouUserVideosViaAPI
+	listKuaishouUserVideosViaAPI = func(context.Context, *platform.NormalizedURL, platform.ReadInput, int) ([]kuaishouplatform.APIListItem, *platform.APIAttempt, int64, error) {
+		return nil, nil, 0, platform.NewReadError(platform.ErrCaptchaRequired, "快手 GraphQL 触发风控，需要登录态或安全验证", "kuaishou", nil)
+	}
+	defer func() { listKuaishouUserVideosViaAPI = old }()
+
+	items, err := Service{}.ListLatest(context.Background(), Source{
+		ID:       "ks-user",
+		Platform: "kuaishou",
+		Type:     "kuaishou_user",
+		URL:      "https://www.kuaishou.com/profile/u1",
+		Options:  map[string]any{"browser_fallback": false},
+	})
+	if err == nil {
+		t.Fatalf("expected fatal API error, got items %+v", items)
+	}
+	var re *platform.ReadError
+	if !errors.As(err, &re) || re.Code != platform.ErrCaptchaRequired {
+		t.Fatalf("expected CAPTCHA_REQUIRED ReadError, got %v", err)
+	}
+}
+
 func TestServiceReadsFixedZhihuContent(t *testing.T) {
 	items, err := Service{}.ListLatest(context.Background(), Source{
 		ID:       "zh1",
@@ -624,6 +651,96 @@ func TestInferRedditWatchlistTypePrefersPostURL(t *testing.T) {
 	item := Source{Platform: "reddit", URL: "https://www.reddit.com/r/golang/comments/abc123/title/"}
 	if got := inferRedditWatchlistType(item); got != "reddit_post_comments" {
 		t.Fatalf("type = %q", got)
+	}
+}
+
+func TestServiceExtractsThreadsPostLinks(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`<html><body><a href="https://www.threads.com/@zuck/post/ABC_123?x=y">thread</a></body></html>`))
+	}))
+	defer srv.Close()
+	items, err := Service{}.ListLatest(context.Background(), Source{
+		ID:       "threads-user",
+		Platform: "threads",
+		Type:     "threads_user",
+		URL:      srv.URL,
+		Options:  map[string]any{"browser_fallback": false},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 || items[0].ContentKey != "threads:ABC_123" || items[0].ContentType != "thread" {
+		t.Fatalf("unexpected items: %+v", items)
+	}
+	if got := items[0].Raw["auth_mode"]; got != "public" {
+		t.Fatalf("auth_mode=%v", got)
+	}
+	if got := items[0].Raw["use_cookie_domain"]; got != nil {
+		t.Fatalf("unexpected cookie domain: %v", got)
+	}
+}
+
+func TestServiceExtractsInstagramMediaLinks(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`<html><body><a href="https://www.instagram.com/p/CODE_123/?utm_source=x">post</a><a href="https://www.instagram.com/reel/R123/">reel</a></body></html>`))
+	}))
+	defer srv.Close()
+	items, err := Service{}.ListLatest(context.Background(), Source{
+		ID:       "ig-user",
+		Platform: "instagram",
+		Type:     "instagram_user",
+		URL:      srv.URL,
+		Options:  map[string]any{"browser_fallback": false},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("unexpected items: %+v", items)
+	}
+	if items[0].ContentKey != "instagram:CODE_123" || items[0].ContentType != "instagram_post" {
+		t.Fatalf("unexpected first item: %+v", items[0])
+	}
+	if items[1].ContentKey != "instagram:R123" || items[1].ContentType != "video" {
+		t.Fatalf("unexpected second item: %+v", items[1])
+	}
+}
+
+func TestSocialLocalSessionRequiresGlobalAndSourceOptIn(t *testing.T) {
+	origThreads := config.Get().Social.Threads
+	enabled := true
+	config.Get().Social.Threads = config.SocialPlatformConfig{
+		AuthMode:        "local_session",
+		BrowserFallback: &enabled,
+	}
+	defer func() {
+		config.Get().Social.Threads = origThreads
+	}()
+
+	item := Source{
+		Platform: "threads",
+		Type:     "threads_post",
+		URL:      "https://www.threads.net/@zuck/post/ABC_123",
+		Options:  map[string]any{"auth_mode": "local_session"},
+	}
+	items, err := Service{}.ListLatest(context.Background(), item)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := items[0].Raw["auth_mode"]; got != "local_session" {
+		t.Fatalf("auth_mode=%v", got)
+	}
+	if got := items[0].Raw["use_cookie_domain"]; got != "www.threads.com" {
+		t.Fatalf("use_cookie_domain=%v", got)
+	}
+
+	item.Options = map[string]any{"auth_mode": "public"}
+	items, err = Service{}.ListLatest(context.Background(), item)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := items[0].Raw["use_cookie_domain"]; got != nil {
+		t.Fatalf("public source should not pass cookie domain, got %v", got)
 	}
 }
 

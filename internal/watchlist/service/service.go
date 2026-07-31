@@ -884,7 +884,9 @@ func taskDefinition(item WatchItem) TaskDefinition {
 }
 
 func (s *Service) collectFeedItem(ctx context.Context, feed FeedItem) (CollectedItem, error) {
-	result, err := s.collector.CollectURL(ctx, feed.URL, []string{"md", "json"}, s.cfg.Collect.OutputDir)
+	result, err := s.collector.CollectURLWithOptions(ctx, feed.URL, []string{"md", "json"}, s.cfg.Collect.OutputDir, collect.CollectURLOptions{
+		UseCookieDomain: feedCookieDomain(feed),
+	})
 	if err != nil {
 		return CollectedItem{Feed: feed}, err
 	}
@@ -909,6 +911,13 @@ func (s *Service) collectFeedItem(ctx context.Context, feed FeedItem) (Collected
 		ContentType: str(out["content_type"]), Text: text, ASRText: asrText,
 		OCRText: extractOCRText(out), Metadata: extractMetadata(out),
 	}, nil
+}
+
+func feedCookieDomain(feed FeedItem) string {
+	if feed.Raw == nil {
+		return ""
+	}
+	return strings.TrimSpace(str(feed.Raw["use_cookie_domain"]))
 }
 
 func summaryTextForCollectedItem(feed FeedItem, out map[string]any, asrText string, downloaded []map[string]any) (string, error) {

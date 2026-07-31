@@ -81,6 +81,34 @@ func TestExecuteRequiresApproval(t *testing.T) {
 	}
 }
 
+func TestExecutePreservesStructuredOutputOnHandlerError(t *testing.T) {
+	t.Parallel()
+	reg := registry.New()
+	reg.Register(registry.Entry{
+		Descriptor: protocol.ToolDescriptor{Name: "structured.error"},
+		Handler: func(ctx context.Context, call *protocol.ToolCall) (map[string]any, []protocol.Artifact, error) {
+			return map[string]any{"platform_metadata": map[string]any{"error_code": "LOGIN_REQUIRED"}}, nil, testStructuredError{code: "LOGIN_REQUIRED", msg: "login required"}
+		},
+	})
+	rt := New(reg, Options{})
+	res := rt.Execute(context.Background(), &protocol.ToolCall{Type: protocol.TypeToolCall, ID: "c1", Tool: "structured.error"})
+	if res.Status != "error" || res.Error == nil || res.Error.Code != "LOGIN_REQUIRED" {
+		t.Fatalf("expected structured error result, got %+v", res)
+	}
+	if len(res.Output) == 0 {
+		t.Fatalf("expected structured output to be preserved")
+	}
+}
+
+type testStructuredError struct {
+	code string
+	msg  string
+}
+
+func (e testStructuredError) Error() string            { return e.msg }
+func (e testStructuredError) ToolErrorCode() string    { return e.code }
+func (e testStructuredError) ToolErrorMessage() string { return e.msg }
+
 func TestDefaultRegistryIncludesASRTranscribe(t *testing.T) {
 	t.Parallel()
 	cfg := config.Get()

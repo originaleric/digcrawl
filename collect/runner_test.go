@@ -2,6 +2,7 @@ package collect
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	"github.com/originaleric/digcrawl/protocol"
@@ -83,5 +84,41 @@ func TestRunSetsToolCallTimeoutPolicy(t *testing.T) {
 	}
 	if gotTimeout != 120000 {
 		t.Fatalf("expected timeout policy 120000, got %d", gotTimeout)
+	}
+}
+
+func TestRunPassesCookieDomainToToolInput(t *testing.T) {
+	t.Parallel()
+
+	var gotCookieDomain string
+	reg := registry.New()
+	reg.Register(registry.Entry{
+		Descriptor: protocol.ToolDescriptor{Name: "threads.post.read"},
+		Handler: func(ctx context.Context, call *protocol.ToolCall) (map[string]any, []protocol.Artifact, error) {
+			var input map[string]any
+			if err := json.Unmarshal(call.Input, &input); err != nil {
+				t.Fatal(err)
+			}
+			gotCookieDomain, _ = input["use_cookie_domain"].(string)
+			return map[string]any{
+				"platform":     "threads",
+				"content_type": "thread",
+				"title":        "thread",
+				"text":         "body",
+			}, nil, nil
+		},
+	})
+	rt := runtime.New(reg, runtime.Options{InstanceID: "test"})
+
+	_, _, err := Run(context.Background(), rt, RunOptions{
+		URL:             "https://www.threads.net/@zuck/post/ABC_123",
+		Match:           Match{Platform: "threads", Tool: "threads.post.read"},
+		UseCookieDomain: "www.threads.net",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotCookieDomain != "www.threads.net" {
+		t.Fatalf("use_cookie_domain=%q", gotCookieDomain)
 	}
 }

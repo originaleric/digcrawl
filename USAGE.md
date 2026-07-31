@@ -346,6 +346,17 @@ X / Twitter 已支持：
 - `x_post`：固定单帖 URL 监控，例如 `https://x.com/elonmusk/status/...`。该模式复用已验证的 `x.post.read` 抓取链路。
 - `x_user`：用户主页静态 status 链接发现，发现结果使用 `x:<status_id>` 去重；X 主页内容通常依赖前端动态加载，未登录/未渲染 HTML 可能发现不到最新帖子，生产使用建议后续接入 X API/浏览器渲染发现。
 
+Threads 已支持：
+
+- `threads_post` / `post` / `thread`：固定 Threads 帖子 URL 监控，例如 `https://www.threads.com/@zuck/post/...` 或旧 `threads.net` 链接。该模式复用 `threads.post.read`，并统一归一到当前 `threads.com` canonical URL。
+- `threads_user` / `user` / `profile`：用户主页列表发现，抽取 `/@user/post/...` 链接，发现结果使用 `threads:<post_id>` 去重。默认 `auth_mode=public`，不读取本机 Cookie；需要登录态时必须同时设置全局 `Social.Threads.AuthMode=local_session` 和 source options `auth_mode=local_session`。
+
+Instagram 已支持：
+
+- `instagram_post` / `post`：固定 Instagram 图文 URL 监控，例如 `https://www.instagram.com/p/.../`。该模式复用 `instagram.content.read`。
+- `instagram_reel` / `reel`：固定 Instagram Reels URL 监控，例如 `https://www.instagram.com/reel/.../`，内容类型归一为 `video`。
+- `instagram_user` / `user` / `profile`：用户主页列表发现，抽取 `/p/...` 和 `/reel/...` 链接，发现结果使用 `instagram:<shortcode>` 去重。默认 `auth_mode=public`，不读取本机 Cookie；需要登录态时必须同时设置全局 `Social.Instagram.AuthMode=local_session` 和 source options `auth_mode=local_session`。
+
 抖音已支持：
 
 - `douyin_video` / `video`：固定抖音作品 URL 监控，例如 `https://www.douyin.com/video/...`、`https://www.iesdouyin.com/share/video/...` 或带 `modal_id` 的用户页链接，发现结果使用 `douyin:<work_id>` 去重。
@@ -368,8 +379,8 @@ B站已支持：
 
 快手已支持：
 
-- `kuaishou_video` / `ks_video`：固定视频 URL 监控，例如 `https://www.kuaishou.com/short-video/...`、`/photo/...` 或 `v.kuaishou.com` 短链。该模式复用 `kuaishou.video.read`。
-- `kuaishou_user` / `ks_user`：主页或列表页链接发现，抽取 `/short-video/...` 和 `/photo/...` 内容链接。
+- `kuaishou_video` / `ks_video`：固定视频 URL 监控，例如 `https://www.kuaishou.com/short-video/...`、`/photo/...` 或 `v.kuaishou.com` 短链。该模式复用 `kuaishou.video.read`，优先走快手 Web GraphQL `visionVideoDetail`，读取本机 Cookie 后仍触发风控时返回 `CAPTCHA_REQUIRED`。
+- `kuaishou_user` / `ks_user`：主页或列表页链接发现，优先走快手 Web GraphQL `visionProfilePhotoList`，失败后回落到 HTML/browser 链接发现，抽取 `/short-video/...` 和 `/photo/...` 内容链接。
 
 知乎已支持：
 
@@ -882,6 +893,8 @@ digcrawl collect "https://example.com/article" --format md,html,json --out ./my-
 digcrawl browser login --platform xiaohongshu
 digcrawl browser login --platform douyin
 digcrawl browser login --platform toutiao
+digcrawl browser login --platform threads
+digcrawl browser login --platform instagram
 ```
 
 登录后可检查会话，并可选试读一个 URL：
@@ -889,6 +902,10 @@ digcrawl browser login --platform toutiao
 ```bash
 digcrawl browser check --platform toutiao \
   --url "https://www.toutiao.com/article/xxxx" --trial
+digcrawl browser check --platform threads \
+  --url "https://www.threads.com/@zuck/post/xxxx" --trial
+digcrawl browser check --platform instagram \
+  --url "https://www.instagram.com/reel/xxxx/" --trial
 ```
 
 | 参数 | 说明 |
@@ -1208,9 +1225,15 @@ ExtraArgs:
 ./digcrawl browser login --platform xiaohongshu
 ./digcrawl browser login --platform douyin
 ./digcrawl browser login --platform toutiao
+./digcrawl browser login --platform threads
+./digcrawl browser login --platform instagram
 
 ./digcrawl browser check --platform toutiao \
   --url "https://www.toutiao.com/article/你的文章ID/" --trial
+./digcrawl browser check --platform threads \
+  --url "https://www.threads.com/@zuck/post/你的帖子ID" --trial
+./digcrawl browser check --platform instagram \
+  --url "https://www.instagram.com/reel/你的短码/" --trial
 ```
 
 如果未登录或风控，会看到结构化错误，如 `LOGIN_REQUIRED`、`CAPTCHA_REQUIRED`、`RATE_LIMITED`。

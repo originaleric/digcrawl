@@ -10,6 +10,8 @@ import (
 	"github.com/originaleric/digcrawl/internal/browser"
 	"github.com/originaleric/digcrawl/internal/platform"
 	"github.com/originaleric/digcrawl/internal/platform/douyin"
+	"github.com/originaleric/digcrawl/internal/platform/instagram"
+	"github.com/originaleric/digcrawl/internal/platform/threads"
 	"github.com/originaleric/digcrawl/internal/platform/toutiao"
 	"github.com/originaleric/digcrawl/internal/platform/xiaohongshu"
 )
@@ -67,6 +69,10 @@ func Check(ctx context.Context, opts Options) error {
 		content, err = douyin.ReadVideo(ctx, in)
 	case "toutiao":
 		content, err = toutiao.ReadArticle(ctx, in)
+	case "threads":
+		content, err = threads.ReadPost(ctx, in)
+	case "instagram":
+		content, err = instagram.ReadContent(ctx, in)
 	default:
 		return fmt.Errorf("不支持试读平台 %q", platformName)
 	}

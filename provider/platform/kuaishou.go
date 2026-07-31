@@ -11,8 +11,8 @@ var kuaishouDefaultDomains = []string{"kuaishou.com", "www.kuaishou.com", "v.kua
 func KuaishouVideoReadEntry(configDomains []string, artStore artifact.Store) registry.Entry {
 	return platformReadEntry(
 		ToolKuaishouVideoRead,
-		"Read a Kuaishou video page via local browser with structured output.",
-		[]string{"browser", "kuaishou", "cookie.local", "platform.read", "video"},
+		"Read a Kuaishou video through Web GraphQL with local-cookie browser fallback.",
+		[]string{"api", "browser", "kuaishou", "cookie.local", "platform.read", "video"},
 		kuaishouDefaultDomains,
 		configDomains,
 		artStore,

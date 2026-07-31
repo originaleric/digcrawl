@@ -1,6 +1,7 @@
 package weibo
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/originaleric/digcrawl/internal/platform"
@@ -42,5 +43,45 @@ func TestMapAPIResponse(t *testing.T) {
 	}
 	if got := platform.MetaString(content.PlatformMetadata, "extraction_source"); got != "api" {
 		t.Fatalf("expected api extraction source, got %q", got)
+	}
+}
+
+func TestValidatePostContentRejectsSinaVisitorSystem(t *testing.T) {
+	t.Parallel()
+
+	err := validatePostContent(&platform.Content{
+		Platform:    PlatformName,
+		ContentType: ContentType,
+		Title:       "Sina Visitor System",
+		Text:        "",
+		CapturedAt:  platform.NowRFC3339(),
+		PlatformMetadata: map[string]any{
+			"extraction_source": "browser",
+		},
+	})
+	var re *platform.ReadError
+	if !errors.As(err, &re) {
+		t.Fatalf("expected ReadError, got %v", err)
+	}
+	if re.Code != platform.ErrLoginRequired {
+		t.Fatalf("expected LOGIN_REQUIRED, got %+v", re)
+	}
+}
+
+func TestValidatePostContentRejectsEmptyBrowserShell(t *testing.T) {
+	t.Parallel()
+
+	err := validatePostContent(&platform.Content{
+		Platform:         PlatformName,
+		ContentType:      ContentType,
+		Title:            "微博",
+		PlatformMetadata: map[string]any{"extraction_source": "browser"},
+	})
+	var re *platform.ReadError
+	if !errors.As(err, &re) {
+		t.Fatalf("expected ReadError, got %v", err)
+	}
+	if re.Code != platform.ErrPartialContent {
+		t.Fatalf("expected PARTIAL_CONTENT, got %+v", re)
 	}
 }

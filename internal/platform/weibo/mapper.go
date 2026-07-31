@@ -122,6 +122,26 @@ func normalizePost(in platform.ReadInput, norm *platform.NormalizedURL, resp *br
 	return c
 }
 
+func validatePostContent(c *platform.Content) error {
+	if c == nil {
+		return platform.NewReadError(platform.ErrPartialContent, "微博帖子结果为空", PlatformName, nil)
+	}
+	meta := platform.EnsureMeta(c.PlatformMetadata)
+	if code := platform.MetaErrorCode(meta); platform.IsFatalErrorCode(code) {
+		return platform.NewReadError(code, platform.MetaString(meta, "error_message"), PlatformName, meta)
+	}
+	title := strings.ToLower(strings.TrimSpace(c.Title))
+	if strings.Contains(title, "sina visitor system") || strings.Contains(strings.ToLower(platform.MetaString(meta, "title")), "sina visitor system") {
+		meta = platform.SetMetaError(meta, platform.ErrLoginRequired, "微博页面进入访客系统，需要登录态或安全验证")
+		return platform.NewReadError(platform.ErrLoginRequired, platform.MetaString(meta, "error_message"), PlatformName, meta)
+	}
+	if strings.TrimSpace(c.Text) == "" && len(c.Media) == 0 {
+		meta = platform.SetMetaError(meta, platform.ErrPartialContent, "微博帖子正文和媒体为空")
+		return platform.NewReadError(platform.ErrPartialContent, platform.MetaString(meta, "error_message"), PlatformName, meta)
+	}
+	return nil
+}
+
 func stripHTML(s string) string {
 	s = htmlTagRe.ReplaceAllString(s, "")
 	replacer := strings.NewReplacer("&nbsp;", " ", "&amp;", "&", "&lt;", "<", "&gt;", ">", "&#39;", "'", "&quot;", `"`)
