@@ -138,11 +138,24 @@ func (s *Store) UpsertSource(ctx context.Context, src WatchSource) error {
 	if src.ScheduleMode == "" {
 		src.ScheduleMode = "interval"
 	}
-	if src.ScheduleMode != "interval" {
+	src.ScheduleAt = strings.TrimSpace(src.ScheduleAt)
+	if src.ScheduleMode != "interval" && src.ScheduleMode != "daily" {
 		return fmt.Errorf("watchlist source %q unsupported schedule mode %q", src.ID, src.ScheduleMode)
 	}
 	if src.Interval <= 0 {
-		src.Interval = 6 * time.Hour
+		if src.ScheduleMode == "daily" {
+			src.Interval = 24 * time.Hour
+		} else {
+			src.Interval = 6 * time.Hour
+		}
+	}
+	if err := ValidateSchedule(TaskDefinition{
+		ID:            src.ID,
+		ScheduleMode:  src.ScheduleMode,
+		ScheduleEvery: src.Interval,
+		ScheduleAt:    src.ScheduleAt,
+	}); err != nil {
+		return fmt.Errorf("watchlist source %q invalid schedule: %w", src.ID, err)
 	}
 	now := time.Now().UTC()
 	if src.CreatedAt.IsZero() {
@@ -159,8 +172,8 @@ func (s *Store) UpsertSource(ctx context.Context, src WatchSource) error {
 	}
 	if s.dialect == "mysql" {
 		_, err = s.db.ExecContext(ctx, `INSERT INTO dc_watchlist_sources (
-  source_id, name, platform, source_kind, source_url, enabled, schedule_mode, schedule_every_sec, notify_channel, options_json, created_at, updated_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  source_id, name, platform, source_kind, source_url, enabled, schedule_mode, schedule_every_sec, schedule_at, notify_channel, options_json, created_at, updated_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON DUPLICATE KEY UPDATE
   name = VALUES(name),
   platform = VALUES(platform),
@@ -169,16 +182,17 @@ ON DUPLICATE KEY UPDATE
   enabled = VALUES(enabled),
   schedule_mode = VALUES(schedule_mode),
   schedule_every_sec = VALUES(schedule_every_sec),
+  schedule_at = VALUES(schedule_at),
   notify_channel = VALUES(notify_channel),
   options_json = VALUES(options_json),
   updated_at = VALUES(updated_at)`,
 			src.ID, nullStr(src.Name), src.Platform, src.Type, src.URL, boolInt(src.Enabled), src.ScheduleMode,
-			int64(src.Interval.Seconds()), nullStr(src.NotifyTo), nullStr(optionsJSON), src.CreatedAt.Format(time.RFC3339), src.UpdatedAt.Format(time.RFC3339))
+			int64(src.Interval.Seconds()), nullStr(src.ScheduleAt), nullStr(src.NotifyTo), nullStr(optionsJSON), src.CreatedAt.Format(time.RFC3339), src.UpdatedAt.Format(time.RFC3339))
 		return err
 	}
 	_, err = s.db.ExecContext(ctx, `INSERT INTO dc_watchlist_sources (
-  source_id, name, platform, source_kind, source_url, enabled, schedule_mode, schedule_every_sec, notify_channel, options_json, created_at, updated_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  source_id, name, platform, source_kind, source_url, enabled, schedule_mode, schedule_every_sec, schedule_at, notify_channel, options_json, created_at, updated_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(source_id) DO UPDATE SET
   name = excluded.name,
   platform = excluded.platform,
@@ -187,16 +201,17 @@ ON CONFLICT(source_id) DO UPDATE SET
   enabled = excluded.enabled,
   schedule_mode = excluded.schedule_mode,
   schedule_every_sec = excluded.schedule_every_sec,
+  schedule_at = excluded.schedule_at,
   notify_channel = excluded.notify_channel,
   options_json = excluded.options_json,
   updated_at = excluded.updated_at`,
 		src.ID, nullStr(src.Name), src.Platform, src.Type, src.URL, boolInt(src.Enabled), src.ScheduleMode,
-		int64(src.Interval.Seconds()), nullStr(src.NotifyTo), nullStr(optionsJSON), src.CreatedAt.Format(time.RFC3339), src.UpdatedAt.Format(time.RFC3339))
+		int64(src.Interval.Seconds()), nullStr(src.ScheduleAt), nullStr(src.NotifyTo), nullStr(optionsJSON), src.CreatedAt.Format(time.RFC3339), src.UpdatedAt.Format(time.RFC3339))
 	return err
 }
 
 func (s *Store) ListSources(ctx context.Context, enabledOnly bool) ([]WatchSource, error) {
-	query := `SELECT source_id, COALESCE(name, ''), platform, source_kind, source_url, enabled, schedule_mode, schedule_every_sec, COALESCE(notify_channel, ''), COALESCE(options_json, ''), created_at, updated_at
+	query := `SELECT source_id, COALESCE(name, ''), platform, source_kind, source_url, enabled, schedule_mode, schedule_every_sec, COALESCE(schedule_at, ''), COALESCE(notify_channel, ''), COALESCE(options_json, ''), created_at, updated_at
 FROM dc_watchlist_sources`
 	if enabledOnly {
 		query += ` WHERE enabled = 1`
@@ -223,7 +238,7 @@ func (s *Store) GetSource(ctx context.Context, id string) (WatchSource, error) {
 	if id == "" {
 		return WatchSource{}, fmt.Errorf("watchlist source id is required")
 	}
-	row := s.db.QueryRowContext(ctx, `SELECT source_id, COALESCE(name, ''), platform, source_kind, source_url, enabled, schedule_mode, schedule_every_sec, COALESCE(notify_channel, ''), COALESCE(options_json, ''), created_at, updated_at
+	row := s.db.QueryRowContext(ctx, `SELECT source_id, COALESCE(name, ''), platform, source_kind, source_url, enabled, schedule_mode, schedule_every_sec, COALESCE(schedule_at, ''), COALESCE(notify_channel, ''), COALESCE(options_json, ''), created_at, updated_at
 FROM dc_watchlist_sources WHERE source_id = ?`, id)
 	src, err := scanSource(row)
 	if err == sql.ErrNoRows {
@@ -282,7 +297,7 @@ func scanSource(scanner sourceScanner) (WatchSource, error) {
 	var enabled int
 	var everySec int64
 	var optionsJSON, createdAt, updatedAt string
-	if err := scanner.Scan(&src.ID, &src.Name, &src.Platform, &src.Type, &src.URL, &enabled, &src.ScheduleMode, &everySec, &src.NotifyTo, &optionsJSON, &createdAt, &updatedAt); err != nil {
+	if err := scanner.Scan(&src.ID, &src.Name, &src.Platform, &src.Type, &src.URL, &enabled, &src.ScheduleMode, &everySec, &src.ScheduleAt, &src.NotifyTo, &optionsJSON, &createdAt, &updatedAt); err != nil {
 		return WatchSource{}, err
 	}
 	src.Enabled = enabled != 0
@@ -313,6 +328,9 @@ func (s *Store) migrate() error {
 		return err
 	}
 	if err := s.addColumnIfMissing("dc_watchlist_delivery", "message_provider", s.shortTextColumnType()); err != nil {
+		return err
+	}
+	if err := s.addColumnIfMissing("dc_watchlist_sources", "schedule_at", s.shortTextColumnType()); err != nil {
 		return err
 	}
 	if s.dialect == "sqlite" {
@@ -355,6 +373,7 @@ func sqliteMigrationStatements() []string {
   enabled INTEGER NOT NULL DEFAULT 1,
   schedule_mode TEXT NOT NULL DEFAULT 'interval',
   schedule_every_sec INTEGER NOT NULL DEFAULT 21600,
+  schedule_at TEXT,
   notify_channel TEXT,
   options_json TEXT,
   created_at TEXT NOT NULL,
@@ -481,6 +500,7 @@ func mysqlMigrationStatements() []string {
   enabled TINYINT NOT NULL DEFAULT 1,
   schedule_mode VARCHAR(64) NOT NULL DEFAULT 'interval',
   schedule_every_sec BIGINT NOT NULL DEFAULT 21600,
+  schedule_at VARCHAR(64),
   notify_channel VARCHAR(191),
   options_json LONGTEXT,
   created_at VARCHAR(64) NOT NULL,
@@ -1091,6 +1111,25 @@ LIMIT ?`, watchID, StatusNotifyFailed, now, limit)
 		out = append(out, d)
 	}
 	return out, rows.Err()
+}
+
+func (s *Store) HasNotifiedContentOnDate(ctx context.Context, watchID string, day time.Time) (bool, error) {
+	if day.IsZero() {
+		day = time.Now()
+	}
+	localStart := time.Date(day.In(time.Local).Year(), day.In(time.Local).Month(), day.In(time.Local).Day(), 0, 0, 0, 0, time.Local)
+	start := localStart.UTC().Format(time.RFC3339)
+	end := localStart.Add(24 * time.Hour).UTC().Format(time.RFC3339)
+	var n int
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(1)
+FROM dc_watchlist_delivery
+WHERE watch_id = ?
+  AND status = ?
+  AND notified_at >= ?
+  AND notified_at < ?
+  AND content_key NOT LIKE '__no_update__:%'`,
+		watchID, StatusNotified, start, end).Scan(&n)
+	return n > 0, err
 }
 
 func (s *Store) HasAnyItem(ctx context.Context, watchID string) (bool, error) {

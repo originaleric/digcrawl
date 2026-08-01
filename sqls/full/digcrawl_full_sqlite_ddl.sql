@@ -62,6 +62,7 @@ CREATE TABLE IF NOT EXISTS dc_watchlist_sources (
   enabled            INTEGER NOT NULL DEFAULT 1,
   schedule_mode      TEXT NOT NULL DEFAULT 'interval',
   schedule_every_sec INTEGER NOT NULL DEFAULT 21600,
+  schedule_at        TEXT,
   notify_channel     TEXT,
   options_json       TEXT,
   created_at         TEXT NOT NULL,

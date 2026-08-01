@@ -136,6 +136,7 @@ CREATE TABLE IF NOT EXISTS `dc_watchlist_sources` (
   `enabled` tinyint NOT NULL DEFAULT 1,
   `schedule_mode` varchar(64) NOT NULL DEFAULT 'interval',
   `schedule_every_sec` bigint NOT NULL DEFAULT 21600,
+  `schedule_at` varchar(64) NULL,
   `notify_channel` varchar(191) NULL,
   `options_json` longtext NULL,
   `created_at` varchar(64) NOT NULL,

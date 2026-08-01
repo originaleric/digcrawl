@@ -362,7 +362,9 @@ func (c ASRConfig) TimeoutSecOrDefault() int {
 // FFmpegPathOrDefault returns ffmpeg executable path.
 func (c ASRConfig) FFmpegPathOrDefault() string {
 	if strings.TrimSpace(c.FFmpegPath) != "" {
-		return strings.TrimSpace(c.FFmpegPath)
+		if expanded := strings.TrimSpace(os.ExpandEnv(strings.TrimSpace(c.FFmpegPath))); expanded != "" {
+			return expanded
+		}
 	}
 	return "ffmpeg"
 }

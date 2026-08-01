@@ -269,6 +269,18 @@ func TestASRConfigProviderAwareModelDefault(t *testing.T) {
 	}
 }
 
+func TestASRConfigFFmpegPathExpandsEnv(t *testing.T) {
+	t.Setenv("DIGCRAWL_FFMPEG_PATH", "/opt/homebrew/bin/ffmpeg")
+	cfg := ASRConfig{FFmpegPath: "${DIGCRAWL_FFMPEG_PATH}"}
+	if got := cfg.FFmpegPathOrDefault(); got != "/opt/homebrew/bin/ffmpeg" {
+		t.Fatalf("FFmpegPathOrDefault=%q", got)
+	}
+	t.Setenv("DIGCRAWL_FFMPEG_PATH", "")
+	if got := cfg.FFmpegPathOrDefault(); got != "ffmpeg" {
+		t.Fatalf("empty expanded FFmpegPath should fall back to command name, got %q", got)
+	}
+}
+
 func TestLoadParsesScheduledTasks(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	data := []byte(`

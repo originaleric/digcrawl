@@ -101,6 +101,40 @@ func TestValidateNotificationConfigValidatesItemNotifyTo(t *testing.T) {
 	}
 }
 
+func TestValidateNotificationConfigDatabaseModeIgnoresYAMLItems(t *testing.T) {
+	cfg := baseNotificationConfig()
+	cfg.Watchlist.Source.Mode = "database"
+	cfg.Watchlist.Items[0].NotifyTo = "missing-channel"
+	if err := validateNotificationConfig(cfg); err != nil {
+		t.Fatalf("database source mode should not validate YAML watchlist items: %v", err)
+	}
+}
+
+func TestValidateDatabaseNotificationConfigValidatesSourceNotifyTo(t *testing.T) {
+	ctx := context.Background()
+	st, err := watchlist.OpenStore(filepath.Join(t.TempDir(), "watch.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	if err := st.UpsertSource(ctx, watchlist.WatchSource{
+		ID:       "db-source",
+		Platform: "rss",
+		Type:     "rss",
+		URL:      "https://example.com/feed.xml",
+		Enabled:  true,
+		NotifyTo: "missing-channel",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	cfg := baseNotificationConfig()
+	cfg.Watchlist.Source.Mode = "database"
+	err = validateDatabaseNotificationConfig(ctx, cfg, st)
+	if err == nil || !strings.Contains(err.Error(), "missing-channel") {
+		t.Fatalf("expected database source NotifyTo validation error, got %v", err)
+	}
+}
+
 func TestValidateNotificationConfigAcceptsEnvWebhook(t *testing.T) {
 	t.Setenv("FEISHU_WEBHOOK_URL", "https://example.com/env-webhook")
 	cfg := baseNotificationConfig()
@@ -207,6 +241,44 @@ func TestNormalizeTaskRejectsUnsupportedScheduleMode(t *testing.T) {
 	_, err := svc.normalizeItem(items[0])
 	if err == nil || !strings.Contains(err.Error(), "unsupported mode") {
 		t.Fatalf("expected unsupported schedule error, got %v", err)
+	}
+}
+
+func TestDatabaseWatchlistItemsPreservesSourceSchedule(t *testing.T) {
+	st, err := watchlist.OpenStore(t.TempDir() + "/watchlist.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	ctx := context.Background()
+	if err := st.UpsertSource(ctx, watchlist.WatchSource{
+		ID:           "daily-db-source",
+		Platform:     "toutiao",
+		Type:         "toutiao_author",
+		URL:          "https://www.toutiao.com/c/user/token/example/?tab=wtt",
+		Enabled:      true,
+		ScheduleMode: "daily",
+		Interval:     24 * time.Hour,
+		ScheduleAt:   "09:00",
+		NotifyTo:     "feishu-default",
+		Options:      map[string]any{"limit": 2},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	svc := &Service{cfg: &config.Config{Watchlist: config.WatchlistConfig{DefaultInterval: "6h"}}, store: st}
+	items, err := svc.databaseWatchlistItems(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("items len=%d", len(items))
+	}
+	item, err := svc.normalizeItem(items[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if item.ScheduleMode != "daily" || item.ScheduleAt != "09:00" || item.Interval != 24*time.Hour {
+		t.Fatalf("item schedule mismatch: %+v", item)
 	}
 }
 
@@ -535,6 +607,53 @@ func TestRunItemReportsSuppressedNoUpdateWhenDiscoveryIncomplete(t *testing.T) {
 	}
 	if sum.Notified != 0 || len(sum.Errors) != 0 {
 		t.Fatalf("suppressed no-update should be observable but not a notify/error result: %+v", sum)
+	}
+}
+
+func TestRunItemSuppressesNoUpdateAfterSameDayContentNotification(t *testing.T) {
+	ctx := context.Background()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`<?xml version="1.0"?><rss><channel><item><title>A</title><link>https://example.com/a</link><guid>g1</guid></item></channel></rss>`))
+	}))
+	defer srv.Close()
+
+	st, err := watchlist.OpenStore(filepath.Join(t.TempDir(), "watch.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	item := WatchItem{
+		ID: "rss-local", Platform: "rss", Type: "rss", URL: srv.URL, NotifyTo: "feishu-default",
+		Options: map[string]any{"notify_no_update": true, "limit": 1},
+	}
+	if _, err := st.UpsertDiscovered(ctx, item.ID, FeedItem{
+		ID: "g1", ContentKey: "g1", URL: "https://example.com/a", Title: "A",
+	}, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.UpdateItemStatus(ctx, item.ID, "g1", StatusNotified, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.UpsertDelivery(ctx, item.ID, "g1", "feishu-default", StatusNotified, "", false, "A", "summary"); err != nil {
+		t.Fatal(err)
+	}
+	notifier := &recordingNotifier{}
+	svc := &Service{
+		cfg:      &config.Config{Watchlist: config.WatchlistConfig{DefaultInterval: "6h"}},
+		store:    st,
+		feeds:    FeedRegistry{Client: srv.Client()},
+		notifier: notifier,
+	}
+	sum, err := svc.RunItem(ctx, item)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !sum.NoUpdateSuppressed || !strings.Contains(sum.NoUpdateSuppressedReason, "already notified real content today") {
+		t.Fatalf("expected same-day content suppression, got %+v", sum)
+	}
+	if sum.Notified != 0 || notifier.calls != 0 {
+		t.Fatalf("same-day content notification should suppress no-update send, summary=%+v calls=%d", sum, notifier.calls)
 	}
 }
 

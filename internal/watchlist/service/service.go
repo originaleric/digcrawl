@@ -57,6 +57,10 @@ func NewService(cfg *config.Config) (*Service, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := validateDatabaseNotificationConfig(context.Background(), cfg, st); err != nil {
+		_ = st.Close()
+		return nil, err
+	}
 	collector, err := collect.NewService(cfg)
 	if err != nil {
 		_ = st.Close()
@@ -244,9 +248,32 @@ func validateNotificationConfig(cfg *config.Config) error {
 	if !cfg.Watchlist.EnabledOrDefault() || cfg.Watchlist.DryRunOrDefault() {
 		return nil
 	}
+	channels, _, err := validatedFeishuChannels(cfg)
+	if err != nil {
+		return err
+	}
+	if cfg.Watchlist.SourceModeOrDefault() != "database" {
+		for _, item := range configuredWatchlistItems(cfg) {
+			if !item.EnabledOrDefault() {
+				continue
+			}
+			id := strings.TrimSpace(item.NotifyTo)
+			if id == "" {
+				continue
+			}
+			context := fmt.Sprintf("watchlist item %q NotifyTo", strings.TrimSpace(item.ID))
+			if err := validateFeishuChannel(channels, id, context); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func validatedFeishuChannels(cfg *config.Config) (map[string]config.FeishuChannel, string, error) {
 	feishu := cfg.Notifications.Feishu
 	if !feishu.EnabledOrDefault() {
-		return fmt.Errorf("watchlist notifications are not configured; enable Notifications.Feishu or set Watchlist.DryRun=true")
+		return nil, "", fmt.Errorf("watchlist notifications are not configured; enable Notifications.Feishu or set Watchlist.DryRun=true")
 	}
 	channels := map[string]config.FeishuChannel{}
 	defaultID := strings.TrimSpace(feishu.DefaultChannel)
@@ -256,7 +283,7 @@ func validateNotificationConfig(cfg *config.Config) error {
 			continue
 		}
 		if _, exists := channels[id]; exists {
-			return fmt.Errorf("feishu notification channel %q is duplicated", id)
+			return nil, "", fmt.Errorf("feishu notification channel %q is duplicated", id)
 		}
 		channels[id] = ch
 		if defaultID == "" {
@@ -266,29 +293,42 @@ func validateNotificationConfig(cfg *config.Config) error {
 	for _, ch := range channels {
 		if isFeishuAppChannel(ch) {
 			if strings.TrimSpace(os.ExpandEnv(strings.TrimSpace(feishu.AppID))) == "" || strings.TrimSpace(os.ExpandEnv(strings.TrimSpace(feishu.AppSecret))) == "" {
-				return fmt.Errorf("feishu app channel requires AppID and AppSecret")
+				return nil, "", fmt.Errorf("feishu app channel requires AppID and AppSecret")
 			}
 			break
 		}
 	}
 	if len(channels) == 0 {
-		return fmt.Errorf("feishu notifications require at least one channel")
+		return nil, "", fmt.Errorf("feishu notifications require at least one channel")
 	}
 	if defaultID == "" {
-		return fmt.Errorf("feishu default channel is required")
+		return nil, "", fmt.Errorf("feishu default channel is required")
 	}
 	if err := validateFeishuChannel(channels, defaultID, "default channel"); err != nil {
+		return nil, "", err
+	}
+	return channels, defaultID, nil
+}
+
+func validateDatabaseNotificationConfig(ctx context.Context, cfg *config.Config, st *watchlist.Store) error {
+	mode := cfg.Watchlist.SourceModeOrDefault()
+	if !cfg.Watchlist.EnabledOrDefault() || cfg.Watchlist.DryRunOrDefault() || (mode != "database" && mode != "mixed") {
+		return nil
+	}
+	channels, _, err := validatedFeishuChannels(cfg)
+	if err != nil {
 		return err
 	}
-	for _, item := range configuredWatchlistItems(cfg) {
-		if !item.EnabledOrDefault() {
-			continue
-		}
-		id := strings.TrimSpace(item.NotifyTo)
+	sources, err := st.ListSources(ctx, true)
+	if err != nil {
+		return fmt.Errorf("validate database watchlist notifications: %w", err)
+	}
+	for _, src := range sources {
+		id := strings.TrimSpace(src.NotifyTo)
 		if id == "" {
 			continue
 		}
-		context := fmt.Sprintf("watchlist item %q NotifyTo", strings.TrimSpace(item.ID))
+		context := fmt.Sprintf("database watchlist source %q NotifyTo", strings.TrimSpace(src.ID))
 		if err := validateFeishuChannel(channels, id, context); err != nil {
 			return err
 		}
@@ -577,7 +617,12 @@ func (s *Service) RunItem(ctx context.Context, item WatchItem) (RunSummary, erro
 		sum.Errors = append(sum.Errors, notifyResult.Error)
 	}
 	if !baseline && sum.NewItems == 0 {
-		if shouldNotifyNoUpdateForRun(item.Options, sum.Discovered, sum.Errors, contentActivity) {
+		if alreadyNotified, err := s.store.HasNotifiedContentOnDate(ctx, item.ID, time.Now()); err != nil {
+			sum.Errors = append(sum.Errors, err.Error())
+		} else if alreadyNotified {
+			sum.NoUpdateSuppressed = true
+			sum.NoUpdateSuppressedReason = "source already notified real content today; no-update notification suppressed"
+		} else if shouldNotifyNoUpdateForRun(item.Options, sum.Discovered, sum.Errors, contentActivity) {
 			if err := s.notifyNoUpdate(ctx, item, time.Now()); err != nil {
 				sum.Errors = append(sum.Errors, err.Error())
 			} else {
@@ -804,6 +849,15 @@ func (s *Service) databaseWatchlistItems(ctx context.Context) ([]config.Watchlis
 		if src.Interval > 0 {
 			interval = src.Interval.String()
 		}
+		options := cloneOptions(src.Options)
+		mode := strings.ToLower(strings.TrimSpace(src.ScheduleMode))
+		if mode == "" {
+			mode = "interval"
+		}
+		options["_task_schedule_mode"] = mode
+		if strings.TrimSpace(src.ScheduleAt) != "" {
+			options["_task_schedule_at"] = strings.TrimSpace(src.ScheduleAt)
+		}
 		items = append(items, config.WatchlistItem{
 			ID:       src.ID,
 			Platform: src.Platform,
@@ -813,10 +867,18 @@ func (s *Service) databaseWatchlistItems(ctx context.Context) ([]config.Watchlis
 			Interval: interval,
 			NotifyTo: src.NotifyTo,
 			Enabled:  &enabled,
-			Options:  src.Options,
+			Options:  options,
 		})
 	}
 	return items, nil
+}
+
+func cloneOptions(in map[string]any) map[string]any {
+	out := make(map[string]any, len(in)+2)
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
 }
 
 func configuredWatchlistItems(cfg *config.Config) []config.WatchlistItem {

@@ -6,6 +6,7 @@
 #   ./scripts/digcrawl-watchlist-service.sh build
 #   ./scripts/digcrawl-watchlist-service.sh rebuild
 #   ./scripts/digcrawl-watchlist-service.sh rebuild-restart
+#   ./scripts/digcrawl-watchlist-service.sh configure-ffmpeg
 #   ./scripts/digcrawl-watchlist-service.sh start|stop|restart|status|logs|uninstall
 #
 # Optional environment overrides:
@@ -19,6 +20,8 @@
 #   DIGCRAWL_BUILD_TAGS=digflow_embedded
 #   DIGCRAWL_BUILD_GOCACHE=/private/tmp/digcrawl-gocache
 #   DIGCRAWL_BUILD_GOMODCACHE=<workdir>/.tmp/go-mod-watchlist
+#   DIGCRAWL_SERVICE_PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
+#   DIGCRAWL_FFMPEG_PATH=/path/to/ffmpeg
 
 set -euo pipefail
 
@@ -34,6 +37,8 @@ DIGCRAWL_AUTO_BUILD="${DIGCRAWL_AUTO_BUILD:-1}"
 DIGCRAWL_BUILD_TAGS="${DIGCRAWL_BUILD_TAGS:-digflow_embedded}"
 DIGCRAWL_BUILD_GOCACHE="${DIGCRAWL_BUILD_GOCACHE:-/private/tmp/digcrawl-gocache}"
 DIGCRAWL_BUILD_GOMODCACHE="${DIGCRAWL_BUILD_GOMODCACHE:-${WORKDIR}/.tmp/go-mod-watchlist}"
+DIGCRAWL_SERVICE_PATH="${DIGCRAWL_SERVICE_PATH:-/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin}"
+DIGCRAWL_FFMPEG_PATH="${DIGCRAWL_FFMPEG_PATH:-}"
 
 if [[ -n "${DIGCRAWL_BIN:-}" ]]; then
   BIN_PATH="${DIGCRAWL_BIN}"
@@ -50,7 +55,7 @@ OS_NAME="$(uname -s)"
 
 usage() {
   cat <<EOF
-Usage: $(basename "$0") <install|build|rebuild|rebuild-restart|start|stop|restart|status|logs|uninstall|run-foreground>
+Usage: $(basename "$0") <install|build|rebuild|rebuild-restart|configure-ffmpeg|start|stop|restart|status|logs|uninstall|run-foreground>
 
 Environment:
   DIGCRAWL_BIN            default: ${BIN_PATH:-<not found>}
@@ -63,6 +68,8 @@ Environment:
   DIGCRAWL_BUILD_TAGS     default: ${DIGCRAWL_BUILD_TAGS}
   DIGCRAWL_BUILD_GOCACHE  default: ${DIGCRAWL_BUILD_GOCACHE}
   DIGCRAWL_BUILD_GOMODCACHE default: ${DIGCRAWL_BUILD_GOMODCACHE}
+  DIGCRAWL_SERVICE_PATH   default: ${DIGCRAWL_SERVICE_PATH}
+  DIGCRAWL_FFMPEG_PATH    default: ${DIGCRAWL_FFMPEG_PATH:-<auto-detect>}
 EOF
 }
 
@@ -78,6 +85,80 @@ require_binary() {
 
 require_config() {
   [[ -f "${CONFIG_PATH}" ]] || fail "config file not found: ${CONFIG_PATH}"
+}
+
+detect_ffmpeg_path() {
+  local candidates=()
+  if [[ -n "${DIGCRAWL_FFMPEG_PATH:-}" ]]; then
+    candidates+=("${DIGCRAWL_FFMPEG_PATH}")
+  fi
+  local path_ffmpeg
+  path_ffmpeg="$(PATH="${DIGCRAWL_SERVICE_PATH}:${PATH:-}" command -v ffmpeg 2>/dev/null || true)"
+  if [[ -n "${path_ffmpeg}" ]]; then
+    candidates+=("${path_ffmpeg}")
+  fi
+  candidates+=("/opt/homebrew/bin/ffmpeg" "/usr/local/bin/ffmpeg" "/usr/bin/ffmpeg")
+  local candidate
+  for candidate in "${candidates[@]}"; do
+    if [[ -n "${candidate}" && -x "${candidate}" ]]; then
+      printf '%s\n' "${candidate}"
+      return 0
+    fi
+  done
+  return 1
+}
+
+ensure_ffmpeg_env() {
+  local ffmpeg_path
+  ffmpeg_path="$(detect_ffmpeg_path)" || fail "ffmpeg not found; install ffmpeg or set DIGCRAWL_FFMPEG_PATH=/path/to/ffmpeg"
+  DIGCRAWL_FFMPEG_PATH="${ffmpeg_path}"
+  export DIGCRAWL_FFMPEG_PATH
+  local ffmpeg_dir
+  ffmpeg_dir="$(dirname "${ffmpeg_path}")"
+  case ":${DIGCRAWL_SERVICE_PATH}:" in
+    *":${ffmpeg_dir}:"*) ;;
+    *) DIGCRAWL_SERVICE_PATH="${ffmpeg_dir}:${DIGCRAWL_SERVICE_PATH}" ;;
+  esac
+  export DIGCRAWL_SERVICE_PATH
+  export PATH="${DIGCRAWL_SERVICE_PATH}:${PATH:-}"
+}
+
+configure_ffmpeg() {
+  require_config
+  ensure_ffmpeg_env
+  local tmp
+  tmp="$(mktemp "${CONFIG_PATH}.tmp.XXXXXX")"
+  local config_mode
+  case "${OS_NAME}" in
+    Darwin)
+      config_mode="$(stat -f '%Lp' "${CONFIG_PATH}" 2>/dev/null || true)"
+      ;;
+    Linux)
+      config_mode="$(stat -c '%a' "${CONFIG_PATH}" 2>/dev/null || true)"
+      ;;
+    *)
+      config_mode=""
+      ;;
+  esac
+  chmod "${config_mode:-600}" "${tmp}" 2>/dev/null || chmod 600 "${tmp}"
+  awk '
+    BEGIN { in_asr = 0; done = 0 }
+    /^ASR:[[:space:]]*$/ { in_asr = 1 }
+    /^[^[:space:]#][^:]*:/ && $0 !~ /^ASR:/ { if (in_asr) in_asr = 0 }
+    in_asr && /^[[:space:]]*FFmpegPath:/ {
+      print "  FFmpegPath: \"${DIGCRAWL_FFMPEG_PATH}\""
+      done = 1
+      next
+    }
+    { print }
+    END { if (!done) exit 42 }
+  ' "${CONFIG_PATH}" >"${tmp}" || {
+    rm -f "${tmp}"
+    fail "failed to update ASR.FFmpegPath in ${CONFIG_PATH}"
+  }
+  mv "${tmp}" "${CONFIG_PATH}"
+  echo "configured ASR.FFmpegPath=\${DIGCRAWL_FFMPEG_PATH}"
+  echo "detected DIGCRAWL_FFMPEG_PATH=${DIGCRAWL_FFMPEG_PATH}"
 }
 
 build_binary() {
@@ -154,6 +235,7 @@ use_installed_bin_path_if_available() {
 
 install_macos() {
   require_config
+  ensure_ffmpeg_env
   build_binary
   mkdir -p "${HOME}/Library/LaunchAgents" "${LOG_DIR}"
   local plist
@@ -190,6 +272,12 @@ install_macos() {
     <string>$(xml_escape "${DIGCRAWL_BUILD_GOCACHE}")</string>
     <key>DIGCRAWL_BUILD_GOMODCACHE</key>
     <string>$(xml_escape "${DIGCRAWL_BUILD_GOMODCACHE}")</string>
+    <key>DIGCRAWL_SERVICE_PATH</key>
+    <string>$(xml_escape "${DIGCRAWL_SERVICE_PATH}")</string>
+    <key>DIGCRAWL_FFMPEG_PATH</key>
+    <string>$(xml_escape "${DIGCRAWL_FFMPEG_PATH}")</string>
+    <key>PATH</key>
+    <string>$(xml_escape "${DIGCRAWL_SERVICE_PATH}")</string>
   </dict>
   <key>RunAtLoad</key>
   <true/>
@@ -207,6 +295,7 @@ EOF
 
 install_linux() {
   require_config
+  ensure_ffmpeg_env
   build_binary
   mkdir -p "${HOME}/.config/systemd/user" "${LOG_DIR}"
   local unit
@@ -227,6 +316,9 @@ Environment=$(systemd_quote "DIGCRAWL_AUTO_BUILD=${DIGCRAWL_AUTO_BUILD}")
 Environment=$(systemd_quote "DIGCRAWL_BUILD_TAGS=${DIGCRAWL_BUILD_TAGS}")
 Environment=$(systemd_quote "DIGCRAWL_BUILD_GOCACHE=${DIGCRAWL_BUILD_GOCACHE}")
 Environment=$(systemd_quote "DIGCRAWL_BUILD_GOMODCACHE=${DIGCRAWL_BUILD_GOMODCACHE}")
+Environment=$(systemd_quote "DIGCRAWL_SERVICE_PATH=${DIGCRAWL_SERVICE_PATH}")
+Environment=$(systemd_quote "DIGCRAWL_FFMPEG_PATH=${DIGCRAWL_FFMPEG_PATH}")
+Environment=$(systemd_quote "PATH=${DIGCRAWL_SERVICE_PATH}")
 ExecStart=$(systemd_quote "${SELF_PATH}") run-foreground
 Restart=always
 RestartSec=10
@@ -350,6 +442,7 @@ logs_file() {
 run_foreground() {
   require_config
   require_binary
+  ensure_ffmpeg_env
   mkdir -p "${LOG_DIR}"
   cd "${WORKDIR}"
   exec "${BIN_PATH}" watchlist serve --config "${CONFIG_PATH}"
@@ -379,6 +472,9 @@ case "${cmd}" in
     require_config
     use_installed_bin_path_if_available
     build_binary
+    ;;
+  configure-ffmpeg)
+    configure_ffmpeg
     ;;
   rebuild-restart|deploy)
     require_config

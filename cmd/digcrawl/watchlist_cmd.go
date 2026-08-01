@@ -237,7 +237,7 @@ func runWatchlistSourceList(args []string) {
 	for _, src := range sources {
 		out = append(out, watchlistSourceView{
 			ID: src.ID, Name: src.Name, Platform: src.Platform, Kind: src.Type, URL: src.URL,
-			Enabled: src.Enabled, ScheduleMode: src.ScheduleMode, Every: src.Interval.String(),
+			Enabled: src.Enabled, ScheduleMode: src.ScheduleMode, Every: src.Interval.String(), At: src.ScheduleAt,
 			NotifyTo: src.NotifyTo, Options: src.Options,
 		})
 	}
@@ -254,6 +254,7 @@ type watchlistSourceView struct {
 	Enabled      bool           `json:"enabled"`
 	ScheduleMode string         `json:"schedule_mode"`
 	Every        string         `json:"every"`
+	At           string         `json:"at,omitempty"`
 	NotifyTo     string         `json:"notify_to,omitempty"`
 	Options      map[string]any `json:"options,omitempty"`
 }
@@ -267,6 +268,8 @@ func runWatchlistSourceAdd(args []string) {
 	kind := fs.String("kind", "", "source kind, e.g. rss/sitemap/reddit_subreddit/reddit_user/reddit_post_comments/toutiao_author/toutiao_article/toutiao_video/x_user/x_post/douyin_user/douyin_video/xiaohongshu_user/xiaohongshu_note/wechat_list/wechat_article/bilibili_user/bilibili_video/weibo_user/weibo_post/kuaishou_user/kuaishou_video/zhihu_user/zhihu_answer/zhihu_article/zhihu_zvideo/web_list")
 	sourceURL := fs.String("url", "", "source URL")
 	every := fs.String("every", "6h", "scan interval")
+	scheduleMode := fs.String("schedule-mode", "interval", "schedule mode: interval or daily")
+	at := fs.String("at", "", "daily schedule time in HH:MM")
 	notify := fs.String("notify", "", "notification channel id")
 	enabled := fs.Bool("enabled", true, "enable source")
 	optionsRaw := fs.String("options", "", "JSON object options")
@@ -288,7 +291,7 @@ func runWatchlistSourceAdd(args []string) {
 	defer st.Close()
 	if err := st.UpsertSource(context.Background(), watchlist.WatchSource{
 		ID: *id, Name: *name, Platform: *platform, Type: *kind, URL: *sourceURL,
-		Enabled: *enabled, ScheduleMode: "interval", Interval: interval, NotifyTo: *notify, Options: options,
+		Enabled: *enabled, ScheduleMode: *scheduleMode, Interval: interval, ScheduleAt: *at, NotifyTo: *notify, Options: options,
 	}); err != nil {
 		log.Fatal(err)
 	}

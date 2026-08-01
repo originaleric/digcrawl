@@ -93,6 +93,35 @@ func TestStoreDeliveryRetryState(t *testing.T) {
 	}
 }
 
+func TestStoreDetectsSameDayContentDelivery(t *testing.T) {
+	ctx := context.Background()
+	st, err := OpenStore(filepath.Join(t.TempDir(), "watch.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	if err := st.UpsertDelivery(ctx, "w1", "__no_update__:2026-08-01", "c1", StatusNotified, "", false, "none", "none"); err != nil {
+		t.Fatal(err)
+	}
+	ok, err := st.HasNotifiedContentOnDate(ctx, "w1", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok {
+		t.Fatal("no-update marker must not count as real content")
+	}
+	if err := st.UpsertDelivery(ctx, "w1", "content-1", "c1", StatusNotified, "", false, "title", "summary"); err != nil {
+		t.Fatal(err)
+	}
+	ok, err = st.HasNotifiedContentOnDate(ctx, "w1", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("same-day real content delivery should be detected")
+	}
+}
+
 func TestStoreUpdatesCollectedMetadataWithoutBlankingExistingValues(t *testing.T) {
 	ctx := context.Background()
 	st, err := OpenStore(filepath.Join(t.TempDir(), "watch.db"))

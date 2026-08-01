@@ -44,6 +44,7 @@ type WatchSource struct {
 	Enabled      bool
 	ScheduleMode string
 	Interval     time.Duration
+	ScheduleAt   string
 	NotifyTo     string
 	Options      map[string]any
 	CreatedAt    time.Time

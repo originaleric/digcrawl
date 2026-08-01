@@ -116,6 +116,38 @@ func TestTaskRuntimeDailyScheduleUsesConfiguredLocalTime(t *testing.T) {
 	}
 }
 
+func TestWatchSourcePersistsDailySchedule(t *testing.T) {
+	st, err := OpenStore(t.TempDir() + "/watchlist.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	ctx := context.Background()
+	src := WatchSource{
+		ID:           "toutiao-wtt",
+		Name:         "头条微头条",
+		Platform:     "toutiao",
+		Type:         "toutiao_author",
+		URL:          "https://www.toutiao.com/c/user/token/example/?tab=wtt",
+		Enabled:      true,
+		ScheduleMode: "daily",
+		Interval:     24 * time.Hour,
+		ScheduleAt:   "09:00",
+		NotifyTo:     "feishu-default",
+		Options:      map[string]any{"limit": 2},
+	}
+	if err := st.UpsertSource(ctx, src); err != nil {
+		t.Fatal(err)
+	}
+	got, err := st.GetSource(ctx, src.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ScheduleMode != "daily" || got.ScheduleAt != "09:00" || got.Interval != 24*time.Hour {
+		t.Fatalf("source schedule mismatch: %+v", got)
+	}
+}
+
 func TestTaskRuntimeSyncsDisabledTasks(t *testing.T) {
 	st, err := OpenStore(t.TempDir() + "/watchlist.db")
 	if err != nil {

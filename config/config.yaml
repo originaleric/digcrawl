@@ -238,7 +238,7 @@ ASR:
   Prompt: ""
   ResponseFormat: "verbose_json"
   TimeoutSec: 300
-  FFmpegPath: "ffmpeg"
+  FFmpegPath: "${DIGCRAWL_FFMPEG_PATH}"
   TempDir: ""
   AudioSampleRate: 16000
   MaxAudioBytes: 26214400
@@ -271,7 +271,7 @@ Watchlist:
   #   database - 从 dc_watchlist_sources 读取，适合长期维护的大清单。
   #   mixed    - 同时读取 YAML 和数据库；同 ID 时数据库覆盖 YAML。
   Source:
-    Mode: mixed
+    Mode: database
   NotifyOnFirstRun: true
   MaxItemsPerRun: 2
   LockTTL: "30m"
@@ -308,26 +308,9 @@ Watchlist:
   #       Limit: 25
   #       IncludeComments: false
 
-# Tasks 是新的通用定时任务描述。watchlist.collect 会被映射为 Watchlist item 执行；
-# 旧 Watchlist.Items 仍兼容，后续任务类型会继续复用该结构。
-Tasks:
-  - ID: toutiao-daily-author-summary
-    Name: 头条号每日更新摘要
-    Type: watchlist.collect
-    Enabled: true
-    Schedule:
-      Mode: daily
-      At: "09:00"
-    Source:
-      Platform: toutiao
-      Kind: toutiao_author
-      URL: https://www.toutiao.com/c/user/token/Cib0Mn8hfUmV08zTwS5-_YbyDu95mr_xaTmGBTF2pvSOtOGSJ4hZaBpJCjwAAAAAAAAAAAAAULUmJ9yfoV4AL40sEiqnKTziYw2-OuxKt_JBi9A2s5ck4xLc4ZCWr4Y1lJRARde4DpEQvPSXDhjDxYPqBCIBA-son68=/?source=profile
-      Options:
-        limit: 2
-        wait_selector: "a[href]"
-        notify_no_update: true
-    Notify:
-      Channel: feishu-default
+# Tasks 仅保留为 YAML 模式的兼容入口。当前 Source.Mode=database，
+# Watchlist 清单和调度都以 dc_watchlist_sources 为唯一来源。
+Tasks: []
 # 示例：
 # Tasks:
 #   - ID: reddit-ai-watch
