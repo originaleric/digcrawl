@@ -11,6 +11,7 @@ Gateway:
     - douyin.video.read
     - toutiao.article.read
     - toutiao.video.read
+    - feed.read
     - bilibili.video.read
     - weibo.post.read
     - kuaishou.video.read
@@ -27,6 +28,7 @@ Gateway:
   ArtifactEnabled: true
   ArtifactDir: "storage/digcrawl/artifacts"
   ArtifactTTLMinutes: 60
+  ArtifactMaxInlineBytes: 10485760
   RequireApproval: true
 
 Collector:
@@ -53,6 +55,7 @@ Collector:
     - douyin.video.read
     - toutiao.article.read
     - toutiao.video.read
+    - feed.read
     - bilibili.video.read
     - weibo.post.read
     - kuaishou.video.read

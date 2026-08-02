@@ -47,6 +47,16 @@ source/list discover -> collect detail -> normalize -> media/OCR/ASR enrich -> s
 
 本机浏览器路径底层统一走 `internal/browser.BrowserBrowse`。头条、新增平台和列表 fallback 复用同一套 Chrome/Chromium 配置、Cookie store、allowed domain 和登录态；差别在于头条详情 provider 已有更完整的多策略 fallback，新平台详情 provider 后续会逐步补齐。Threads/Instagram 默认是 `auth_mode=public`，不读取本机 Cookie；只有全局 `Social.<Platform>.AuthMode=local_session` 和 source options `auth_mode=local_session` 同时开启时才复用登录态。
 
+### Agent Skill 与 MCP
+
+仓库内的 [`.agents/skills/digcrawl`](../.agents/skills/digcrawl/) 提供了面向 Codex、Claude Code 及其他 MCP 客户端的只读链接读取规范。将 [`config/digcrawl-skill.example.yaml`](../config/digcrawl-skill.example.yaml) 复制到用户目录，替换 Cookie 和 artifact 目录占位符后，使用以下命令启动本地服务：
+
+```bash
+digcrawl mcp --config /absolute/path/to/digcrawl-skill.yaml
+```
+
+Phase 1 仅暴露读取工具，不包含归档、下载媒体、Watchlist、浏览器交互或本地文件转写。`Gateway.AllowedDomains` 留空时允许任意 `http/https` 目标；配置后作为可选的访问收紧策略。用户明确请求截图时，返回当前视口图片；`Gateway.ArtifactMaxInlineBytes` 控制 MCP 附件上限，默认 `10485760`（10 MiB）。Cookie、artifact 和登录态始终保留在用户本机。
+
 ## 4. 常用命令
 
 构建：

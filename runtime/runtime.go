@@ -54,8 +54,29 @@ func (r *Runtime) Manifest() protocol.ToolManifest {
 		Runtime:        version.RuntimeName,
 		RuntimeVersion: version.RuntimeVersion,
 		InstanceID:     r.opts.InstanceID,
-		Tools:          r.reg.List(),
+		Tools:          r.allowedToolDescriptors(),
 	}
+}
+
+// allowedToolDescriptors returns exactly the tools that this runtime will accept.
+// The manifest is consumed by MCP and HTTP clients as the callable capability set,
+// so it must not advertise tools rejected later by the runtime allowlist.
+func (r *Runtime) allowedToolDescriptors() []protocol.ToolDescriptor {
+	tools := r.reg.List()
+	if len(r.opts.AllowedTools) == 0 {
+		return tools
+	}
+	allowed := make(map[string]struct{}, len(r.opts.AllowedTools))
+	for _, name := range r.opts.AllowedTools {
+		allowed[strings.TrimSpace(name)] = struct{}{}
+	}
+	out := make([]protocol.ToolDescriptor, 0, len(tools))
+	for _, tool := range tools {
+		if _, ok := allowed[tool.Name]; ok {
+			out = append(out, tool)
+		}
+	}
+	return out
 }
 
 // Execute runs a tool call and returns a ToolResult.

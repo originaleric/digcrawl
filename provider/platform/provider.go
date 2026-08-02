@@ -23,7 +23,7 @@ func (p *Provider) Name() string { return Name }
 func (p *Provider) Register(_ context.Context, reg *registry.Registry) error {
 	domains := p.ConfigDomains
 	if len(domains) == 0 {
-		domains = config.Get().LocalBrowser.AllowedDomains
+		domains = config.Get().Gateway.AllowedDomains
 	}
 	store := p.ArtifactStore
 	reg.Register(WechatArticleReadEntry(domains, store))

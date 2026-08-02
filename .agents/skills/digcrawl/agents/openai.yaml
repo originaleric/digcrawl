@@ -1,0 +1,4 @@
+interface:
+  display_name: "DigCrawl"
+  short_description: "Read local web and social content through DigCrawl"
+  default_prompt: "Use $digcrawl to read this link with local DigCrawl."

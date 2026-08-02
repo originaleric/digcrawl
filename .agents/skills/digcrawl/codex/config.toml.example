@@ -1,0 +1,4 @@
+# Add to the user's local Codex configuration.
+[mcp_servers.digcrawl]
+command = "/absolute/path/to/digcrawl"
+args = ["mcp", "--config", "/absolute/path/to/digcrawl-skill.yaml"]

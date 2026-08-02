@@ -18,6 +18,7 @@ import (
 	"github.com/go-rod/rod"
 	"github.com/go-rod/rod/lib/proto"
 	"github.com/originaleric/digcrawl/config"
+	"github.com/originaleric/digcrawl/runtime/policy"
 )
 
 var cookieDomainPattern = regexp.MustCompile(`^[a-zA-Z0-9.-]+$`)
@@ -26,7 +27,7 @@ var cookieFileLocks sync.Map
 // BrowserBrowseRequest 本地浏览器抓取请求
 type BrowserBrowseRequest struct {
 	URL             string `json:"url" jsonschema:"required,description=需要访问的目标网页 URL"`
-	Action          string `json:"action,omitempty" jsonschema:"description=动作类型，支持 read 或 screenshot，默认 read"`
+	Action          string `json:"action,omitempty" jsonschema:"description=动作类型，支持 read 或 screenshot（当前视口），默认 read"`
 	Mode            string `json:"mode,omitempty" jsonschema:"description=提取模式：full（完整内容）、snapshot（快照模式，仅可交互元素）、summary（摘要模式），默认 full"`
 	TabID           string `json:"tab_id,omitempty" jsonschema:"description=可选标签页ID，用于复用标签页"`
 	WaitSelector    string `json:"wait_selector,omitempty" jsonschema:"description=可选 CSS 选择器，等待目标元素出现后再提取"`
@@ -55,7 +56,8 @@ func BrowserBrowse(ctx context.Context, req *BrowserBrowseRequest) (*BrowserBrow
 		return nil, fmt.Errorf("url 不能为空")
 	}
 
-	cfg := normalizeLocalBrowserConfig(config.Get().LocalBrowser)
+	rootCfg := config.Get()
+	cfg := normalizeLocalBrowserConfig(rootCfg.LocalBrowser)
 	action := strings.ToLower(strings.TrimSpace(req.Action))
 	if action == "" {
 		action = "read"
@@ -76,7 +78,7 @@ func BrowserBrowse(ctx context.Context, req *BrowserBrowseRequest) (*BrowserBrow
 	if err != nil {
 		return nil, err
 	}
-	if err := checkAllowedDomain(targetURL.Hostname(), cfg.AllowedDomains); err != nil {
+	if err := policy.ValidateURLDomain(targetURL.String(), rootCfg.Gateway.AllowedDomains, nil); err != nil {
 		return nil, err
 	}
 
@@ -93,7 +95,7 @@ func BrowserBrowse(ctx context.Context, req *BrowserBrowseRequest) (*BrowserBrow
 	page := session.page.Timeout(time.Duration(cfg.TotalTimeoutSec) * time.Second)
 
 	if req.UseCookieDomain != "" {
-		if err := checkAllowedDomain(req.UseCookieDomain, cfg.AllowedDomains); err != nil {
+		if err := policy.ValidateURLDomain("https://"+req.UseCookieDomain, rootCfg.Gateway.AllowedDomains, nil); err != nil {
 			return nil, fmt.Errorf("cookie 域名不在白名单: %w", err)
 		}
 		if err := loadDomainCookies(page, req.UseCookieDomain, cfg.CookieStoreDir, targetURL); err != nil {
@@ -113,11 +115,14 @@ func BrowserBrowse(ctx context.Context, req *BrowserBrowseRequest) (*BrowserBrow
 		}
 	}
 
-	title, _ := pageTitle(page)
 	finalURL := targetURL.String()
 	if info, err := page.Info(); err == nil && strings.TrimSpace(info.URL) != "" {
 		finalURL = strings.TrimSpace(info.URL)
 	}
+	if err := policy.ValidateURLDomain(finalURL, rootCfg.Gateway.AllowedDomains, nil); err != nil {
+		return nil, err
+	}
+	title, _ := pageTitle(page)
 	resp := &BrowserBrowseResponse{
 		URL:   finalURL,
 		Title: title,
@@ -125,7 +130,7 @@ func BrowserBrowse(ctx context.Context, req *BrowserBrowseRequest) (*BrowserBrow
 
 	switch action {
 	case "screenshot":
-		imgBytes, err := page.Screenshot(true, nil)
+		imgBytes, err := page.Screenshot(false, nil)
 		if err != nil {
 			return nil, fmt.Errorf("页面截图失败: %w", err)
 		}

@@ -13,6 +13,10 @@
 | `stdio` | stdin/stdout 逐行 JSON 协议 | `digcrawl stdio` |
 | `devhost` | 基于 `host` 思路的最小参考宿主（仅本地开发调试） | `digcrawl dev-host` |
 
+## MCP 与 Agent Skill
+
+`digcrawl mcp --config <profile>` 通过 stdio 暴露 MCP。仓库级 Skill 位于 [`../.agents/skills/digcrawl/`](../.agents/skills/digcrawl/)，并提供 Codex、Claude Code 配置示例及最小 profile [`../config/digcrawl-skill.example.yaml`](../config/digcrawl-skill.example.yaml)。该 profile 默认只暴露链接读取工具；Cookie、artifact 与登录态均由用户本机目录保存。
+
 ## 宿主 HTTP 客户端
 
 业务宿主若需**主动请求**用户本机 Gateway（而非 Collector 反向连接），请使用仓库顶层 [`client/`](../client/) 包，而非 `transport` 下的实现。

@@ -28,7 +28,9 @@ func ValidateToolAllowed(toolName string, allowedTools []string) error {
 	return fmt.Errorf("%s: tool %q is not allowed", CodeToolNotAllowed, toolName)
 }
 
-// ValidateURLDomain validates http(s) URL and optional domain allowlists.
+// ValidateURLDomain validates an http(s) URL and an optional domain allowlist.
+// An empty allowlist deliberately permits every valid target: DigCrawl is a
+// local user tool, not a network isolation boundary.
 // callDomains from ToolCall.Policy take precedence when non-empty; otherwise configDomains apply.
 func ValidateURLDomain(rawURL string, callDomains, configDomains []string) error {
 	u, err := parseHTTPURL(rawURL)

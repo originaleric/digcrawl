@@ -101,6 +101,12 @@ go build -o digcrawl ./cmd/digcrawl
 go build -o digcollect ./cmd/digcollect
 ```
 
+## Agent Skill（Phase 1）
+
+仓库内的 [`.agents/skills/digcrawl`](.agents/skills/digcrawl/) 是 Codex 自动发现的仓库级 Skill，将 DigCrawl 的本地 MCP 能力提供给 Codex、Claude Code 等 Agent，用于只读链接内容。它会按 URL 选择平台读取工具，保留登录、验证码和频控等结构化错误，不会请求、展示或导出用户 Cookie。
+
+复制 [`config/digcrawl-skill.example.yaml`](config/digcrawl-skill.example.yaml) 到用户本机目录后，将 Cookie 与 artifact 目录占位符替换为用户拥有的绝对路径，再使用绝对路径将 `digcrawl mcp --config <profile>` 注册为 MCP 服务。默认可读取任意 `http/https` 网页；DigCrawl 是本地用户工具，不承担网络隔离职责。用户明确请求截图时，会返回当前视口图片并持久化到本地 artifact store；`Gateway.ArtifactMaxInlineBytes` 控制 MCP 附件上限，默认 10 MiB，过期文件会自动清理。`Gateway.AllowedDomains` 仅用于需要额外收紧访问范围的场景。Codex 和 Claude Code 的配置样例见 Skill 目录。
+
 采集单个链接：
 
 ```bash

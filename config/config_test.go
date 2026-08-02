@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 func TestCollectPersistModeHelpers(t *testing.T) {
@@ -134,6 +136,7 @@ func TestDefaultAllowedToolsIncludeSocialAndDomesticProviders(t *testing.T) {
 
 	cfg := Get()
 	for _, tool := range []string{
+		"feed.read",
 		"threads.post.read",
 		"instagram.content.read",
 		"bilibili.video.read",
@@ -173,6 +176,45 @@ func TestDefaultAllowedToolsIncludeSocialAndDomesticProviders(t *testing.T) {
 		if !stringSliceContains(cfg.LocalBrowser.AllowedDomains, domain) {
 			t.Fatalf("local browser allowed domains missing %s", domain)
 		}
+	}
+}
+
+func TestDigCrawlSkillExampleUsesReadOnlyToolProfile(t *testing.T) {
+	data, err := os.ReadFile("digcrawl-skill.example.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cfg Config
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	for _, tool := range []string{"gateway.ping", "browser.browse", "wechat.article.read", "feed.read"} {
+		if !stringSliceContains(cfg.Gateway.AllowedTools, tool) {
+			t.Fatalf("skill profile missing %s", tool)
+		}
+	}
+	for _, tool := range []string{"browser.action", "browser.snapshot", "asr.transcribe", "file.read"} {
+		if stringSliceContains(cfg.Gateway.AllowedTools, tool) {
+			t.Fatalf("skill profile must not expose %s", tool)
+		}
+	}
+	if cfg.Gateway.ArtifactEnabled == nil || !*cfg.Gateway.ArtifactEnabled {
+		t.Fatal("skill profile should persist requested artifacts")
+	}
+	if cfg.Gateway.ArtifactDir == "" {
+		t.Fatal("skill profile should declare an artifact directory")
+	}
+	if !filepath.IsAbs(cfg.Gateway.ArtifactDir) {
+		t.Fatal("skill profile artifact directory should be absolute")
+	}
+	if cfg.Gateway.ArtifactMaxInlineBytes != 10*1024*1024 {
+		t.Fatalf("skill profile artifact inline limit=%d", cfg.Gateway.ArtifactMaxInlineBytes)
+	}
+	if cfg.Providers.ASREnabled == nil || *cfg.Providers.ASREnabled {
+		t.Fatal("skill profile should not enable ASR")
+	}
+	if len(cfg.Gateway.AllowedDomains) != 0 {
+		t.Fatal("skill profile should leave public web access open by default")
 	}
 }
 

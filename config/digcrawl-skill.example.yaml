@@ -1,0 +1,49 @@
+# Minimal local profile for the Phase 1 digcrawl Skill.
+# Copy it outside the repository, then pass its absolute path to `digcrawl mcp`.
+Gateway:
+  InstanceID: "digcrawl-skill-local"
+  # Leave empty to read any http/https page. Add domains only when an
+  # operator wants to restrict DigCrawl to a smaller approved set.
+  AllowedDomains: []
+  AllowedTools:
+    - gateway.ping
+    - browser.browse
+    - wechat.article.read
+    - xiaohongshu.note.read
+    - douyin.video.read
+    - toutiao.article.read
+    - toutiao.video.read
+    - bilibili.video.read
+    - weibo.post.read
+    - kuaishou.video.read
+    - zhihu.content.read
+    - x.post.read
+    - reddit.post.read
+    - reddit.subreddit.read
+    - reddit.user.read
+    - threads.post.read
+    - instagram.content.read
+    - feed.read
+  # Screenshots are stored locally and returned in the same MCP response.
+  # ArtifactMaxInlineBytes is the maximum attachment size; its default is
+  # 10 MiB. Expired artifacts are removed automatically. Replace this with a
+  # user-owned absolute directory.
+  ArtifactEnabled: true
+  ArtifactDir: "/absolute/path/to/digcrawl/artifacts"
+  ArtifactTTLMinutes: 1440
+  ArtifactMaxInlineBytes: 10485760
+  RequireApproval: true
+
+# The default LocalBrowser allowlist covers DigCrawl's built-in platforms.
+# Replace the placeholder with a user-owned absolute path before first login.
+LocalBrowser:
+  CookieStoreDir: "/absolute/path/to/digcrawl/browser_cookies"
+
+OCR:
+  Enabled: false
+
+Providers:
+  ExampleEnabled: true
+  PlatformEnabled: true
+  BrowserEnabled: true
+  ASREnabled: false

@@ -3,10 +3,15 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
+	"reflect"
 	"testing"
 
 	"github.com/originaleric/digcrawl/config"
 	"github.com/originaleric/digcrawl/protocol"
+	browserprov "github.com/originaleric/digcrawl/provider/browser"
+	platformprov "github.com/originaleric/digcrawl/provider/platform"
 	"github.com/originaleric/digcrawl/runtime/registry"
 )
 
@@ -38,6 +43,82 @@ func TestManifest(t *testing.T) {
 	m := rt.Manifest()
 	if m.InstanceID != "inst_test" || len(m.Tools) != 1 {
 		t.Fatalf("unexpected manifest: %+v", m)
+	}
+}
+
+func TestManifestFiltersToolsNotAllowedByRuntime(t *testing.T) {
+	reg := registry.New()
+	for _, name := range []string{"browser.browse", "browser.action"} {
+		reg.Register(registry.Entry{Descriptor: protocol.ToolDescriptor{Name: name}})
+	}
+	rt := New(reg, Options{AllowedTools: []string{"browser.browse"}})
+	m := rt.Manifest()
+	if len(m.Tools) != 1 || m.Tools[0].Name != "browser.browse" {
+		t.Fatalf("manifest advertised tools outside the allowlist: %+v", m.Tools)
+	}
+}
+
+func TestDefaultProvidersUseGatewayDomainsAsAnOptionalRestriction(t *testing.T) {
+	base := *config.Get()
+	for _, tc := range []struct {
+		name string
+		want []string
+	}{
+		{name: "open public web", want: nil},
+		{name: "restricted web", want: []string{"example.com"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := base
+			cfg.Gateway.AllowedDomains = tc.want
+			providers := DefaultProviders(&cfg, RegistryOptions{})
+			var browserDomains, platformDomains []string
+			for _, p := range providers {
+				switch p := p.(type) {
+				case *browserprov.Provider:
+					browserDomains = p.ConfigDomains
+				case *platformprov.Provider:
+					platformDomains = p.ConfigDomains
+				}
+			}
+			if !reflect.DeepEqual(browserDomains, tc.want) {
+				t.Fatalf("browser domains=%v want=%v", browserDomains, tc.want)
+			}
+			if !reflect.DeepEqual(platformDomains, tc.want) {
+				t.Fatalf("platform domains=%v want=%v", platformDomains, tc.want)
+			}
+		})
+	}
+}
+
+func TestNewRuntimeFailsWhenEnabledArtifactStoreCannotStart(t *testing.T) {
+	cfg := *config.Get()
+	enabled := true
+	cfg.Gateway.ArtifactEnabled = &enabled
+	path := filepath.Join(t.TempDir(), "not-a-directory")
+	if err := os.WriteFile(path, []byte("not a directory"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg.Gateway.ArtifactDir = path
+	if _, err := NewRuntime(&cfg); err == nil {
+		t.Fatal("enabled artifact store with an invalid directory should fail startup")
+	}
+}
+
+func TestNewCollectorRuntimeHonorsArtifactEnabled(t *testing.T) {
+	cfg := *config.Get()
+	disabled := false
+	cfg.Gateway.ArtifactEnabled = &disabled
+	path := filepath.Join(t.TempDir(), "not-a-directory")
+	if err := os.WriteFile(path, []byte("not a directory"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg.Gateway.ArtifactDir = path
+	rt, err := NewCollectorRuntime(&cfg)
+	if err != nil {
+		t.Fatalf("disabled artifact store should not block collector startup: %v", err)
+	}
+	if rt.ArtifactStore() != nil {
+		t.Fatal("collector should not create an artifact store when disabled")
 	}
 }
 

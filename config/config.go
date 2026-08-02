@@ -975,17 +975,18 @@ func (c RedditBrowserFallbackConfig) AllowWithoutOAuthOrDefault() bool {
 
 // GatewayConfig HTTP Tool Gateway settings.
 type GatewayConfig struct {
-	Enabled            *bool    `yaml:"Enabled" json:"Enabled,omitempty"`
-	ListenAddr         string   `yaml:"ListenAddr" json:"ListenAddr,omitempty"`
-	InstanceID         string   `yaml:"InstanceID" json:"InstanceID,omitempty"`
-	AuthToken          string   `yaml:"AuthToken" json:"AuthToken,omitempty"`
-	AllowedTools       []string `yaml:"AllowedTools" json:"AllowedTools,omitempty"`
-	AllowedReadPaths   []string `yaml:"AllowedReadPaths" json:"AllowedReadPaths,omitempty"`
-	AllowedDomains     []string `yaml:"AllowedDomains" json:"AllowedDomains,omitempty"`
-	ArtifactEnabled    *bool    `yaml:"ArtifactEnabled" json:"ArtifactEnabled,omitempty"`
-	ArtifactDir        string   `yaml:"ArtifactDir" json:"ArtifactDir,omitempty"`
-	ArtifactTTLMinutes int      `yaml:"ArtifactTTLMinutes" json:"ArtifactTTLMinutes,omitempty"`
-	RequireApproval    *bool    `yaml:"RequireApproval" json:"RequireApproval,omitempty"`
+	Enabled                *bool    `yaml:"Enabled" json:"Enabled,omitempty"`
+	ListenAddr             string   `yaml:"ListenAddr" json:"ListenAddr,omitempty"`
+	InstanceID             string   `yaml:"InstanceID" json:"InstanceID,omitempty"`
+	AuthToken              string   `yaml:"AuthToken" json:"AuthToken,omitempty"`
+	AllowedTools           []string `yaml:"AllowedTools" json:"AllowedTools,omitempty"`
+	AllowedReadPaths       []string `yaml:"AllowedReadPaths" json:"AllowedReadPaths,omitempty"`
+	AllowedDomains         []string `yaml:"AllowedDomains" json:"AllowedDomains,omitempty"`
+	ArtifactEnabled        *bool    `yaml:"ArtifactEnabled" json:"ArtifactEnabled,omitempty"`
+	ArtifactDir            string   `yaml:"ArtifactDir" json:"ArtifactDir,omitempty"`
+	ArtifactTTLMinutes     int      `yaml:"ArtifactTTLMinutes" json:"ArtifactTTLMinutes,omitempty"`
+	ArtifactMaxInlineBytes int64    `yaml:"ArtifactMaxInlineBytes" json:"ArtifactMaxInlineBytes,omitempty"`
+	RequireApproval        *bool    `yaml:"RequireApproval" json:"RequireApproval,omitempty"`
 }
 
 // CollectorConfig WebSocket reverse connector settings.
@@ -1038,6 +1039,7 @@ func init() {
 					"douyin.video.read",
 					"toutiao.article.read",
 					"toutiao.video.read",
+					"feed.read",
 					"bilibili.video.read",
 					"weibo.post.read",
 					"kuaishou.video.read",
@@ -1050,10 +1052,11 @@ func init() {
 					"instagram.content.read",
 					"asr.transcribe",
 				},
-				ArtifactDir:        "storage/digcrawl/artifacts",
-				ArtifactTTLMinutes: 60,
-				ArtifactEnabled:    &enabled,
-				RequireApproval:    &enabled,
+				ArtifactDir:            "storage/digcrawl/artifacts",
+				ArtifactTTLMinutes:     60,
+				ArtifactMaxInlineBytes: 10 * 1024 * 1024,
+				ArtifactEnabled:        &enabled,
+				RequireApproval:        &enabled,
 			},
 			Collector: CollectorConfig{
 				WSPath:               "/digcrawl/v1/collector/ws",
@@ -1076,6 +1079,7 @@ func init() {
 					"douyin.video.read",
 					"toutiao.article.read",
 					"toutiao.video.read",
+					"feed.read",
 					"bilibili.video.read",
 					"weibo.post.read",
 					"kuaishou.video.read",
@@ -1437,6 +1441,9 @@ func mergeDefaults(cfg *Config) {
 	}
 	if cfg.Gateway.ArtifactTTLMinutes == 0 {
 		cfg.Gateway.ArtifactTTLMinutes = defaultCfg.Gateway.ArtifactTTLMinutes
+	}
+	if cfg.Gateway.ArtifactMaxInlineBytes <= 0 {
+		cfg.Gateway.ArtifactMaxInlineBytes = defaultCfg.Gateway.ArtifactMaxInlineBytes
 	}
 	if cfg.Gateway.RequireApproval == nil {
 		cfg.Gateway.RequireApproval = defaultCfg.Gateway.RequireApproval
@@ -1835,7 +1842,7 @@ func mergeDefaults(cfg *Config) {
 	}
 }
 
-// MergedAllowedDomains returns gateway + local browser domain allowlists.
+// MergedAllowedDomains returns the unified gateway + local browser domain allowlist.
 func (c *Config) MergedAllowedDomains() []string {
 	seen := make(map[string]struct{})
 	var out []string

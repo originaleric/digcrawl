@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/originaleric/digcrawl/config"
@@ -44,7 +45,10 @@ func DefaultProviders(cfg *config.Config, opts RegistryOptions) []provider.Provi
 func collectProviders(cfg *config.Config, opts RegistryOptions) []provider.Provider {
 	domains := opts.ConfigDomains
 	if len(domains) == 0 {
-		domains = cfg.MergedAllowedDomains()
+		// An empty Gateway.AllowedDomains means public web access is open.
+		// A non-empty list is an operator-selected restrictive policy for all
+		// runtime URL tools.
+		domains = cfg.Gateway.AllowedDomains
 	}
 	var out []provider.Provider
 	if cfg.Providers.PlatformEnabled == nil || *cfg.Providers.PlatformEnabled {
@@ -126,9 +130,11 @@ func NewRuntime(cfg *config.Config) (*Runtime, error) {
 	}
 	var store artifact.Store
 	if gw.ArtifactEnabled == nil || *gw.ArtifactEnabled {
-		if s, err := NewArtifactStore(cfg); err == nil {
-			store = s
+		s, err := NewArtifactStore(cfg)
+		if err != nil {
+			return nil, fmt.Errorf("artifact store: %w", err)
 		}
+		store = s
 	}
 	reg, err := NewRegistry(cfg, RegistryOptions{ArtifactStore: store})
 	if err != nil {
@@ -142,11 +148,13 @@ func NewCollectRuntime(cfg *config.Config) (*Runtime, error) {
 	instanceID := "digcrawl-collect"
 	var store artifact.Store
 	if cfg.Gateway.ArtifactEnabled == nil || *cfg.Gateway.ArtifactEnabled {
-		if s, err := NewArtifactStore(cfg); err == nil {
-			store = s
+		s, err := NewArtifactStore(cfg)
+		if err != nil {
+			return nil, fmt.Errorf("artifact store: %w", err)
 		}
+		store = s
 	}
-	domains := cfg.MergedAllowedDomains()
+	domains := cfg.Gateway.AllowedDomains
 	providers := collectProviders(cfg, RegistryOptions{
 		ConfigDomains: domains,
 		ArtifactStore: store,
@@ -179,7 +187,11 @@ func NewCollectorRuntime(cfg *config.Config) (*Runtime, error) {
 		allowed = cfg.Gateway.AllowedTools
 	}
 	var store artifact.Store
-	if s, err := NewArtifactStore(cfg); err == nil {
+	if cfg.Gateway.ArtifactEnabled == nil || *cfg.Gateway.ArtifactEnabled {
+		s, err := NewArtifactStore(cfg)
+		if err != nil {
+			return nil, fmt.Errorf("artifact store: %w", err)
+		}
 		store = s
 	}
 	reg, err := NewRegistry(cfg, RegistryOptions{ArtifactStore: store})

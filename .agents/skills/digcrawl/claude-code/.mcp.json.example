@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "digcrawl": {
+      "command": "/absolute/path/to/digcrawl",
+      "args": ["mcp", "--config", "/absolute/path/to/digcrawl-skill.yaml"]
+    }
+  }
+}

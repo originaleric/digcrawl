@@ -3,6 +3,7 @@ package platformprov
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 
 	"github.com/originaleric/digcrawl/config"
@@ -132,15 +133,15 @@ func platformReadHandler(
 		var artifacts []protocol.Artifact
 		if content.ScreenshotBase64 != "" {
 			artID := call.ID + "_screenshot"
-			if artStore != nil {
-				art, err := artifact.PutBase64PNG(ctx, artStore, artID, content.ScreenshotBase64)
-				if err == nil {
-					artifacts = append(artifacts, art)
-					out["screenshot_artifact_id"] = art.ID
-				}
-			} else {
-				out["screenshot_artifact_id"] = artID
+			if artStore == nil {
+				return out, nil, fmt.Errorf("screenshot artifact store is unavailable")
 			}
+			art, err := artifact.PutBase64PNG(ctx, artStore, artID, content.ScreenshotBase64, config.Get().Gateway.ArtifactMaxInlineBytes)
+			if err != nil {
+				return out, nil, fmt.Errorf("persist screenshot artifact: %w", err)
+			}
+			artifacts = append(artifacts, art)
+			out["screenshot_artifact_id"] = art.ID
 		}
 		return out, artifacts, nil
 	}
