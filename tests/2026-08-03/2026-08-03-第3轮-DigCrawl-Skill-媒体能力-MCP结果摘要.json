@@ -1,0 +1,18 @@
+{
+  "tested_at": "2026-08-03",
+  "image": {
+    "url": "https://httpbin.org/image/png",
+    "mcp_status": "success",
+    "screenshot_artifact_bytes": 14011,
+    "ocr_provider": "stub",
+    "ocr_count": 1
+  },
+  "video": {
+    "url": "https://www.bilibili.com/video/BV1xx411c7mD",
+    "mcp_status": "success",
+    "content_type": "video",
+    "media_types_returned": ["image"],
+    "asr_text_present": false,
+    "asr_error_present": false
+  }
+}

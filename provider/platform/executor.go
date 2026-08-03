@@ -14,6 +14,7 @@ import (
 	"github.com/originaleric/digcrawl/runtime/executor"
 	"github.com/originaleric/digcrawl/runtime/policy"
 	"github.com/originaleric/digcrawl/runtime/registry"
+	"github.com/originaleric/digcrawl/skill"
 )
 
 type platformReadInput struct {
@@ -21,6 +22,9 @@ type platformReadInput struct {
 	Format            []string `json:"format,omitempty"`
 	IncludeMedia      bool     `json:"include_media,omitempty"`
 	IncludeScreenshot bool     `json:"include_screenshot,omitempty"`
+	IncludeOCR        bool     `json:"include_ocr,omitempty"`
+	IncludeASR        bool     `json:"include_asr,omitempty"`
+	IncludeSummary    bool     `json:"include_summary,omitempty"`
 	WaitSelector      string   `json:"wait_selector,omitempty"`
 	UseCookieDomain   string   `json:"use_cookie_domain,omitempty"`
 }
@@ -29,7 +33,7 @@ func (in platformReadInput) toPlatformReadInput() iplatform.ReadInput {
 	return iplatform.ReadInput{
 		URL:               in.URL,
 		Format:            in.Format,
-		IncludeMedia:      in.IncludeMedia,
+		IncludeMedia:      in.IncludeMedia || in.IncludeOCR || in.IncludeASR || in.IncludeSummary,
 		IncludeScreenshot: in.IncludeScreenshot,
 		WaitSelector:      in.WaitSelector,
 		UseCookieDomain:   in.UseCookieDomain,
@@ -55,6 +59,8 @@ func platformOutputSchema() map[string]any {
 			"tags":                   map[string]any{"type": "array"},
 			"platform_metadata":      map[string]string{"type": "object"},
 			"screenshot_artifact_id": map[string]string{"type": "string"},
+			"asr_text":               map[string]string{"type": "string"},
+			"summary":                map[string]string{"type": "object"},
 		},
 	}
 }
@@ -68,6 +74,9 @@ func platformInputSchema() map[string]any {
 			"format":             map[string]any{"type": "array", "items": map[string]string{"type": "string"}},
 			"include_media":      map[string]any{"type": "boolean"},
 			"include_screenshot": map[string]any{"type": "boolean"},
+			"include_ocr":        map[string]any{"type": "boolean"},
+			"include_asr":        map[string]any{"type": "boolean"},
+			"include_summary":    map[string]any{"type": "boolean"},
 			"wait_selector":      map[string]string{"type": "string"},
 			"use_cookie_domain":  map[string]string{"type": "string"},
 		},
@@ -122,7 +131,8 @@ func platformReadHandler(
 			}
 			return nil, nil, err
 		}
-		if !strings.HasPrefix(call.ID, "collect_") {
+		skillEnhancement := in.IncludeOCR || in.IncludeASR || in.IncludeSummary
+		if !strings.HasPrefix(call.ID, "collect_") && !skillEnhancement {
 			opts := ocr.EnrichOptions{}
 			if content.ScreenshotBase64 != "" {
 				opts.ExtraImages = []ocr.ImageRef{ocr.PNGDataURLImageRef("screenshot", content.ScreenshotBase64)}
@@ -130,6 +140,14 @@ func platformReadHandler(
 			ocr.EnrichContentWithOptions(ctx, content, config.Get().OCR, opts)
 		}
 		out := iplatform.ApplyFormats(content, in.Format)
+		if !strings.HasPrefix(call.ID, "collect_") && skillEnhancement {
+			if err := skill.Enhance(ctx, out, config.Get().Skill, skill.EnhanceOptions{
+				CallID: call.ID, IncludeOCR: in.IncludeOCR, IncludeASR: in.IncludeASR,
+				IncludeSummary: in.IncludeSummary, SourceText: content.Text, ScreenshotBase64: content.ScreenshotBase64, ArtifactStore: artStore,
+			}); err != nil {
+				return out, nil, err
+			}
+		}
 		var artifacts []protocol.Artifact
 		if content.ScreenshotBase64 != "" {
 			artID := call.ID + "_screenshot"

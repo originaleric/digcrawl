@@ -3,6 +3,8 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"reflect"
+	"strings"
 	"testing"
 
 	"gopkg.in/yaml.v3"
@@ -184,6 +186,9 @@ func TestDigCrawlSkillExampleUsesReadOnlyToolProfile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := validateSkillSummaryConfig(data); err != nil {
+		t.Fatalf("skill profile contains unsupported local summary configuration: %v", err)
+	}
 	var cfg Config
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		t.Fatal(err)
@@ -213,8 +218,94 @@ func TestDigCrawlSkillExampleUsesReadOnlyToolProfile(t *testing.T) {
 	if cfg.Providers.ASREnabled == nil || *cfg.Providers.ASREnabled {
 		t.Fatal("skill profile should not enable ASR")
 	}
+	if cfg.Skill.Media.DownloadMedia {
+		t.Fatal("skill profile media download should require explicit local opt-in")
+	}
+	if !filepath.IsAbs(cfg.Skill.Media.Dir) {
+		t.Fatal("skill profile media directory should be absolute")
+	}
+	if cfg.Skill.OCR.EnabledOrDefault() || cfg.Skill.ASR.EnabledOrDefault() || cfg.Skill.Summary.EnabledOrDefault() {
+		t.Fatal("skill enrichments should require explicit local configuration")
+	}
 	if len(cfg.Gateway.AllowedDomains) != 0 {
 		t.Fatal("skill profile should leave public web access open by default")
+	}
+}
+
+func TestLoadRejectsRemovedSkillSummaryFields(t *testing.T) {
+	previous := defaultCfg
+	t.Cleanup(func() { defaultCfg = previous })
+	cases := []struct {
+		name string
+		yaml string
+		want string
+	}{
+		{
+			name: "provider",
+			yaml: "Skill:\n  Summary:\n    Enabled: true\n    Provider: digflow_runtime\n",
+			want: "Skill.Summary.Provider is no longer supported",
+		},
+		{
+			name: "digflow",
+			yaml: "Skill:\n  Summary:\n    Enabled: true\n    DigFlow:\n      Agent: legacy\n",
+			want: "Skill.Summary.DigFlow is no longer supported",
+		},
+		{
+			name: "unused metadata budget",
+			yaml: "Skill:\n  Summary:\n    Enabled: true\n    InputBudget:\n      MetadataChars: 2000\n",
+			want: "Skill.Summary.InputBudget.MetadataChars is unsupported",
+		},
+		{
+			name: "disabled legacy fallback remains inert",
+			yaml: "Skill:\n  Summary:\n    Enabled: false\n    Provider: digflow_runtime\n",
+			want: "",
+		},
+		{
+			name: "current local fallback is accepted",
+			yaml: "Skill:\n  Summary:\n    Enabled: true\n    InputBudget:\n      TextChars: 12000\n      ASRChars: 12000\n      OCRChars: 4000\n    LLM:\n      APIKey: test-key\n      BaseURL: https://api.openai.com/v1\n      Model: gpt-4o-mini\n",
+			want: "",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "digcrawl-skill.yaml")
+			if err := os.WriteFile(path, []byte(tc.yaml), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			_, err := Load(path)
+			if tc.want == "" && err != nil {
+				t.Fatalf("Load error=%v, expected disabled legacy fallback to remain inert", err)
+			}
+			if tc.want != "" && (err == nil || !strings.Contains(err.Error(), tc.want)) {
+				t.Fatalf("Load error=%v, want %q", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestDigCrawlSkillExampleCopiesCollectOCROperationalSettings(t *testing.T) {
+	collectData, err := os.ReadFile("config.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	skillData, err := os.ReadFile("digcrawl-skill.example.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var collectCfg, skillCfg Config
+	if err := yaml.Unmarshal(collectData, &collectCfg); err != nil {
+		t.Fatal(err)
+	}
+	if err := yaml.Unmarshal(skillData, &skillCfg); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(skillCfg.Skill.OCR, collectCfg.OCR) {
+		t.Fatalf("Skill.OCR must copy the Collect OCR settings: skill=%+v collect=%+v", skillCfg.Skill.OCR, collectCfg.OCR)
+	}
+	wantASR := collectCfg.ASR
+	wantASR.Enabled = skillCfg.Skill.ASR.Enabled // Skill remains explicit opt-in.
+	if !reflect.DeepEqual(skillCfg.Skill.ASR, wantASR) {
+		t.Fatalf("Skill.ASR must copy the Collect ASR operational settings: skill=%+v collect=%+v", skillCfg.Skill.ASR, wantASR)
 	}
 }
 
@@ -244,10 +335,7 @@ func TestOCRConfigHelpers(t *testing.T) {
 		t.Fatalf("ProviderOrDefault stub=%q", got)
 	}
 	if got := (OCRConfig{Provider: "zhipu_ocr"}).ProviderOrDefault(); got != "zhipu_ocr" {
-		t.Fatalf("ProviderOrDefault zhipu_ocr=%q", got)
-	}
-	if got := (OCRConfig{Provider: "glm-ocr"}).ProviderOrDefault(); got != "zhipu_ocr" {
-		t.Fatalf("ProviderOrDefault glm-ocr=%q", got)
+		t.Fatalf("ProviderOrDefault must preserve unsupported provider for validation, got %q", got)
 	}
 	if got := (OCRConfig{}).BaseURLOrDefault(); got != "https://api.openai.com/v1" {
 		t.Fatalf("BaseURLOrDefault=%q", got)

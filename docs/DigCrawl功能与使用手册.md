@@ -55,7 +55,9 @@ source/list discover -> collect detail -> normalize -> media/OCR/ASR enrich -> s
 digcrawl mcp --config /absolute/path/to/digcrawl-skill.yaml
 ```
 
-Phase 1 仅暴露读取工具，不包含归档、下载媒体、Watchlist、浏览器交互或本地文件转写。`Gateway.AllowedDomains` 留空时允许任意 `http/https` 目标；配置后作为可选的访问收紧策略。用户明确请求截图时，返回当前视口图片；`Gateway.ArtifactMaxInlineBytes` 控制 MCP 附件上限，默认 `10485760`（10 MiB）。Cookie、artifact 和登录态始终保留在用户本机。
+Skill 默认只读取链接；归档、Watchlist、浏览器交互和任意本地文件转写仍不暴露。用户明确请求时，平台读取工具可接受 `include_ocr`、`include_asr`：Skill 会在自己的领域内执行与 Collect 对齐的“媒体下载 → OCR/ASR”处理，不调用 `collect.Service`，因此可独立开源和演进。视频摘要默认由 Codex、Claude Code 等宿主基于返回的 Markdown 和成功的 `asr_text` 完成，不需要 DigFlow Runtime 或 DigFlow 配置。`include_summary` 只保留给用户明确选择的本地兜底：它仅使用本地 profile 注入的 `Skill.Summary.LLM` OpenAI-compatible BYOK 调用，不支持 DigFlow、extractive fallback 或原始转写。`Skill.Media`、`Skill.OCR`、`Skill.ASR`、`Skill.Summary` 默认关闭，密钥不进入 Agent 对话或仓库。`Gateway.AllowedDomains` 留空时允许任意 `http/https` 目标；配置后作为可选的访问收紧策略。用户明确请求截图时，返回当前视口图片；`Gateway.ArtifactMaxInlineBytes` 控制 MCP 附件上限，默认 `10485760`（10 MiB）。Cookie、artifact、下载媒体和登录态始终保留在用户本机。
+
+启用本地兜底的旧 profile 若仍包含 `Provider`、`FallbackProvider`、`Mode`、`ImportanceThreshold`、`DigFlow` 或 `InputBudget.MetadataChars`，会在加载时给出迁移错误；删除这些字段并保留 `LLM` 即可。
 
 ## 4. 常用命令
 

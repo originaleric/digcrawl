@@ -10,7 +10,6 @@ import (
 	"html"
 	"io"
 	"mime"
-	"mime/multipart"
 	"net"
 	"net/http"
 	"net/url"
@@ -159,18 +158,6 @@ func newProvider(cfg config.OCRConfig) (provider, error) {
 			timeout:   time.Duration(cfg.TimeoutSecOrDefault()) * time.Second,
 			maxBytes:  cfg.MaxImageBytesOrDefault(),
 			maxTokens: cfg.MaxTokensOrDefault(),
-		}, nil
-	case "zhipu_ocr":
-		key := strings.TrimSpace(cfg.APIKey)
-		if key == "" {
-			return nil, fmt.Errorf("OCR APIKey is empty")
-		}
-		return &zhipuOCRProvider{
-			apiKey:   key,
-			baseURL:  zhipuBaseURLOrDefault(cfg),
-			model:    zhipuOCRModelOrDefault(cfg),
-			timeout:  time.Duration(cfg.TimeoutSecOrDefault()) * time.Second,
-			maxBytes: cfg.MaxImageBytesOrDefault(),
 		}, nil
 	default:
 		return nil, fmt.Errorf("unsupported OCR provider %q", cfg.Provider)
@@ -469,7 +456,8 @@ func (p *openAICompatibleProvider) Recognize(ctx context.Context, ref ImageRef) 
 		return "", err
 	}
 	payload := map[string]any{
-		"model": p.model,
+		"model":       p.model,
+		"temperature": 0,
 		"messages": []map[string]any{
 			{
 				"role": "user",
@@ -507,17 +495,48 @@ func (p *openAICompatibleProvider) Recognize(ctx context.Context, ref ImageRef) 
 	var parsed struct {
 		Choices []struct {
 			Message struct {
-				Content string `json:"content"`
+				Content any `json:"content"`
 			} `json:"message"`
+			Text string `json:"text"`
 		} `json:"choices"`
 	}
 	if err := json.Unmarshal(respBody, &parsed); err != nil {
 		return "", fmt.Errorf("OCR provider response decode: %w", err)
 	}
-	if len(parsed.Choices) == 0 || strings.TrimSpace(parsed.Choices[0].Message.Content) == "" {
+	for _, choice := range parsed.Choices {
+		if text := ocrResponseText(choice.Message.Content); text != "" {
+			return text, nil
+		}
+		if text := strings.TrimSpace(choice.Text); text != "" {
+			return text, nil
+		}
+	}
+	if len(parsed.Choices) == 0 {
 		return "", fmt.Errorf("OCR provider returned empty text")
 	}
-	return parsed.Choices[0].Message.Content, nil
+	return "", fmt.Errorf("OCR provider returned empty text")
+}
+
+func ocrResponseText(value any) string {
+	switch v := value.(type) {
+	case string:
+		return strings.TrimSpace(v)
+	case []any:
+		var parts []string
+		for _, item := range v {
+			if text := ocrResponseText(item); text != "" {
+				parts = append(parts, text)
+			}
+		}
+		return strings.Join(parts, "\n")
+	case map[string]any:
+		for _, key := range []string{"text", "content"} {
+			if text := ocrResponseText(v[key]); text != "" {
+				return text
+			}
+		}
+	}
+	return ""
 }
 
 func (p *openAICompatibleProvider) imageURL(ref ImageRef) (string, error) {
@@ -559,359 +578,6 @@ func (p *openAICompatibleProvider) localDataURL(path string) (string, error) {
 		return "", fmt.Errorf("OCR file is not an image: %s", contentType)
 	}
 	return "data:" + contentType + ";base64," + base64.StdEncoding.EncodeToString(data), nil
-}
-
-type zhipuOCRProvider struct {
-	apiKey   string
-	baseURL  string
-	model    string
-	timeout  time.Duration
-	maxBytes int64
-}
-
-func (p *zhipuOCRProvider) Name() string  { return "zhipu_ocr" }
-func (p *zhipuOCRProvider) Model() string { return p.model }
-
-func (p *zhipuOCRProvider) Recognize(ctx context.Context, ref ImageRef) (string, error) {
-	if ref.LocalPath != "" || ref.DataURL != "" {
-		image, err := imageBytesForUpload(ref, zhipuUploadMaxBytes(p.maxBytes))
-		if err != nil {
-			return "", err
-		}
-		return p.recognizeFile(ctx, image)
-	}
-	if ref.URL != "" {
-		if err := validateRemoteImageURL(ref.URL); err != nil {
-			return "", err
-		}
-		return p.recognizeLayout(ctx, ref.URL)
-	}
-	return "", fmt.Errorf("OCR image missing URL")
-}
-
-func (p *zhipuOCRProvider) recognizeLayout(ctx context.Context, imageURL string) (string, error) {
-	payload := map[string]any{
-		"model": p.model,
-		"file":  imageURL,
-	}
-	body, err := json.Marshal(payload)
-	if err != nil {
-		return "", err
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(p.baseURL, "/")+"/layout_parsing", bytes.NewReader(body))
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("Authorization", zhipuRawAuthorization(p.apiKey))
-	req.Header.Set("Content-Type", "application/json")
-	respBody, err := doOCRRequest(req, p.timeout)
-	if err != nil {
-		return "", err
-	}
-	text, err := parseZhipuOCRText(respBody)
-	if err != nil {
-		return "", err
-	}
-	return text, nil
-}
-
-func (p *zhipuOCRProvider) recognizeFile(ctx context.Context, image uploadImage) (string, error) {
-	var body bytes.Buffer
-	writer := multipart.NewWriter(&body)
-	part, err := writer.CreateFormFile("file", image.filename)
-	if err != nil {
-		return "", err
-	}
-	if _, err := part.Write(image.data); err != nil {
-		return "", err
-	}
-	if err := writer.WriteField("tool_type", "hand_write"); err != nil {
-		return "", err
-	}
-	if err := writer.WriteField("language_type", "CHN_ENG"); err != nil {
-		return "", err
-	}
-	if err := writer.WriteField("probability", "true"); err != nil {
-		return "", err
-	}
-	if err := writer.Close(); err != nil {
-		return "", err
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(p.baseURL, "/")+"/files/ocr", &body)
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("Authorization", zhipuBearerAuthorization(p.apiKey))
-	req.Header.Set("Content-Type", writer.FormDataContentType())
-	respBody, err := doOCRRequest(req, p.timeout)
-	if err != nil {
-		return "", err
-	}
-	text, err := parseZhipuOCRText(respBody)
-	if err != nil {
-		return "", err
-	}
-	return text, nil
-}
-
-func doOCRRequest(req *http.Request, timeout time.Duration) ([]byte, error) {
-	client := &http.Client{Timeout: timeout}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
-	if err != nil {
-		return nil, err
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("OCR provider HTTP %d", resp.StatusCode)
-	}
-	return respBody, nil
-}
-
-type uploadImage struct {
-	data        []byte
-	filename    string
-	contentType string
-}
-
-func imageBytesForUpload(ref ImageRef, maxBytes int64) (uploadImage, error) {
-	if ref.DataURL != "" {
-		contentType, data, err := decodeDataImageURL(ref.DataURL, maxBytes)
-		if err != nil {
-			return uploadImage{}, err
-		}
-		return uploadImage{
-			data:        data,
-			filename:    "image" + extensionForContentType(contentType),
-			contentType: contentType,
-		}, nil
-	}
-	if ref.LocalPath == "" {
-		return uploadImage{}, fmt.Errorf("OCR image missing URL")
-	}
-	info, err := os.Stat(ref.LocalPath)
-	if err != nil {
-		return uploadImage{}, err
-	}
-	if maxBytes > 0 && info.Size() > maxBytes {
-		return uploadImage{}, fmt.Errorf("OCR image exceeds max bytes %d", maxBytes)
-	}
-	data, err := os.ReadFile(ref.LocalPath)
-	if err != nil {
-		return uploadImage{}, err
-	}
-	contentType := http.DetectContentType(data)
-	if !strings.HasPrefix(contentType, "image/") {
-		contentType = mime.TypeByExtension(strings.ToLower(filepath.Ext(ref.LocalPath)))
-	}
-	if !strings.HasPrefix(contentType, "image/") {
-		return uploadImage{}, fmt.Errorf("OCR file is not an image: %s", contentType)
-	}
-	filename := filepath.Base(ref.LocalPath)
-	if strings.TrimSpace(filename) == "" {
-		filename = "image" + extensionForContentType(contentType)
-	} else {
-		filename = filenameWithContentExtension(filename, contentType)
-	}
-	return uploadImage{data: data, filename: filename, contentType: contentType}, nil
-}
-
-func decodeDataImageURL(raw string, maxBytes int64) (string, []byte, error) {
-	if err := validateDataImageURL(raw, maxBytes); err != nil {
-		return "", nil, err
-	}
-	header, payload, _ := strings.Cut(raw, ",")
-	contentType := strings.TrimPrefix(strings.ToLower(strings.TrimSpace(header)), "data:")
-	contentType = strings.TrimSuffix(contentType, ";base64")
-	decoded, err := base64.StdEncoding.DecodeString(payload)
-	if err != nil {
-		return "", nil, fmt.Errorf("OCR data image base64 decode: %w", err)
-	}
-	return contentType, decoded, nil
-}
-
-func parseZhipuOCRText(respBody []byte) (string, error) {
-	var parsed struct {
-		MDResults     any `json:"md_results"`
-		LayoutDetails any `json:"layout_details"`
-		WordsResult   []struct {
-			Words string `json:"words"`
-		} `json:"words_result"`
-		Status  string `json:"status"`
-		Message string `json:"message"`
-		Msg     string `json:"msg"`
-		Error   any    `json:"error"`
-		Code    any    `json:"code"`
-	}
-	if err := json.Unmarshal(respBody, &parsed); err != nil {
-		return "", fmt.Errorf("OCR provider response decode: %w", err)
-	}
-	if parsed.Status != "" && parsed.Status != "succeeded" && parsed.Status != "success" {
-		return "", fmt.Errorf("OCR provider status %q: %s", parsed.Status, firstNonEmpty(parsed.Message, parsed.Msg))
-	}
-	if text := cleanZhipuOCRText(stringsFromAny(parsed.MDResults)); text != "" {
-		return text, nil
-	}
-	if len(parsed.WordsResult) > 0 {
-		lines := make([]string, 0, len(parsed.WordsResult))
-		for _, item := range parsed.WordsResult {
-			if s := strings.TrimSpace(item.Words); s != "" {
-				lines = append(lines, s)
-			}
-		}
-		if len(lines) > 0 {
-			return strings.Join(lines, "\n"), nil
-		}
-	}
-	if text := cleanZhipuOCRText(stringsFromLayoutDetails(parsed.LayoutDetails)); text != "" {
-		return text, nil
-	}
-	msg := firstNonEmpty(parsed.Message, parsed.Msg)
-	if msg != "" {
-		return "", fmt.Errorf("OCR provider returned empty text: %s", msg)
-	}
-	if parsed.Error != nil || parsed.Code != nil {
-		return "", fmt.Errorf("OCR provider returned empty text: error=%v code=%v", parsed.Error, parsed.Code)
-	}
-	return "", fmt.Errorf("OCR provider returned empty text")
-}
-
-func stringsFromAny(value any) string {
-	switch v := value.(type) {
-	case nil:
-		return ""
-	case string:
-		return strings.TrimSpace(v)
-	case []any:
-		var lines []string
-		for _, item := range v {
-			if s := stringsFromAny(item); s != "" {
-				lines = append(lines, s)
-			}
-		}
-		return strings.Join(lines, "\n")
-	case map[string]any:
-		for _, key := range []string{"content", "text", "markdown", "md"} {
-			if s := stringsFromAny(v[key]); s != "" {
-				return s
-			}
-		}
-	}
-	return ""
-}
-
-func stringsFromLayoutDetails(value any) string {
-	var lines []string
-	var walk func(any)
-	walk = func(v any) {
-		switch t := v.(type) {
-		case []any:
-			for _, item := range t {
-				walk(item)
-			}
-		case map[string]any:
-			if content, _ := t["content"].(string); strings.TrimSpace(content) != "" {
-				lines = append(lines, strings.TrimSpace(content))
-			}
-			for _, item := range t {
-				switch item.(type) {
-				case []any, map[string]any:
-					walk(item)
-				}
-			}
-		}
-	}
-	walk(value)
-	return strings.Join(lines, "\n")
-}
-
-func cleanZhipuOCRText(text string) string {
-	var lines []string
-	for _, line := range strings.Split(text, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "![](") {
-			continue
-		}
-		lines = append(lines, line)
-	}
-	return strings.Join(lines, "\n")
-}
-
-func zhipuBaseURLOrDefault(cfg config.OCRConfig) string {
-	baseURL := strings.TrimRight(strings.TrimSpace(cfg.BaseURL), "/")
-	if baseURL == "" || baseURL == "https://api.openai.com/v1" {
-		return "https://open.bigmodel.cn/api/paas/v4"
-	}
-	return baseURL
-}
-
-func zhipuOCRModelOrDefault(cfg config.OCRConfig) string {
-	model := strings.TrimSpace(cfg.Model)
-	if model == "" || model == "gpt-4o-mini" {
-		return "glm-ocr"
-	}
-	return model
-}
-
-func zhipuUploadMaxBytes(maxBytes int64) int64 {
-	const filesOCRMaxBytes = 8 * 1024 * 1024
-	if maxBytes <= 0 || maxBytes > filesOCRMaxBytes {
-		return filesOCRMaxBytes
-	}
-	return maxBytes
-}
-
-func zhipuRawAuthorization(apiKey string) string {
-	return strings.TrimSpace(apiKey)
-}
-
-func zhipuBearerAuthorization(apiKey string) string {
-	key := strings.TrimSpace(apiKey)
-	if strings.HasPrefix(strings.ToLower(key), "bearer ") {
-		return key
-	}
-	return "Bearer " + key
-}
-
-func extensionForContentType(contentType string) string {
-	switch strings.ToLower(strings.TrimSpace(contentType)) {
-	case "image/jpeg":
-		return ".jpg"
-	case "image/png":
-		return ".png"
-	case "image/bmp":
-		return ".bmp"
-	case "image/gif":
-		return ".gif"
-	case "image/webp":
-		return ".webp"
-	default:
-		return ".img"
-	}
-}
-
-func filenameWithContentExtension(filename, contentType string) string {
-	ext := extensionForContentType(contentType)
-	if ext == ".img" {
-		return filename
-	}
-	base := strings.TrimSuffix(filename, filepath.Ext(filename))
-	if strings.TrimSpace(base) == "" {
-		base = "image"
-	}
-	return base + ext
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, value := range values {
-		if s := strings.TrimSpace(value); s != "" {
-			return s
-		}
-	}
-	return ""
 }
 
 func validateDataImageURL(raw string, maxBytes int64) error {

@@ -13,6 +13,7 @@ import (
 	"github.com/originaleric/digcrawl/runtime/executor"
 	"github.com/originaleric/digcrawl/runtime/policy"
 	"github.com/originaleric/digcrawl/runtime/registry"
+	"github.com/originaleric/digcrawl/skill"
 )
 
 type browseInput struct {
@@ -23,6 +24,7 @@ type browseInput struct {
 	WaitSelector    string `json:"wait_selector,omitempty"`
 	ContentSelector string `json:"content_selector,omitempty"`
 	UseCookieDomain string `json:"use_cookie_domain,omitempty"`
+	IncludeOCR      bool   `json:"include_ocr,omitempty"`
 }
 
 // BrowseEntry returns registry entry for browser.browse.
@@ -41,6 +43,7 @@ func BrowseEntry(configDomains []string, artStore artifact.Store) registry.Entry
 					"wait_selector":     map[string]string{"type": "string"},
 					"content_selector":  map[string]string{"type": "string"},
 					"use_cookie_domain": map[string]string{"type": "string"},
+					"include_ocr":       map[string]any{"type": "boolean"},
 				},
 			}),
 			Capabilities: []string{"browser", "web.read", "cookie.local"},
@@ -57,9 +60,13 @@ func BrowseEntry(configDomains []string, artStore artifact.Store) registry.Entry
 			if err := executor.ValidateCookieDomain(in.UseCookieDomain, call, configDomains); err != nil {
 				return nil, nil, err
 			}
+			contentSelector := in.ContentSelector
+			if strings.TrimSpace(contentSelector) == "" && (strings.TrimSpace(in.Mode) == "" || strings.EqualFold(strings.TrimSpace(in.Mode), "full")) {
+				contentSelector = "body"
+			}
 			resp, err := browser.BrowserBrowse(ctx, &browser.BrowserBrowseRequest{
 				URL: in.URL, Action: in.Action, Mode: in.Mode, TabID: in.TabID,
-				WaitSelector: in.WaitSelector, ContentSelector: in.ContentSelector,
+				WaitSelector: in.WaitSelector, ContentSelector: contentSelector,
 				UseCookieDomain: in.UseCookieDomain,
 			})
 			if err != nil {
@@ -78,12 +85,19 @@ func BrowseEntry(configDomains []string, artStore artifact.Store) registry.Entry
 			if resp.Summary != "" {
 				out["summary"] = resp.Summary
 			}
-			if !strings.HasPrefix(call.ID, "collect_") {
+			if !strings.HasPrefix(call.ID, "collect_") && !in.IncludeOCR {
 				opts := ocr.EnrichOptions{}
 				if resp.ScreenshotBase != "" {
 					opts.ExtraImages = []ocr.ImageRef{ocr.PNGDataURLImageRef("screenshot", resp.ScreenshotBase)}
 				}
 				ocr.EnrichMap(ctx, out, config.Get().OCR, opts)
+			}
+			if !strings.HasPrefix(call.ID, "collect_") && in.IncludeOCR {
+				if err := skill.Enhance(ctx, out, config.Get().Skill, skill.EnhanceOptions{
+					CallID: call.ID, IncludeOCR: true, ScreenshotBase64: resp.ScreenshotBase, ArtifactStore: artStore,
+				}); err != nil {
+					return out, nil, err
+				}
 			}
 			var artifacts []protocol.Artifact
 			if resp.ScreenshotBase != "" {

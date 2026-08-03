@@ -32,7 +32,7 @@ DigCrawl 的核心目标不是“提供一个网关”，而是把公众号、�
 | 宿主集成 | 可通过 HTTP Gateway、反向 Collector、MCP、stdio 或 Go SDK 接入业务系统 |
 | 本机安全边界 | 默认本机监听、工具白名单、高风险工具审批、域名策略、审计日志和 Artifact 管理 |
 
-OCR 目前支持 OpenAI-compatible 视觉模型、智谱 `zhipu_ocr` / `glm-ocr` 原生接口和本地开发桩；Collect 下载媒体时会优先对本地 `.assets` 图片做 OCR，并将结果写入 `platform_metadata.ocr_results`。
+OCR 使用 DigCrawl 自己的 OpenAI-compatible 视觉模型客户端或本地开发桩；Collect 下载媒体时会优先对本地 `.assets` 图片做 OCR，并将结果写入 `platform_metadata.ocr_results`。它不依赖 DigFlow 或 DigEino 的 OCR 运行时。
 
 ASR 能力通过 `digcrawl asr transcribe <video>`、Gateway 工具 `asr.transcribe` 或 Collect 视频导出链路调用：先用 `ffmpeg` 抽取 16k 单声道 wav，再按配置选择 API provider 或本地 provider。API provider 兼容 `/audio/transcriptions`；本地 provider 默认调用 `faster-whisper`，如果 Python 包未提供 CLI，会自动 fallback 到 `scripts/faster_whisper_asr.py`，也可在 `ASR.LocalCommand` / `ASR.LocalArgs` 中替换为 whisper.cpp 等命令。
 
@@ -44,7 +44,7 @@ Watchlist 能力通过 `digcrawl watchlist run --once`、`digcrawl watchlist run
 - 2026-07-03：微信公众号采集改为 HTTP 静态解析优先，修复最终 URL、导出格式、UTF-8 文件名截断、结构化错误和生产验证中的边界问题。
 - 2026-07-03：今日头条文章采集增强轻量 API 探测、浏览器 hydration/meta/DOM 提取、视频/西瓜跳转识别、超时策略和 JSON 文本完整性。
 - 2026-07-04：X/Twitter 单帖读取新增 Tweet lookup API 优先、OAuth2 app-only token 缓存、公开 oEmbed 兜底和登录墙/不可见壳页校验。
-- 2026-07-04：OCR 全库接入智谱 `zhipu_ocr` / `glm-ocr`，支持远程图片 `layout_parsing`、本地 assets `files/ocr`、图片类型 sniff 和 OCR metadata 输出。
+- 2026-08-03：OCR 收敛为 DigCrawl 自己的 OpenAI-compatible 视觉模型客户端，保持本地配置注入与调用侧显式启用，不依赖 DigFlow/DigEino；暂不提供智谱原生 OCR 接口。
 - 2026-07-08：视频解析链路补齐 `ffmpeg` 音频抽取、ASR API provider、本地 `faster-whisper` provider、Gateway 工具 `asr.transcribe` 和 CLI 转写命令。
 - 2026-07-09：新增 Watchlist 定时监控、SQLite 状态/锁、Summary provider、DigFlow 内嵌 Runtime / HTTP 摘要 adapter、Feishu 通知模块、`df_` DigFlow DDL 和无密钥 GORM 示例配置。
 - 2026-07-10：补齐本机 Chromium headless shell 安装说明与 `LocalBrowser.ExtraArgs` 配置，解决 macOS sandbox 下系统 Chrome / Rod Chromium headless 启动不稳定问题，并完成头条文章 + DigFlow Runtime 摘要二轮验证。
@@ -101,11 +101,15 @@ go build -o digcrawl ./cmd/digcrawl
 go build -o digcollect ./cmd/digcollect
 ```
 
-## Agent Skill（Phase 1）
+## Agent Skill
 
 仓库内的 [`.agents/skills/digcrawl`](.agents/skills/digcrawl/) 是 Codex 自动发现的仓库级 Skill，将 DigCrawl 的本地 MCP 能力提供给 Codex、Claude Code 等 Agent，用于只读链接内容。它会按 URL 选择平台读取工具，保留登录、验证码和频控等结构化错误，不会请求、展示或导出用户 Cookie。
 
-复制 [`config/digcrawl-skill.example.yaml`](config/digcrawl-skill.example.yaml) 到用户本机目录后，将 Cookie 与 artifact 目录占位符替换为用户拥有的绝对路径，再使用绝对路径将 `digcrawl mcp --config <profile>` 注册为 MCP 服务。默认可读取任意 `http/https` 网页；DigCrawl 是本地用户工具，不承担网络隔离职责。用户明确请求截图时，会返回当前视口图片并持久化到本地 artifact store；`Gateway.ArtifactMaxInlineBytes` 控制 MCP 附件上限，默认 10 MiB，过期文件会自动清理。`Gateway.AllowedDomains` 仅用于需要额外收紧访问范围的场景。Codex 和 Claude Code 的配置样例见 Skill 目录。
+复制 [`config/digcrawl-skill.example.yaml`](config/digcrawl-skill.example.yaml) 到用户本机目录后，将 Cookie、artifact 和 `Skill.Media.Dir` 占位符替换为用户拥有的绝对路径，再使用绝对路径将 `digcrawl mcp --config <profile>` 注册为 MCP 服务。默认可读取任意 `http/https` 网页；DigCrawl 是本地用户工具，不承担网络隔离职责。用户明确请求截图时，会返回当前视口图片并持久化到本地 artifact store；`Gateway.ArtifactMaxInlineBytes` 控制 MCP 附件上限，默认 10 MiB，过期文件会自动清理。`Gateway.AllowedDomains` 仅用于需要额外收紧访问范围的场景。
+
+Skill 的 OCR 与 ASR 是显式请求能力：Agent 会向原有平台读取工具传递 `include_ocr` 或 `include_asr`，不新增对 `collect.Service` 的依赖。Skill 独立执行与 Collect 对齐的“媒体下载 → OCR/ASR”流程，Provider、模型和密钥只从本地 `Skill.OCR`、`Skill.ASR` 配置注入。视频摘要默认由 Codex、Claude Code 等宿主基于返回的 Markdown 和 `asr_text` 完成，不需要 DigFlow 或额外的 DigCrawl LLM 配置。仅当用户明确选择本地兜底时，才传递 `include_summary` 并使用 `Skill.Summary.LLM` 的 OpenAI-compatible BYOK 调用；它不支持 DigFlow、extractive fallback 或原始转写替代。Codex 和 Claude Code 的配置样例见 Skill 目录。
+
+若启用本地兜底，旧 profile 中的 `Provider`、`FallbackProvider`、`Mode`、`ImportanceThreshold`、`DigFlow` 与 `InputBudget.MetadataChars` 会在加载时明确拒绝；删除它们后只保留 `LLM` 配置。
 
 采集单个链接：
 

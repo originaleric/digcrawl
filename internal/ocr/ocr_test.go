@@ -230,207 +230,56 @@ func TestOpenAICompatibleProviderDataURLImage(t *testing.T) {
 	}
 }
 
-func TestZhipuOCRProviderRemoteURLUsesLayoutParsing(t *testing.T) {
-	var sawAuth bool
-	var sawPayload bool
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/layout_parsing" {
-			t.Fatalf("path=%s", r.URL.Path)
-		}
-		if r.Header.Get("Authorization") == "test-key" {
-			sawAuth = true
-		}
-		var payload map[string]any
-		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-			t.Fatal(err)
-		}
-		if payload["model"] == "glm-ocr" && payload["file"] == "https://example.com/a.png" {
-			sawPayload = true
-		}
-		_, _ = w.Write([]byte(`{"model":"glm-ocr","md_results":"![](page=0,bbox=[1,2,3,4])\n\nhello\n\nworld"}`))
-	}))
-	defer srv.Close()
-
-	p, err := newProvider(config.OCRConfig{
-		Provider: "glm-ocr",
-		APIKey:   "test-key",
-		BaseURL:  srv.URL,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	text, err := p.Recognize(context.Background(), ImageRef{URL: "https://example.com/a.png", Type: "image"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if text != "hello\nworld" || !sawAuth || !sawPayload {
-		t.Fatalf("text=%q sawAuth=%v sawPayload=%v", text, sawAuth, sawPayload)
-	}
-	if p.Name() != "zhipu_ocr" || p.Model() != "glm-ocr" {
-		t.Fatalf("provider=%s model=%s", p.Name(), p.Model())
-	}
-}
-
-func TestZhipuOCRProviderLocalImageUsesFilesOCR(t *testing.T) {
-	var sawAuth bool
-	var sawMultipart bool
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/files/ocr" {
-			t.Fatalf("path=%s", r.URL.Path)
-		}
-		if r.Header.Get("Authorization") == "Bearer test-key" {
-			sawAuth = true
-		}
-		if err := r.ParseMultipartForm(1 << 20); err != nil {
-			t.Fatal(err)
-		}
-		if r.FormValue("tool_type") == "hand_write" &&
-			r.FormValue("language_type") == "CHN_ENG" &&
-			r.FormValue("probability") == "true" &&
-			len(r.MultipartForm.File["file"]) == 1 {
-			sawMultipart = true
-		}
-		_, _ = w.Write([]byte(`{"status":"succeeded","words_result":[{"words":"first line"},{"words":"second line"}]}`))
-	}))
-	defer srv.Close()
-
-	dir := t.TempDir()
-	img := filepath.Join(dir, "a.png")
-	if err := os.WriteFile(img, []byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n', 0, 0, 0, 0}, 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	p, err := newProvider(config.OCRConfig{
-		Provider: "zhipu_ocr",
-		APIKey:   "test-key",
-		BaseURL:  srv.URL,
-		Model:    "glm-ocr",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	text, err := p.Recognize(context.Background(), ImageRef{LocalPath: img, Type: "image"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if text != "first line\nsecond line" || !sawAuth || !sawMultipart {
-		t.Fatalf("text=%q sawAuth=%v sawMultipart=%v", text, sawAuth, sawMultipart)
-	}
-}
-
-func TestZhipuOCRProviderUploadFilenameUsesDetectedImageType(t *testing.T) {
-	var sawPNGFilename bool
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/files/ocr" {
-			t.Fatalf("path=%s", r.URL.Path)
-		}
-		if err := r.ParseMultipartForm(1 << 20); err != nil {
-			t.Fatal(err)
-		}
-		files := r.MultipartForm.File["file"]
-		if len(files) == 1 && files[0].Filename == "001.png" {
-			sawPNGFilename = true
-		}
-		_, _ = w.Write([]byte(`{"status":"succeeded","words_result":[{"words":"png text"}]}`))
-	}))
-	defer srv.Close()
-
-	dir := t.TempDir()
-	img := filepath.Join(dir, "001.50")
-	if err := os.WriteFile(img, []byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n', 0, 0, 0, 0}, 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	p, err := newProvider(config.OCRConfig{
-		Provider: "zhipu_ocr",
-		APIKey:   "test-key",
-		BaseURL:  srv.URL,
-		Model:    "glm-ocr",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	text, err := p.Recognize(context.Background(), ImageRef{LocalPath: img, Type: "image"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if text != "png text" || !sawPNGFilename {
-		t.Fatalf("text=%q sawPNGFilename=%v", text, sawPNGFilename)
-	}
-}
-
-func TestZhipuOCRProviderPrefersDownloadedLocalImageOverRemoteURL(t *testing.T) {
-	var sawFilesOCR bool
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/layout_parsing" {
-			t.Fatalf("expected downloaded local image to use files/ocr, got %s", r.URL.Path)
-		}
-		if r.URL.Path != "/files/ocr" {
-			t.Fatalf("path=%s", r.URL.Path)
-		}
-		if err := r.ParseMultipartForm(1 << 20); err != nil {
-			t.Fatal(err)
-		}
-		if len(r.MultipartForm.File["file"]) == 1 {
-			sawFilesOCR = true
-		}
-		_, _ = w.Write([]byte(`{"status":"succeeded","words_result":[{"words":"local asset text"}]}`))
-	}))
-	defer srv.Close()
-
-	dir := t.TempDir()
-	img := filepath.Join(dir, "001.png")
-	if err := os.WriteFile(img, []byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n', 0, 0, 0, 0}, 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	enabled := true
-	out := map[string]any{
-		"markdown": "body",
-		"media": []any{
-			map[string]any{"type": "image", "url": "https://example.com/a.png"},
+func TestOpenAICompatibleProviderAcceptsContentBlocksAndLegacyText(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want string
+	}{
+		{
+			name: "content blocks",
+			body: `{"choices":[{"message":{"content":[{"type":"text","text":"first line"},{"type":"text","text":"second line"}]}}]}`,
+			want: "first line\nsecond line",
+		},
+		{
+			name: "legacy choice text",
+			body: `{"choices":[{"text":"legacy text"}]}`,
+			want: "legacy text",
 		},
 	}
-	results := EnrichMap(context.Background(), out, config.OCRConfig{
-		Enabled:  &enabled,
-		Provider: "zhipu_ocr",
-		APIKey:   "test-key",
-		BaseURL:  srv.URL,
-		Model:    "glm-ocr",
-	}, EnrichOptions{
-		AssetsDir: dir,
-		Downloaded: []map[string]any{
-			{"type": "image", "url": "https://example.com/a.png", "local": "001.png"},
-		},
-	})
-	if len(results) != 1 {
-		t.Fatalf("results=%d: %+v", len(results), results)
-	}
-	if results[0].Text != "local asset text" || results[0].LocalPath != img || !sawFilesOCR {
-		t.Fatalf("result=%+v sawFilesOCR=%v", results[0], sawFilesOCR)
-	}
-	if !strings.Contains(out["markdown"].(string), "local asset text") {
-		t.Fatalf("markdown missing OCR: %s", out["markdown"])
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var payload map[string]any
+				if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+					t.Fatal(err)
+				}
+				if payload["temperature"] != float64(0) {
+					t.Fatalf("temperature=%v", payload["temperature"])
+				}
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			defer srv.Close()
+
+			p, err := newProvider(config.OCRConfig{Provider: "openai_compatible", APIKey: "test-key", BaseURL: srv.URL})
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := p.Recognize(context.Background(), PNGDataURLImageRef("screenshot", "iVBORw0KGgo="))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != tc.want {
+				t.Fatalf("text=%q want=%q", got, tc.want)
+			}
+		})
 	}
 }
 
-func TestZhipuOCRProviderRejectsOversizedUploadBeforeRequest(t *testing.T) {
-	p, err := newProvider(config.OCRConfig{
-		Provider:      "zhipu_ocr",
-		APIKey:        "test-key",
-		BaseURL:       "http://127.0.0.1:1",
-		MaxImageBytes: 4,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	payload := base64.StdEncoding.EncodeToString([]byte{1, 2, 3, 4, 5})
-	_, err = p.Recognize(context.Background(), ImageRef{
-		DataURL: "data:image/png;base64," + payload,
-		Type:    "screenshot",
-	})
-	if err == nil || !strings.Contains(err.Error(), "exceeds max bytes 4") {
-		t.Fatalf("expected max bytes error, got %v", err)
+func TestNewProviderRejectsUnsupportedProvider(t *testing.T) {
+	_, err := newProvider(config.OCRConfig{Provider: "zhipu_ocr", APIKey: "test-key"})
+	if err == nil || !strings.Contains(err.Error(), `unsupported OCR provider "zhipu_ocr"`) {
+		t.Fatalf("error=%v", err)
 	}
 }
 

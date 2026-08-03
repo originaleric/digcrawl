@@ -214,10 +214,9 @@ Social:
 
 OCR:
   Enabled: false
-  # openai_compatible | zhipu_ocr | stub
+  # openai_compatible | stub
   Provider: "openai_compatible"
   APIKey: ""
-  # zhipu_ocr 默认使用 https://open.bigmodel.cn/api/paas/v4 和 glm-ocr。
   BaseURL: "https://api.openai.com/v1"
   Model: "gpt-4o-mini"
   Prompt: "Extract all readable text from this image. Return only the OCR text. Preserve line breaks when useful."

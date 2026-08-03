@@ -17,6 +17,7 @@ type Config struct {
 	Collect       CollectConfig       `yaml:"Collect" json:"Collect"`
 	LocalBrowser  LocalBrowserConfig  `yaml:"LocalBrowser" json:"LocalBrowser"`
 	RuntimeEnv    RuntimeEnvConfig    `yaml:"RuntimeEnv" json:"RuntimeEnv,omitempty"`
+	Skill         SkillConfig         `yaml:"Skill" json:"Skill,omitempty"`
 	Platform      PlatformConfig      `yaml:"Platform" json:"Platform"`
 	OCR           OCRConfig           `yaml:"OCR" json:"OCR"`
 	ASR           ASRConfig           `yaml:"ASR" json:"ASR"`
@@ -26,6 +27,68 @@ type Config struct {
 	Notifications NotificationsConfig `yaml:"Notifications" json:"Notifications"`
 	Providers     ProvidersConfig     `yaml:"Providers" json:"Providers"`
 	Social        SocialConfig        `yaml:"Social" json:"Social,omitempty"`
+}
+
+// SkillConfig controls the independently deployable agent Skill enhancement pipeline.
+// It intentionally does not reuse Collect configuration or services.
+type SkillConfig struct {
+	Media   SkillMediaConfig   `yaml:"Media" json:"Media,omitempty"`
+	OCR     OCRConfig          `yaml:"OCR" json:"OCR,omitempty"`
+	ASR     ASRConfig          `yaml:"ASR" json:"ASR,omitempty"`
+	Summary SkillSummaryConfig `yaml:"Summary" json:"Summary,omitempty"`
+}
+
+// SkillMediaConfig controls media acquisition for explicit Skill OCR/ASR requests.
+type SkillMediaConfig struct {
+	DownloadMedia bool   `yaml:"DownloadMedia" json:"DownloadMedia,omitempty"`
+	Dir           string `yaml:"Dir" json:"Dir,omitempty"`
+	MaxBytes      int64  `yaml:"MaxBytes" json:"MaxBytes,omitempty"`
+	TimeoutSec    int    `yaml:"TimeoutSec" json:"TimeoutSec,omitempty"`
+}
+
+// SkillSummaryConfig is the optional local OpenAI-compatible fallback for a
+// host Agent's own summary. It deliberately excludes Collect's DigFlow paths.
+type SkillSummaryConfig struct {
+	Enabled       *bool              `yaml:"Enabled" json:"Enabled,omitempty"`
+	TimeoutSec    int                `yaml:"TimeoutSec" json:"TimeoutSec,omitempty"`
+	MaxInputChars int                `yaml:"MaxInputChars" json:"MaxInputChars,omitempty"`
+	InputBudget   SummaryInputBudget `yaml:"InputBudget" json:"InputBudget,omitempty"`
+	LLM           LLMSummaryConfig   `yaml:"LLM" json:"LLM,omitempty"`
+}
+
+func (c SkillSummaryConfig) EnabledOrDefault() bool {
+	return c.Enabled != nil && *c.Enabled
+}
+
+func (c SkillSummaryConfig) TimeoutSecOrDefault() int {
+	if c.TimeoutSec > 0 {
+		return c.TimeoutSec
+	}
+	return 60
+}
+
+func (c SkillSummaryConfig) MaxInputCharsOrDefault() int {
+	if c.MaxInputChars > 0 {
+		return c.MaxInputChars
+	}
+	return 30000
+}
+
+func (c SkillSummaryConfig) InputBudgetOrDefault() SummaryInputBudget {
+	b := c.InputBudget
+	if b.TextChars <= 0 {
+		b.TextChars = 12000
+	}
+	if b.ASRChars <= 0 {
+		b.ASRChars = 12000
+	}
+	if b.OCRChars <= 0 {
+		b.OCRChars = 4000
+	}
+	if b.MetadataChars <= 0 {
+		b.MetadataChars = 2000
+	}
+	return b
 }
 
 // CollectConfig local content collect and export settings.
@@ -167,7 +230,7 @@ func (c SocialPlatformConfig) AllowsLocalSession() bool {
 // OCRConfig controls optional image OCR enrichment.
 type OCRConfig struct {
 	Enabled          *bool  `yaml:"Enabled" json:"Enabled,omitempty"`
-	Provider         string `yaml:"Provider" json:"Provider,omitempty"` // openai_compatible | zhipu_ocr | stub
+	Provider         string `yaml:"Provider" json:"Provider,omitempty"` // openai_compatible | stub
 	APIKey           string `yaml:"APIKey" json:"APIKey,omitempty"`
 	BaseURL          string `yaml:"BaseURL" json:"BaseURL,omitempty"`
 	Model            string `yaml:"Model" json:"Model,omitempty"`
@@ -191,14 +254,10 @@ func (c OCRConfig) EnabledOrDefault() bool {
 // ProviderOrDefault returns the configured OCR provider.
 func (c OCRConfig) ProviderOrDefault() string {
 	p := strings.ToLower(strings.TrimSpace(c.Provider))
-	switch p {
-	case "openai_compatible", "stub", "zhipu_ocr":
-		return p
-	case "glm_ocr", "glm-ocr":
-		return "zhipu_ocr"
-	default:
+	if p == "" {
 		return "openai_compatible"
 	}
+	return p
 }
 
 // BaseURLOrDefault returns the OCR provider base URL.
@@ -1276,6 +1335,9 @@ func Load(path string) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := validateSkillSummaryConfig(data); err != nil {
+		return nil, err
+	}
 	var cfg Config
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return nil, err
@@ -1292,6 +1354,34 @@ func Load(path string) (*Config, error) {
 	}
 	defaultCfg = cfg
 	return &defaultCfg, nil
+}
+
+// validateSkillSummaryConfig rejects fields that belonged to the former
+// DigFlow-backed Skill summary. Keep this narrow: other configuration remains
+// permissive, while an enabled local Summary must not silently change meaning.
+func validateSkillSummaryConfig(data []byte) error {
+	var raw struct {
+		Skill struct {
+			Summary map[string]any `yaml:"Summary"`
+		} `yaml:"Skill"`
+	}
+	if err := yaml.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	enabled, _ := raw.Skill.Summary["Enabled"].(bool)
+	if !enabled {
+		return nil
+	}
+	for _, field := range []string{"Provider", "FallbackProvider", "Mode", "ImportanceThreshold", "DigFlow"} {
+		if _, ok := raw.Skill.Summary[field]; ok {
+			return fmt.Errorf("Skill.Summary.%s is no longer supported; remove it and configure Skill.Summary.LLM (APIKey, BaseURL, Model) for the optional local fallback", field)
+		}
+	}
+	budget, _ := raw.Skill.Summary["InputBudget"].(map[string]any)
+	if _, ok := budget["MetadataChars"]; ok {
+		return fmt.Errorf("Skill.Summary.InputBudget.MetadataChars is unsupported because the local summary does not send platform metadata")
+	}
+	return nil
 }
 
 func applyRuntimeEnvConfig(cfg RuntimeEnvConfig) error {

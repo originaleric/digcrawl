@@ -34,3 +34,4 @@
 config/gorm.yml
 config/feishu.yml
 config/runtime-env.yml
+config/digcrawl-skill.local.yaml

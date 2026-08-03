@@ -82,6 +82,67 @@ func TestPlatformReadHandlerAppliesOCRToDirectScreenshot(t *testing.T) {
 	}
 }
 
+func TestPlatformReadHandlerAppliesSkillConfiguredOCR(t *testing.T) {
+	enabled := true
+	oldSkill := config.Get().Skill
+	config.Get().Skill = config.SkillConfig{OCR: config.OCRConfig{Enabled: &enabled, Provider: "stub"}}
+	defer func() {
+		config.Get().Skill = oldSkill
+	}()
+
+	input, err := json.Marshal(platformReadInput{
+		URL: "https://8.8.8.8/post", IncludeScreenshot: true, IncludeOCR: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := artifact.NewDiskStore(t.TempDir(), time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := platformReadHandler(
+		[]string{"8.8.8.8"}, nil, store,
+		func(_ context.Context, in iplatform.ReadInput) (*iplatform.Content, error) {
+			if !in.IncludeMedia {
+				t.Fatal("skill OCR should request media from the platform reader")
+			}
+			return &iplatform.Content{Platform: "test", ContentType: "article", SourceURL: in.URL, Markdown: "body", ScreenshotBase64: "iVBORw0KGgo="}, nil
+		},
+	)
+
+	out, _, err := handler(context.Background(), &protocol.ToolCall{Type: protocol.TypeToolCall, ID: "skill_ocr_screenshot", Tool: "test.read", Input: input})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out["markdown"].(string), "stub OCR text from screenshot") {
+		t.Fatalf("skill OCR markdown=%s", out["markdown"])
+	}
+}
+
+func TestPlatformReadHandlerRejectsUnconfiguredSkillOCR(t *testing.T) {
+	oldSkill := config.Get().Skill
+	config.Get().Skill = config.SkillConfig{}
+	defer func() {
+		config.Get().Skill = oldSkill
+	}()
+
+	input, err := json.Marshal(platformReadInput{URL: "https://8.8.8.8/post", IncludeOCR: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := platformReadHandler(
+		[]string{"8.8.8.8"}, nil, nil,
+		func(_ context.Context, _ iplatform.ReadInput) (*iplatform.Content, error) {
+			return &iplatform.Content{Platform: "test", ContentType: "article", SourceURL: "https://8.8.8.8/post", Markdown: "body"}, nil
+		},
+	)
+
+	_, _, err = handler(context.Background(), &protocol.ToolCall{Type: protocol.TypeToolCall, ID: "skill_ocr_disabled", Tool: "test.read", Input: input})
+	if err == nil || !strings.Contains(err.Error(), "Skill.OCR.Enabled") {
+		t.Fatalf("err=%v, expected explicit Skill OCR configuration error", err)
+	}
+}
+
 func TestPlatformReadHandlerFailsWhenScreenshotCannotBePersisted(t *testing.T) {
 	input, err := json.Marshal(platformReadInput{URL: "https://8.8.8.8/post", IncludeScreenshot: true})
 	if err != nil {

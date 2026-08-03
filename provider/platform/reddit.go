@@ -7,12 +7,14 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/originaleric/digcrawl/config"
 	"github.com/originaleric/digcrawl/internal/platform"
 	"github.com/originaleric/digcrawl/internal/platform/reddit"
 	"github.com/originaleric/digcrawl/protocol"
 	"github.com/originaleric/digcrawl/runtime/artifact"
 	"github.com/originaleric/digcrawl/runtime/executor"
 	"github.com/originaleric/digcrawl/runtime/registry"
+	"github.com/originaleric/digcrawl/skill"
 )
 
 var redditDefaultDomains = []string{"reddit.com", "www.reddit.com", "old.reddit.com", "new.reddit.com", "redd.it"}
@@ -22,6 +24,9 @@ type redditPostReadInput struct {
 	Format            []string `json:"format,omitempty"`
 	IncludeMedia      bool     `json:"include_media,omitempty"`
 	IncludeScreenshot bool     `json:"include_screenshot,omitempty"`
+	IncludeOCR        bool     `json:"include_ocr,omitempty"`
+	IncludeASR        bool     `json:"include_asr,omitempty"`
+	IncludeSummary    bool     `json:"include_summary,omitempty"`
 	WaitSelector      string   `json:"wait_selector,omitempty"`
 	UseCookieDomain   string   `json:"use_cookie_domain,omitempty"`
 	IncludeComments   *bool    `json:"include_comments,omitempty"`
@@ -43,7 +48,7 @@ type redditListingInput struct {
 	After     string `json:"after,omitempty"`
 }
 
-func RedditPostReadEntry(configDomains []string, _ artifact.Store) registry.Entry {
+func RedditPostReadEntry(configDomains []string, artStore artifact.Store) registry.Entry {
 	return registry.Entry{
 		Descriptor: protocol.ToolDescriptor{
 			Name:         ToolRedditPostRead,
@@ -53,7 +58,7 @@ func RedditPostReadEntry(configDomains []string, _ artifact.Store) registry.Entr
 			Capabilities: []string{"reddit", "platform.read", "browser"},
 			Risk:         "network",
 		},
-		Handler: redditPostReadHandler(configDomains),
+		Handler: redditPostReadHandler(configDomains, artStore),
 	}
 }
 
@@ -85,7 +90,7 @@ func RedditUserReadEntry(configDomains []string) registry.Entry {
 	}
 }
 
-func redditPostReadHandler(configDomains []string) func(context.Context, *protocol.ToolCall) (map[string]any, []protocol.Artifact, error) {
+func redditPostReadHandler(configDomains []string, artStore artifact.Store) func(context.Context, *protocol.ToolCall) (map[string]any, []protocol.Artifact, error) {
 	return func(ctx context.Context, call *protocol.ToolCall) (map[string]any, []protocol.Artifact, error) {
 		in, err := executor.DecodeInput[redditPostReadInput](call)
 		if err != nil {
@@ -109,7 +114,7 @@ func redditPostReadHandler(configDomains []string) func(context.Context, *protoc
 			ReadInput: platform.ReadInput{
 				URL:               in.URL,
 				Format:            in.Format,
-				IncludeMedia:      in.IncludeMedia,
+				IncludeMedia:      in.IncludeMedia || in.IncludeOCR || in.IncludeASR || in.IncludeSummary,
 				IncludeScreenshot: in.IncludeScreenshot,
 				WaitSelector:      in.WaitSelector,
 				UseCookieDomain:   in.UseCookieDomain,
@@ -128,7 +133,16 @@ func redditPostReadHandler(configDomains []string) func(context.Context, *protoc
 			}
 			return nil, nil, err
 		}
-		return platform.ApplyFormats(content, in.Format), nil, nil
+		out := platform.ApplyFormats(content, in.Format)
+		if !strings.HasPrefix(call.ID, "collect_") && (in.IncludeOCR || in.IncludeASR || in.IncludeSummary) {
+			if err := skill.Enhance(ctx, out, config.Get().Skill, skill.EnhanceOptions{
+				CallID: call.ID, IncludeOCR: in.IncludeOCR, IncludeASR: in.IncludeASR,
+				IncludeSummary: in.IncludeSummary, SourceText: content.Text, ScreenshotBase64: content.ScreenshotBase64, ArtifactStore: artStore,
+			}); err != nil {
+				return out, nil, err
+			}
+		}
+		return out, nil, nil
 	}
 }
 
