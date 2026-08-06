@@ -1,6 +1,6 @@
 module github.com/originaleric/digcrawl
 
-go 1.24.8
+go 1.26.1
 
 require (
 	github.com/JohannesKaufmann/html-to-markdown v1.6.0
@@ -12,7 +12,7 @@ require (
 	github.com/gorilla/websocket v1.5.3
 	github.com/mark3labs/mcp-go v0.44.0
 	github.com/mattn/go-sqlite3 v1.14.22
-	github.com/originaleric/DigFlow v1.1.3
+	github.com/originaleric/DigFlow v1.1.4
 	golang.org/x/net v0.50.0
 	gopkg.in/yaml.v3 v3.0.1
 )
@@ -39,10 +39,10 @@ require (
 	github.com/cloudwego/eino-ext/components/document/transformer/splitter/markdown v0.0.0-20260204064123-1f91f547c77e // indirect
 	github.com/cloudwego/eino-ext/components/embedding/openai v0.0.0-20260204064123-1f91f547c77e // indirect
 	github.com/cloudwego/eino-ext/components/model/ark v0.1.30 // indirect
-	github.com/cloudwego/eino-ext/components/model/deepseek v0.0.0-20251011073417-75b93b87b8a9 // indirect
-	github.com/cloudwego/eino-ext/components/model/openai v0.1.8 // indirect
+	github.com/cloudwego/eino-ext/components/model/deepseek v0.1.2 // indirect
+	github.com/cloudwego/eino-ext/components/model/openai v0.1.13 // indirect
 	github.com/cloudwego/eino-ext/components/model/qwen v0.0.0-20251027115529-d66866a0eacf // indirect
-	github.com/cloudwego/eino-ext/libs/acl/openai v0.1.13 // indirect
+	github.com/cloudwego/eino-ext/libs/acl/openai v0.1.17 // indirect
 	github.com/cohesion-org/deepseek-go v1.3.2 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/dgryski/go-rendezvous v0.0.0-20200823014737-9f7001d12a5f // indirect
@@ -82,7 +82,7 @@ require (
 	github.com/mailru/easyjson v0.9.0 // indirect
 	github.com/markcheno/go-talib v0.0.0-20250114000313-ec55a20c902f // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
-	github.com/meguminnnnnnnnn/go-openai v0.1.1 // indirect
+	github.com/meguminnnnnnnnn/go-openai v0.1.2 // indirect
 	github.com/microsoft/go-mssqldb v1.8.2 // indirect
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
 	github.com/modern-go/reflect2 v1.0.2 // indirect
@@ -93,8 +93,8 @@ require (
 	github.com/oapi-codegen/runtime v1.1.1 // indirect
 	github.com/ollama/ollama v0.6.5 // indirect
 	github.com/openai/openai-go v1.10.1 // indirect
-	github.com/originaleric/digeino v1.0.13 // indirect
-	github.com/originaleric/goDig v1.0.4 // indirect
+	github.com/originaleric/digeino v1.0.14 // indirect
+	github.com/originaleric/goDig v1.0.8 // indirect
 	github.com/pelletier/go-toml/v2 v2.2.3 // indirect
 	github.com/pinecone-io/go-pinecone/v4 v4.1.4 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
@@ -107,6 +107,7 @@ require (
 	github.com/redis/go-redis/v9 v9.17.2 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/robfig/cron/v3 v3.0.1 // indirect
+	github.com/santhosh-tekuri/jsonschema/v6 v6.0.1 // indirect
 	github.com/sirupsen/logrus v1.9.4 // indirect
 	github.com/slongfield/pyfmt v0.0.0-20220222012616-ea85ff4c361f // indirect
 	github.com/spf13/cast v1.7.1 // indirect
@@ -157,5 +158,3 @@ require (
 	modernc.org/memory v1.5.0 // indirect
 	modernc.org/sqlite v1.23.1 // indirect
 )
-
-replace github.com/originaleric/DigFlow => github.com/originaleric/DigFlow v1.1.3
