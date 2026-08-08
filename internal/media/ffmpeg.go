@@ -54,6 +54,9 @@ func ExtractAudio(ctx context.Context, inputPath string, opts AudioExtractOption
 	if baseTemp == "" {
 		baseTemp = os.TempDir()
 	}
+	if err := os.MkdirAll(baseTemp, 0o755); err != nil {
+		return ExtractedAudio{}, fmt.Errorf("create ASR temp base directory: %w", err)
+	}
 	dir, err := os.MkdirTemp(baseTemp, "digcrawl-asr-*")
 	if err != nil {
 		return ExtractedAudio{}, fmt.Errorf("create temp dir: %w", err)

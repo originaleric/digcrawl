@@ -134,6 +134,23 @@ func TestMCPPhaseOneProfileExposesOnlyReadTools(t *testing.T) {
 			t.Fatalf("%s annotations overclaim no side effects: %+v", name, tool)
 		}
 	}
+	writeMCPRequest(t, stdin, map[string]any{
+		"jsonrpc": "2.0",
+		"id":      3,
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name":      "gateway.ping",
+			"arguments": map[string]any{},
+		},
+	})
+	var pingResponse struct {
+		ID     int             `json:"id"`
+		Result json.RawMessage `json:"result"`
+	}
+	readMCPResponse(t, scanner, &pingResponse, stderr.String())
+	if pingResponse.ID != 3 || !bytes.Contains(pingResponse.Result, []byte("pong")) {
+		t.Fatalf("gateway.ping response=%s", pingResponse.Result)
+	}
 	if err := stdin.Close(); err != nil {
 		t.Fatal(err)
 	}

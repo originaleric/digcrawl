@@ -1,6 +1,7 @@
 package browser
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/originaleric/digcrawl/protocol"
@@ -9,6 +10,19 @@ import (
 func TestValidateCallURLOpensPublicWebWhenDomainRestrictionIsUnset(t *testing.T) {
 	if err := validateCallURL("https://8.8.8.8/article", &protocol.ToolCall{}, nil); err != nil {
 		t.Fatalf("expected public URL to be allowed without a domain restriction: %v", err)
+	}
+}
+
+func TestBrowseEntryExposesScreenshotAlongsideRead(t *testing.T) {
+	entry := BrowseEntry(nil, nil)
+	var schema struct {
+		Properties map[string]any `json:"properties"`
+	}
+	if err := json.Unmarshal(entry.Descriptor.InputSchema, &schema); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := schema.Properties["include_screenshot"]; !ok {
+		t.Fatal("browser.browse must expose include_screenshot so a host can receive text and an image attachment together")
 	}
 }
 

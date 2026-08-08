@@ -141,7 +141,7 @@ func platformReadHandler(
 		}
 		out := iplatform.ApplyFormats(content, in.Format)
 		if !strings.HasPrefix(call.ID, "collect_") && skillEnhancement {
-			if err := skill.Enhance(ctx, out, config.Get().Skill, skill.EnhanceOptions{
+			if err := skill.Enhance(ctx, out, config.Skill(), skill.EnhanceOptions{
 				CallID: call.ID, IncludeOCR: in.IncludeOCR, IncludeASR: in.IncludeASR,
 				IncludeSummary: in.IncludeSummary, SourceText: content.Text, ScreenshotBase64: content.ScreenshotBase64, ArtifactStore: artStore,
 			}); err != nil {

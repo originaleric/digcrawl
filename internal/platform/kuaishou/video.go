@@ -44,7 +44,7 @@ func ReadVideo(ctx context.Context, in platform.ReadInput) (*platform.Content, e
 	browseCtx, cancel := context.WithTimeout(ctx, kuaishouBrowseTimeout())
 	defer cancel()
 	start := time.Now()
-	resp, err := platform.Browse(browseCtx, norm.EffectiveBrowseURL(), in, platform.BrowseSpec{WaitSelector: DefaultWaitSelector, ContentSelector: DefaultContentSelector, CookieDomain: cookieDomain, MetadataScript: MetadataScript()})
+	resp, err := platform.Browse(browseCtx, norm.EffectiveBrowseURL(), in, platform.BrowseSpec{WaitSelector: DefaultWaitSelector, ContentSelector: DefaultContentSelector, CookieDomain: cookieDomain, MetadataScript: MetadataScript(), CaptureMedia: in.IncludeMedia})
 	if err != nil {
 		return nil, classifyBrowseError(err)
 	}

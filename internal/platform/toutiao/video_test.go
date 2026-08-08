@@ -4,6 +4,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/originaleric/digcrawl/internal/browser"
 	"github.com/originaleric/digcrawl/internal/platform"
 )
 
@@ -35,6 +36,23 @@ func TestValidateVideoContentAllowsMetadataOnlyRead(t *testing.T) {
 	}
 	if err := validateVideoContent(content, false); err != nil {
 		t.Fatalf("metadata-only video read should be allowed: %v", err)
+	}
+}
+
+func TestNormalizeVideoPrefersBrowserMediaResources(t *testing.T) {
+	t.Parallel()
+	content := normalizeVideo(platform.ReadInput{IncludeMedia: true}, &platform.NormalizedURL{
+		OriginalURL:  "https://www.toutiao.com/video/123/",
+		CanonicalURL: "https://www.toutiao.com/video/123/",
+	}, &browser.BrowserBrowseResponse{
+		Metadata:  map[string]any{"video_urls": []string{"https://old.example/video.mp4"}},
+		MediaURLs: []string{"https://cdn.example/video.mp4"},
+	})
+	if !hasVideoMedia(content.Media) || content.Media[len(content.Media)-1].URL != "https://cdn.example/video.mp4" {
+		t.Fatalf("expected browser media resource, got %#v", content.Media)
+	}
+	if got := platform.MetaString(content.PlatformMetadata, "media_extraction_source"); got != "browser_resource" {
+		t.Fatalf("media extraction source = %q", got)
 	}
 }
 

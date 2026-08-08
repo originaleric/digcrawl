@@ -13,8 +13,10 @@ const Name = "asr"
 
 // Provider registers ASR transcription tools.
 type Provider struct {
-	Config           config.ASRConfig
-	AllowedReadPaths []string
+	Config            config.ASRConfig
+	AllowedReadPaths  []string
+	SkillProfilePath  string
+	DisableTranscribe bool
 }
 
 func (p *Provider) Name() string { return Name }
@@ -24,7 +26,12 @@ func (p *Provider) Register(_ context.Context, reg *registry.Registry) error {
 	if cfg.Provider == "" {
 		cfg = config.Get().ASR
 	}
-	reg.Register(TranscribeEntry(cfg, p.AllowedReadPaths))
+	if !p.DisableTranscribe {
+		reg.Register(TranscribeEntry(cfg, p.AllowedReadPaths))
+	}
+	if config.IsDefaultSkillProfile(p.SkillProfilePath) {
+		reg.Register(EnableSkillASREntry())
+	}
 	return nil
 }
 

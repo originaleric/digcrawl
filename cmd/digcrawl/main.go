@@ -63,6 +63,12 @@ func run(argv []string) {
 		runLogin(argv[2:])
 	case "browser":
 		runBrowser(argv[2:])
+	case "init":
+		runInit(argv[2:])
+	case "config":
+		runConfig(argv[2:])
+	case "doctor":
+		runDoctor(argv[2:])
 	case "version", "--version", "-v":
 		printVersion()
 	case "help", "-h", "--help":
@@ -98,6 +104,9 @@ func printUsage() {
   digcrawl connect [flags]     保存宿主配置并启动 Collector
   digcrawl login [flags]       保存 Collector Token 到配置
   digcrawl browser check --platform xiaohongshu|douyin|toutiao|threads|instagram [--url URL] [--trial]
+  digcrawl init --profile skill [--force]
+  digcrawl config validate --config <profile>
+  digcrawl doctor --config <profile>
   digcrawl version
   digcrawl help
 
@@ -215,13 +224,15 @@ func runDevHost(args []string) {
 
 func runMCP(args []string) {
 	fs := flag.NewFlagSet("mcp", flag.ExitOnError)
-	configPath := fs.String("config", "config/config.yaml", "path to config.yaml")
+	configPath := fs.String("config", "", "path to profile (default: user skill profile)")
 	_ = fs.Parse(args)
 
-	cfg, err := loadConfig(*configPath)
+	profilePath := profilePathForMCP(*configPath)
+	cfg, err := loadRequiredConfig(profilePath)
 	if err != nil {
-		log.Fatalf("load config: %v", err)
+		log.Fatalf("load MCP profile: %v (run `digcrawl init --profile skill` or pass --config)", err)
 	}
+	allowSkillASRConfigurationTool(cfg)
 	rt, err := runtime.NewRuntime(cfg)
 	if err != nil {
 		log.Fatalf("runtime: %v", err)
@@ -230,6 +241,21 @@ func runMCP(args []string) {
 	if err := mcpgw.ServeStdio(rt); err != nil {
 		log.Fatalf("mcp: %v", err)
 	}
+}
+
+// allowSkillASRConfigurationTool keeps existing standard Skill profiles
+// forward-compatible without rewriting their allowlist at MCP startup. The
+// configuration tool persists only the two ASR opt-in settings after consent.
+func allowSkillASRConfigurationTool(cfg *config.Config) {
+	if cfg == nil || !config.IsDefaultSkillProfile(cfg.SourcePath) {
+		return
+	}
+	for _, tool := range cfg.Gateway.AllowedTools {
+		if tool == "skill.asr.enable" {
+			return
+		}
+	}
+	cfg.Gateway.AllowedTools = append(cfg.Gateway.AllowedTools, "skill.asr.enable")
 }
 
 func runCollectCommand(args []string) {

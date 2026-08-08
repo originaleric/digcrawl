@@ -46,6 +46,16 @@ func TestCollectPersistModeHelpers(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigPathsUseXDGDirectory(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", "/tmp/digcrawl-xdg")
+	if got, want := DefaultConfigPath(), filepath.Join("/tmp/digcrawl-xdg", "digcrawl", "config.yaml"); got != want {
+		t.Fatalf("DefaultConfigPath=%q want %q", got, want)
+	}
+	if got, want := DefaultSkillProfilePath(), filepath.Join("/tmp/digcrawl-xdg", "digcrawl", "digcrawl-skill.yaml"); got != want {
+		t.Fatalf("DefaultSkillProfilePath=%q want %q", got, want)
+	}
+}
+
 func TestWatchlistPersistenceDefaults(t *testing.T) {
 	t.Parallel()
 
@@ -193,7 +203,7 @@ func TestDigCrawlSkillExampleUsesReadOnlyToolProfile(t *testing.T) {
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		t.Fatal(err)
 	}
-	for _, tool := range []string{"gateway.ping", "browser.browse", "wechat.article.read", "feed.read"} {
+	for _, tool := range []string{"gateway.ping", "skill.asr.enable", "browser.browse", "wechat.article.read", "feed.read"} {
 		if !stringSliceContains(cfg.Gateway.AllowedTools, tool) {
 			t.Fatalf("skill profile missing %s", tool)
 		}
@@ -215,8 +225,8 @@ func TestDigCrawlSkillExampleUsesReadOnlyToolProfile(t *testing.T) {
 	if cfg.Gateway.ArtifactMaxInlineBytes != 10*1024*1024 {
 		t.Fatalf("skill profile artifact inline limit=%d", cfg.Gateway.ArtifactMaxInlineBytes)
 	}
-	if cfg.Providers.ASREnabled == nil || *cfg.Providers.ASREnabled {
-		t.Fatal("skill profile should not enable ASR")
+	if cfg.Providers.ASREnabled == nil || !*cfg.Providers.ASREnabled {
+		t.Fatal("skill profile must register the local ASR setting tool")
 	}
 	if cfg.Skill.Media.DownloadMedia {
 		t.Fatal("skill profile media download should require explicit local opt-in")
@@ -283,7 +293,7 @@ func TestLoadRejectsRemovedSkillSummaryFields(t *testing.T) {
 	}
 }
 
-func TestDigCrawlSkillExampleCopiesCollectOCROperationalSettings(t *testing.T) {
+func TestDigCrawlSkillExampleUsesHostVisionAndCollectASROperationalSettings(t *testing.T) {
 	collectData, err := os.ReadFile("config.yaml")
 	if err != nil {
 		t.Fatal(err)
@@ -299,11 +309,16 @@ func TestDigCrawlSkillExampleCopiesCollectOCROperationalSettings(t *testing.T) {
 	if err := yaml.Unmarshal(skillData, &skillCfg); err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(skillCfg.Skill.OCR, collectCfg.OCR) {
-		t.Fatalf("Skill.OCR must copy the Collect OCR settings: skill=%+v collect=%+v", skillCfg.Skill.OCR, collectCfg.OCR)
+	if !reflect.DeepEqual(skillCfg.Skill.OCR, OCRConfig{}) {
+		t.Fatalf("Skill profile must not configure local OCR: %+v", skillCfg.Skill.OCR)
+	}
+	if !reflect.DeepEqual(skillCfg.Skill.Summary, SkillSummaryConfig{}) {
+		t.Fatalf("Skill profile must not configure a local summary model: %+v", skillCfg.Skill.Summary)
 	}
 	wantASR := collectCfg.ASR
 	wantASR.Enabled = skillCfg.Skill.ASR.Enabled // Skill remains explicit opt-in.
+	// The open-source Skill never places a provider key in its example profile.
+	wantASR.APIKey = ""
 	if !reflect.DeepEqual(skillCfg.Skill.ASR, wantASR) {
 		t.Fatalf("Skill.ASR must copy the Collect ASR operational settings: skill=%+v collect=%+v", skillCfg.Skill.ASR, wantASR)
 	}
@@ -547,6 +562,45 @@ RuntimeEnv:
 	}
 	if got := os.Getenv("DIGCRAWL_RUNTIME_ENV_DISABLED_TEST"); got != "before" {
 		t.Fatalf("disabled runtime env should not override process env: %q", got)
+	}
+}
+
+func TestValidateDoesNotApplyRuntimeEnv(t *testing.T) {
+	t.Setenv("DIGCRAWL_VALIDATE_RUNTIME_ENV_TEST", "before")
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	data := []byte(`
+RuntimeEnv:
+  Enabled: true
+  Variables:
+    DIGCRAWL_VALIDATE_RUNTIME_ENV_TEST: after
+`)
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Validate(path); err != nil {
+		t.Fatal(err)
+	}
+	if got := os.Getenv("DIGCRAWL_VALIDATE_RUNTIME_ENV_TEST"); got != "before" {
+		t.Fatalf("Validate must not override process env: %q", got)
+	}
+}
+
+func TestValidateDoesNotReadExternalSecretConfigs(t *testing.T) {
+	dir := t.TempDir()
+	externalPath := filepath.Join(dir, "external.yaml")
+	if err := os.WriteFile(externalPath, []byte("[not valid YAML"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	profilePath := filepath.Join(dir, "profile.yaml")
+	data := []byte("RuntimeEnv:\n  ConfigPath: " + externalPath + "\nNotifications:\n  Feishu:\n    ConfigPath: " + externalPath + "\n")
+	if err := os.WriteFile(profilePath, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Validate(profilePath); err != nil {
+		t.Fatalf("Validate must not read external config: %v", err)
+	}
+	if _, err := Load(profilePath); err == nil {
+		t.Fatal("Load should retain runtime external-config merging")
 	}
 }
 

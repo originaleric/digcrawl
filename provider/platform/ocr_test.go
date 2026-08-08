@@ -13,17 +13,7 @@ import (
 	"github.com/originaleric/digcrawl/runtime/artifact"
 )
 
-func TestPlatformReadHandlerAppliesOCRToDirectScreenshot(t *testing.T) {
-	enabled := true
-	oldOCR := config.Get().OCR
-	config.Get().OCR = config.OCRConfig{
-		Enabled:  &enabled,
-		Provider: "stub",
-	}
-	defer func() {
-		config.Get().OCR = oldOCR
-	}()
-
+func TestPlatformReadHandlerReturnsMarkdownAndScreenshotArtifact(t *testing.T) {
 	input, err := json.Marshal(platformReadInput{
 		URL:               "https://8.8.8.8/post",
 		IncludeScreenshot: true,
@@ -63,16 +53,8 @@ func TestPlatformReadHandlerAppliesOCRToDirectScreenshot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out["markdown"].(string), "stub OCR text from screenshot") {
-		t.Fatalf("markdown missing screenshot OCR: %s", out["markdown"])
-	}
-	meta, _ := out["platform_metadata"].(map[string]any)
-	if meta["ocr_count"] != 1 {
-		t.Fatalf("metadata=%+v", meta)
-	}
-	results, ok := meta["ocr_results"].([]map[string]any)
-	if !ok || len(results) != 1 || results[0]["source"] != "screenshot" {
-		t.Fatalf("ocr_results=%T %+v", meta["ocr_results"], meta["ocr_results"])
+	if got := out["markdown"]; got != "body" {
+		t.Fatalf("markdown=%v, want body to remain available with screenshot", got)
 	}
 	if out["screenshot_artifact_id"] != "direct_ocr_screenshot_screenshot" {
 		t.Fatalf("screenshot_artifact_id=%v", out["screenshot_artifact_id"])
@@ -84,10 +66,10 @@ func TestPlatformReadHandlerAppliesOCRToDirectScreenshot(t *testing.T) {
 
 func TestPlatformReadHandlerAppliesSkillConfiguredOCR(t *testing.T) {
 	enabled := true
-	oldSkill := config.Get().Skill
-	config.Get().Skill = config.SkillConfig{OCR: config.OCRConfig{Enabled: &enabled, Provider: "stub"}}
+	oldSkill := config.Skill()
+	config.SetSkill(config.SkillConfig{OCR: config.OCRConfig{Enabled: &enabled, Provider: "stub"}})
 	defer func() {
-		config.Get().Skill = oldSkill
+		config.SetSkill(oldSkill)
 	}()
 
 	input, err := json.Marshal(platformReadInput{
@@ -120,10 +102,10 @@ func TestPlatformReadHandlerAppliesSkillConfiguredOCR(t *testing.T) {
 }
 
 func TestPlatformReadHandlerRejectsUnconfiguredSkillOCR(t *testing.T) {
-	oldSkill := config.Get().Skill
-	config.Get().Skill = config.SkillConfig{}
+	oldSkill := config.Skill()
+	config.SetSkill(config.SkillConfig{})
 	defer func() {
-		config.Get().Skill = oldSkill
+		config.SetSkill(oldSkill)
 	}()
 
 	input, err := json.Marshal(platformReadInput{URL: "https://8.8.8.8/post", IncludeOCR: true})

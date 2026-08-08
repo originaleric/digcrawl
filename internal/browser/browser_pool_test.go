@@ -69,6 +69,29 @@ func TestNormalizeLocalBrowserConfigDoesNotDuplicateHeadlessShellArgs(t *testing
 	}
 }
 
+func TestDiscoverInteractiveChromePathPrefersVisibleExecutable(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "Chrome")
+	if err := os.WriteFile(path, []byte("browser"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if got := discoverInteractiveChromePath(path); got != path {
+		t.Fatalf("interactive path=%q want %q", got, path)
+	}
+}
+
+func TestDiscoverInteractiveChromePathRejectsHeadlessShell(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "chrome-headless-shell")
+	if err := os.WriteFile(path, []byte("browser"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"DIGCRAWL_CHROME_PATH", "CHROME_PATH", "CHROME_BIN"} {
+		t.Setenv(key, path)
+	}
+	if got := discoverInteractiveChromePath(path); got == path {
+		t.Fatalf("headless shell must not be selected for interactive login: %q", got)
+	}
+}
+
 func writeExecutable(t *testing.T, path string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {

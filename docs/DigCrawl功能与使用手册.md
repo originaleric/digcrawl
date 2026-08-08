@@ -49,15 +49,23 @@ source/list discover -> collect detail -> normalize -> media/OCR/ASR enrich -> s
 
 ### Agent Skill 与 MCP
 
-仓库内的 [`.agents/skills/digcrawl`](../.agents/skills/digcrawl/) 提供了面向 Codex、Claude Code 及其他 MCP 客户端的只读链接读取规范。将 [`config/digcrawl-skill.example.yaml`](../config/digcrawl-skill.example.yaml) 复制到用户目录，替换 Cookie 和 artifact 目录占位符后，使用以下命令启动本地服务：
+仓库内的 [`.agents/skills/digcrawl`](../.agents/skills/digcrawl/) 提供了面向 Codex、Claude Code 及其他 MCP 客户端的只读链接读取规范。开源用户从 [GitHub Releases](https://github.com/originaleric/digcrawl/releases) 下载对应系统与架构的二进制、校验 `checksums.txt` 并放入 `PATH` 后，使用以下命令生成并检查用户级最小 profile：
+
+```bash
+digcrawl init --profile skill
+digcrawl config validate --config "$HOME/.config/digcrawl/digcrawl-skill.yaml"
+digcrawl doctor --config "$HOME/.config/digcrawl/digcrawl-skill.yaml"
+```
+
+macOS / Linux 默认目录为 `$XDG_CONFIG_HOME/digcrawl/`（XDG 未设置时为 `~/.config/digcrawl/`），Windows 为 `%APPDATA%\DigCrawl\`。`init` 不会覆盖已有文件，只有传入 `--force` 才会替换。也可以复制 [`config/digcrawl-skill.example.yaml`](../config/digcrawl-skill.example.yaml) 到任意用户目录自行维护；不论哪种方式，MCP 注册始终使用二进制与 profile 的绝对路径：
 
 ```bash
 digcrawl mcp --config /absolute/path/to/digcrawl-skill.yaml
 ```
 
-Skill 默认只读取链接；归档、Watchlist、浏览器交互和任意本地文件转写仍不暴露。用户明确请求时，平台读取工具可接受 `include_ocr`、`include_asr`：Skill 会在自己的领域内执行与 Collect 对齐的“媒体下载 → OCR/ASR”处理，不调用 `collect.Service`，因此可独立开源和演进。视频摘要默认由 Codex、Claude Code 等宿主基于返回的 Markdown 和成功的 `asr_text` 完成，不需要 DigFlow Runtime 或 DigFlow 配置。`include_summary` 只保留给用户明确选择的本地兜底：它仅使用本地 profile 注入的 `Skill.Summary.LLM` OpenAI-compatible BYOK 调用，不支持 DigFlow、extractive fallback 或原始转写。`Skill.Media`、`Skill.OCR`、`Skill.ASR`、`Skill.Summary` 默认关闭，密钥不进入 Agent 对话或仓库。`Gateway.AllowedDomains` 留空时允许任意 `http/https` 目标；配置后作为可选的访问收紧策略。用户明确请求截图时，返回当前视口图片；`Gateway.ArtifactMaxInlineBytes` 控制 MCP 附件上限，默认 `10485760`（10 MiB）。Cookie、artifact、下载媒体和登录态始终保留在用户本机。
+Codex、Claude Code、WorkBuddy 等宿主只需按各自格式登记这条 stdio 命令，DigCrawl 不会自动改写宿主配置。Homebrew tap 发布后可使用 `brew install --cask originaleric/tap/digcrawl`，它仍基于同一 GitHub Release。
 
-启用本地兜底的旧 profile 若仍包含 `Provider`、`FallbackProvider`、`Mode`、`ImportanceThreshold`、`DigFlow` 或 `InputBudget.MetadataChars`，会在加载时给出迁移错误；删除这些字段并保留 `LLM` 即可。
+Skill 默认只读取链接；归档、Watchlist、浏览器交互和任意本地文件转写仍不暴露。图片文字和视觉分析由 Codex、Claude Code 等宿主读取 DigCrawl 返回的页面截图附件完成：平台工具使用 `include_media` 与 `include_screenshot`，但不使用本地 `include_ocr`。`media` URL 是来源引用，若没有 MCP 图片附件，宿主不得声称已识别该图片。视频转写仍是显式本地能力，平台读取工具接受 `include_asr` 与 `include_media`，Skill 在自己的领域内执行与 Collect 对齐的“媒体下载 → ASR”处理，不调用 `collect.Service`。用户同意调用 `skill.asr.enable` 时，DigCrawl 会先检查 ffmpeg 与当前 ASR provider；缺失依赖时不会写入 opt-in 状态，宿主应保留错误并提示用户完成本地配置。视频摘要始终由宿主基于返回的 Markdown 和成功的 `asr_text` 完成；默认 profile 仅保留 `Skill.Media` 与 `Skill.ASR`，不包含 OCR、Summary 或模型 API Key，也不使用 DigFlow。`Gateway.AllowedDomains` 留空时允许任意 `http/https` 目标；配置后作为可选的访问收紧策略。用户明确请求截图时，返回当前视口图片；`Gateway.ArtifactMaxInlineBytes` 控制 MCP 附件上限，默认 `10485760`（10 MiB）。Cookie、artifact、下载媒体和登录态始终保留在用户本机。遇到小红书、抖音、头条、Threads 或 Instagram 的 `LOGIN_REQUIRED` 时，先经用户同意再运行 `digcrawl browser login --platform <platform>`；它会打开 DigCrawl 独立的有头登录窗口，不读取日常浏览器 profile，完成登录后在终端按 Enter 保存 Cookie。
 
 ## 4. 常用命令
 

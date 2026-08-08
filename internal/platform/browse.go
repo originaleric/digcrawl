@@ -15,11 +15,7 @@ func Browse(ctx context.Context, url string, in ReadInput, spec BrowseSpec) (*br
 	}
 	action := strings.TrimSpace(spec.Action)
 	if action == "" {
-		if in.IncludeScreenshot {
-			action = "screenshot"
-		} else {
-			action = "read"
-		}
+		action = "read"
 	}
 	cookieDomain := strings.TrimSpace(in.UseCookieDomain)
 	if cookieDomain == "" {
@@ -30,12 +26,14 @@ func Browse(ctx context.Context, url string, in ReadInput, spec BrowseSpec) (*br
 		waitSelector = spec.WaitSelector
 	}
 	return browser.BrowserBrowse(ctx, &browser.BrowserBrowseRequest{
-		URL:             url,
-		Action:          action,
-		Mode:            "full",
-		WaitSelector:    waitSelector,
-		ContentSelector: spec.ContentSelector,
-		UseCookieDomain: cookieDomain,
-		MetadataScript:  spec.MetadataScript,
+		URL:               url,
+		Action:            action,
+		CaptureScreenshot: in.IncludeScreenshot,
+		Mode:              "full",
+		WaitSelector:      waitSelector,
+		ContentSelector:   spec.ContentSelector,
+		UseCookieDomain:   cookieDomain,
+		MetadataScript:    spec.MetadataScript,
+		CaptureMedia:      spec.CaptureMedia,
 	})
 }

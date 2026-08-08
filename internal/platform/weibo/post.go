@@ -46,6 +46,7 @@ func ReadPost(ctx context.Context, in platform.ReadInput) (*platform.Content, er
 		ContentSelector: DefaultContentSelector,
 		CookieDomain:    cookieDomain,
 		MetadataScript:  MetadataScript(),
+		CaptureMedia:    in.IncludeMedia,
 	})
 	if err != nil {
 		return nil, err

@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/originaleric/digcrawl/config"
 )
 
 func TestLocalProviderParsesStdoutJSON(t *testing.T) {
@@ -84,5 +86,16 @@ func TestLocalProviderMissingCommandReturnsReadinessError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "ASR.LocalCommand") || !strings.Contains(err.Error(), "--local-command") {
 		t.Fatalf("error is not actionable: %v", err)
+	}
+}
+
+func TestCheckAvailableRejectsMissingLocalDependencies(t *testing.T) {
+	ffmpeg := filepath.Join(t.TempDir(), "ffmpeg")
+	if err := os.WriteFile(ffmpeg, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	err := CheckAvailable(config.ASRConfig{Provider: "local", FFmpegPath: ffmpeg, LocalCommand: "digcrawl-missing-local-asr-command"})
+	if err == nil || !strings.Contains(err.Error(), "local ASR command") {
+		t.Fatalf("error=%v", err)
 	}
 }

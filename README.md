@@ -101,15 +101,36 @@ go build -o digcrawl ./cmd/digcrawl
 go build -o digcollect ./cmd/digcollect
 ```
 
+## 开源安装与 MCP 接入
+
+日常使用不需要源码构建：从 [GitHub Releases](https://github.com/originaleric/digcrawl/releases) 下载与系统、CPU 架构匹配的 `digcrawl_<version>_<os>_<arch>` 压缩包，使用同一 Release 的 `checksums.txt` 校验后解压，并将 `digcrawl` 放入用户自己的 `PATH` 目录。发行产物覆盖 macOS Apple Silicon / Intel、Linux x86_64 / arm64 和 Windows x86_64。
+
+```bash
+digcrawl version
+digcrawl init --profile skill
+digcrawl config validate --config "$HOME/.config/digcrawl/digcrawl-skill.yaml"
+digcrawl doctor --config "$HOME/.config/digcrawl/digcrawl-skill.yaml"
+```
+
+macOS / Linux 默认 profile 在 `$XDG_CONFIG_HOME/digcrawl/`；未设置 `XDG_CONFIG_HOME` 时为 `~/.config/digcrawl/`。Windows 使用 `%APPDATA%\DigCrawl\`。`init` 不会覆盖已有 profile，只有显式传 `--force` 才会替换它；已有用户也始终可以继续用 `--config <path>` 指向自己的文件。`doctor` 不读取或打印 Cookie、Token、API Key。`digcrawl browser login --platform <platform>` 与 `browser check` 默认使用这一用户 Skill profile；定制 profile 时必须传入相同的 `--config <path>`，CLI 不会猜测 MCP 使用的 profile。
+
+将下列内容复制到 Codex 配置，并替换为二进制与 profile 的绝对路径：
+
+```toml
+[mcp_servers.digcrawl]
+command = "/absolute/path/to/digcrawl"
+args = ["mcp", "--config", "/absolute/path/to/digcrawl-skill.yaml"]
+```
+
+Claude Code 使用同一条 stdio 命令，完整 JSON 样例见 [Codex](.agents/skills/digcrawl/codex/config.toml.example) 与 [Claude Code](.agents/skills/digcrawl/claude-code/.mcp.json.example)。WorkBuddy 等 MCP 客户端同样只需按各自配置格式填写 `command` 和 `args`；DigCrawl 不会自动改写宿主配置。Homebrew tap 准备好后可使用 `brew install --cask originaleric/tap/digcrawl`，它仍从 GitHub Releases 获取同一发行版本。
+
 ## Agent Skill
 
 仓库内的 [`.agents/skills/digcrawl`](.agents/skills/digcrawl/) 是 Codex 自动发现的仓库级 Skill，将 DigCrawl 的本地 MCP 能力提供给 Codex、Claude Code 等 Agent，用于只读链接内容。它会按 URL 选择平台读取工具，保留登录、验证码和频控等结构化错误，不会请求、展示或导出用户 Cookie。
 
-复制 [`config/digcrawl-skill.example.yaml`](config/digcrawl-skill.example.yaml) 到用户本机目录后，将 Cookie、artifact 和 `Skill.Media.Dir` 占位符替换为用户拥有的绝对路径，再使用绝对路径将 `digcrawl mcp --config <profile>` 注册为 MCP 服务。默认可读取任意 `http/https` 网页；DigCrawl 是本地用户工具，不承担网络隔离职责。用户明确请求截图时，会返回当前视口图片并持久化到本地 artifact store；`Gateway.ArtifactMaxInlineBytes` 控制 MCP 附件上限，默认 10 MiB，过期文件会自动清理。`Gateway.AllowedDomains` 仅用于需要额外收紧访问范围的场景。
+运行 `digcrawl init --profile skill` 会在用户配置目录生成无密钥的最小 profile；也可以复制 [`config/digcrawl-skill.example.yaml`](config/digcrawl-skill.example.yaml) 到用户目录自行调整。用绝对路径将 `digcrawl mcp --config <profile>` 注册为 MCP 服务；不传 `--config` 时，`mcp` 只会发现用户配置目录中的 `digcrawl-skill.yaml`，不会回退依赖仓库的 `config/config.yaml`。默认可读取任意 `http/https` 网页；DigCrawl 是本地用户工具，不承担网络隔离职责。用户明确请求截图时，会返回当前视口图片并持久化到本地 artifact store；`Gateway.ArtifactMaxInlineBytes` 控制 MCP 附件上限，默认 10 MiB，过期文件会自动清理。`Gateway.AllowedDomains` 仅用于需要额外收紧访问范围的场景。
 
-Skill 的 OCR 与 ASR 是显式请求能力：Agent 会向原有平台读取工具传递 `include_ocr` 或 `include_asr`，不新增对 `collect.Service` 的依赖。Skill 独立执行与 Collect 对齐的“媒体下载 → OCR/ASR”流程，Provider、模型和密钥只从本地 `Skill.OCR`、`Skill.ASR` 配置注入。视频摘要默认由 Codex、Claude Code 等宿主基于返回的 Markdown 和 `asr_text` 完成，不需要 DigFlow 或额外的 DigCrawl LLM 配置。仅当用户明确选择本地兜底时，才传递 `include_summary` 并使用 `Skill.Summary.LLM` 的 OpenAI-compatible BYOK 调用；它不支持 DigFlow、extractive fallback 或原始转写替代。Codex 和 Claude Code 的配置样例见 Skill 目录。
-
-若启用本地兜底，旧 profile 中的 `Provider`、`FallbackProvider`、`Mode`、`ImportanceThreshold`、`DigFlow` 与 `InputBudget.MetadataChars` 会在加载时明确拒绝；删除它们后只保留 `LLM` 配置。
+Skill 的图片识别和摘要优先使用 Codex、Claude Code 等宿主自身的多模态模型：图片文字请求会请求页面截图附件并由宿主读取；DigCrawl 返回的 `media` URL 仅作来源引用，未作为附件提供时不得声称已识别原图。视频 ASR 仍是显式本地能力：Agent 传递 `include_asr` 与 `include_media`，由独立的 `Skill.Media`、`Skill.ASR` 配置执行与 Collect 对齐的“媒体下载 → ASR”流程，不调用 `collect.Service`。用户同意调用 `skill.asr.enable` 时，DigCrawl 会先验证 ffmpeg 与当前 ASR provider；验证失败不会写入启用状态，先完成本地依赖配置后再重试。随后宿主基于 Markdown 和 `asr_text` 总结，因此开源 Skill 默认不包含 OCR 或 LLM API Key，也不使用 DigFlow。Codex 和 Claude Code 的配置样例见 Skill 目录。
 
 采集单个链接：
 
@@ -214,7 +235,7 @@ curl -X POST -H "Authorization: Bearer $DIGCRAWL_GATEWAY_TOKEN" \
 
 可用接口：`GET /admin/watchlist/sources`、`GET /admin/watchlist/sources/{id}`、`POST /admin/watchlist/sources`、`PUT /admin/watchlist/sources/{id}`、`PATCH /admin/watchlist/sources/{id}/enable`、`PATCH /admin/watchlist/sources/{id}/disable`、`DELETE /admin/watchlist/sources/{id}`、`POST /admin/watchlist/sources/{id}/discover`、`POST /admin/watchlist/sources/{id}/run`、`POST /admin/watchlist/run-due`。
 
-DigFlow HTTP 摘要不需要编译私有 DigFlow runtime；默认 `go build ./cmd/digcrawl` 下 `digflow_runtime` 会使用 stub 并回退到 extractive 摘要，避免普通测试和本地运行被私有仓库下载阻断。需要启用 DigFlow 内嵌 Runtime 时，使用 `-tags digflow_embedded` 构建，并先准备 SSH/GOPRIVATE、数据库与模型配置。Watchlist 常驻脚本默认会用该 tag 构建 `bin/digcrawl-watchlist`。DigFlow `v1.1.3` 的轻量化主要面向 `pkg/digflowapi` / `pkg/digflowtypes` 公共 DTO；digcrawl 内嵌模式仍使用 `pkg/digflow` runtime，首次构建仍会拉取 runtime 依赖树。真实数据库连接写入本地 `config/gorm.yml`，DigFlow 模板变量通过 `RuntimeEnv.ConfigPath` 指向的本地 `config/runtime-env.yml` 注入；仓库提供无密钥模板 `config/gorm.example.yml` 和 `config/runtime-env.example.yml`。DigFlow 自身表保持 `df_` 前缀，配置入口为 `config/digflow-gorm.yml`、`config/digflow.yml`、`config/eino.yml` 和 `agents/watchlist/agents.yml`；其中 `config/digflow-gorm.yml` 支持 `${DIGCRAWL_MYSQL_*}` 由 DigCrawl 宿主侧在运行时展开到临时配置文件，缺失变量会 fail-fast。
+DigFlow HTTP 摘要不需要编译私有 DigFlow runtime；默认 `go build ./cmd/digcrawl` 下 `digflow_runtime` 会使用 stub 并回退到 extractive 摘要，避免普通测试和本地运行被私有仓库下载阻断。需要启用 DigFlow 内嵌 Runtime 时，使用 `-tags digflow_embedded` 构建，并先准备 SSH/GOPRIVATE、数据库与模型配置。Watchlist 常驻脚本默认会用该 tag 构建 `bin/digcrawl-watchlist`。DigFlow 已升级到 `v1.1.4`；digcrawl 内嵌模式仍使用 `pkg/digflow` runtime，首次构建仍会拉取 runtime 依赖树。真实数据库连接写入本地 `config/gorm.yml`，DigFlow 模板变量通过 `RuntimeEnv.ConfigPath` 指向的本地 `config/runtime-env.yml` 注入；仓库提供无密钥模板 `config/gorm.example.yml` 和 `config/runtime-env.example.yml`。DigFlow 自身表保持 `df_` 前缀，配置入口为 `config/digflow-gorm.yml`、`config/digflow.yml`、`config/eino.yml` 和 `agents/watchlist/agents.yml`；其中 `config/digflow-gorm.yml` 支持 `${DIGCRAWL_MYSQL_*}` 由 DigCrawl 宿主侧在运行时展开到临时配置文件，缺失变量会 fail-fast。
 
 ```bash
 GOPRIVATE=github.com/originaleric/* \

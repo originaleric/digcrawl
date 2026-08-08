@@ -57,7 +57,13 @@ func normalizeVideo(in platform.ReadInput, norm *platform.NormalizedURL, resp *b
 			if cover := platform.MetaString(resp.Metadata, "cover_url"); cover != "" {
 				c.Media = []platform.MediaItem{{Type: "image", URL: cover}}
 			}
-			c.Media = append(c.Media, platform.MediaItem{Type: "video", URL: canonical})
+			videoURLs := resp.MediaURLs
+			if len(videoURLs) == 0 {
+				videoURLs = []string{canonical}
+			}
+			for _, u := range videoURLs {
+				c.Media = append(c.Media, platform.MediaItem{Type: "video", URL: u})
+			}
 		}
 	}
 	if in.IncludeScreenshot {

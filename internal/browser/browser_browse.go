@@ -26,13 +26,17 @@ var cookieFileLocks sync.Map
 
 // BrowserBrowseRequest 本地浏览器抓取请求
 type BrowserBrowseRequest struct {
-	URL             string `json:"url" jsonschema:"required,description=需要访问的目标网页 URL"`
-	Action          string `json:"action,omitempty" jsonschema:"description=动作类型，支持 read 或 screenshot（当前视口），默认 read"`
-	Mode            string `json:"mode,omitempty" jsonschema:"description=提取模式：full（完整内容）、snapshot（快照模式，仅可交互元素）、summary（摘要模式），默认 full"`
-	TabID           string `json:"tab_id,omitempty" jsonschema:"description=可选标签页ID，用于复用标签页"`
-	WaitSelector    string `json:"wait_selector,omitempty" jsonschema:"description=可选 CSS 选择器，等待目标元素出现后再提取"`
-	ContentSelector string `json:"content_selector,omitempty" jsonschema:"description=可选 CSS 选择器，指定提取内容的范围（mode=full时有效）"`
-	UseCookieDomain string `json:"use_cookie_domain,omitempty" jsonschema:"description=可选 Cookie 域名（如 weixin.qq.com），用于加载并复用该域的 Cookie"`
+	URL               string `json:"url" jsonschema:"required,description=需要访问的目标网页 URL"`
+	Action            string `json:"action,omitempty" jsonschema:"description=动作类型，支持 read 或 screenshot（当前视口），默认 read"`
+	CaptureScreenshot bool   `json:"capture_screenshot,omitempty" jsonschema:"description=读取正文时额外返回当前视口截图"`
+	Mode              string `json:"mode,omitempty" jsonschema:"description=提取模式：full（完整内容）、snapshot（快照模式，仅可交互元素）、summary（摘要模式），默认 full"`
+	TabID             string `json:"tab_id,omitempty" jsonschema:"description=可选标签页ID，用于复用标签页"`
+	WaitSelector      string `json:"wait_selector,omitempty" jsonschema:"description=可选 CSS 选择器，等待目标元素出现后再提取"`
+	ContentSelector   string `json:"content_selector,omitempty" jsonschema:"description=可选 CSS 选择器，指定提取内容的范围（mode=full时有效）"`
+	UseCookieDomain   string `json:"use_cookie_domain,omitempty" jsonschema:"description=可选 Cookie 域名（如 weixin.qq.com），用于加载并复用该域的 Cookie"`
+	// CaptureMedia asks the local browser to discover playable HTTP media resources.
+	// It is opt-in because probing a player can start playback and add a short wait.
+	CaptureMedia bool `json:"capture_media,omitempty" jsonschema:"description=是否探测页面播放媒体资源，仅视频读取链路按需启用"`
 	// MetadataScript 可选：页面加载后执行的 JS 表达式，应返回可 JSON 序列化的对象（平台结构化字段提取）。
 	MetadataScript string `json:"metadata_script,omitempty" jsonschema:"description=可选 JS 表达式，返回 JSON 对象作为 metadata"`
 }
@@ -48,6 +52,7 @@ type BrowserBrowseResponse struct {
 	Elements       []AXNode       `json:"elements,omitempty" jsonschema:"description=可交互元素列表（mode=snapshot时返回）"`
 	Summary        string         `json:"summary,omitempty" jsonschema:"description=页面摘要（mode=summary时返回）"`
 	Metadata       map[string]any `json:"metadata,omitempty" jsonschema:"description=MetadataScript 提取的结构化字段"`
+	MediaURLs      []string       `json:"media_urls,omitempty" jsonschema:"description=浏览器探测到的 HTTP 媒体资源地址"`
 }
 
 // BrowserBrowse 使用本地 go-rod 浏览器读取动态页面或截图
@@ -93,6 +98,10 @@ func BrowserBrowse(ctx context.Context, req *BrowserBrowseRequest) (*BrowserBrow
 	defer manager.release(session)
 
 	page := session.page.Timeout(time.Duration(cfg.TotalTimeoutSec) * time.Second)
+	var finishMediaCapture func() []string
+	if req.CaptureMedia {
+		finishMediaCapture = startMediaResponseCapture(ctx, page)
+	}
 
 	if req.UseCookieDomain != "" {
 		if err := policy.ValidateURLDomain("https://"+req.UseCookieDomain, rootCfg.Gateway.AllowedDomains, nil); err != nil {
@@ -128,14 +137,7 @@ func BrowserBrowse(ctx context.Context, req *BrowserBrowseRequest) (*BrowserBrow
 		Title: title,
 	}
 
-	switch action {
-	case "screenshot":
-		imgBytes, err := page.Screenshot(false, nil)
-		if err != nil {
-			return nil, fmt.Errorf("页面截图失败: %w", err)
-		}
-		resp.ScreenshotBase = base64.StdEncoding.EncodeToString(imgBytes)
-	default:
+	if action != "screenshot" {
 		// 根据 mode 选择不同的提取方式
 		switch mode {
 		case "snapshot":
@@ -159,10 +161,8 @@ func BrowserBrowse(ctx context.Context, req *BrowserBrowseRequest) (*BrowserBrow
 			var err error
 
 			if req.ContentSelector != "" {
-				// 使用指定的选择器提取内容
 				htmlContent, textContent, err = extractContentBySelector(page, req.ContentSelector, cfg.WaitSelectorTimeoutSec)
 			} else {
-				// 使用默认的正文提取逻辑
 				htmlContent, textContent, err = extractMainContent(page, cfg.WaitSelectorTimeoutSec)
 			}
 
@@ -178,6 +178,13 @@ func BrowserBrowse(ctx context.Context, req *BrowserBrowseRequest) (*BrowserBrow
 			resp.Markdown = strings.TrimSpace(md)
 		}
 	}
+	if action == "screenshot" || req.CaptureScreenshot {
+		imgBytes, err := page.Screenshot(false, nil)
+		if err != nil {
+			return nil, fmt.Errorf("页面截图失败: %w", err)
+		}
+		resp.ScreenshotBase = base64.StdEncoding.EncodeToString(imgBytes)
+	}
 
 	cookieDomain := strings.TrimSpace(req.UseCookieDomain)
 	if cookieDomain == "" {
@@ -190,12 +197,169 @@ func BrowserBrowse(ctx context.Context, req *BrowserBrowseRequest) (*BrowserBrow
 			resp.Metadata = map[string]any{"_metadata_error": err.Error()}
 		}
 	}
+	if req.CaptureMedia {
+		// Keep navigation-time Media responses as a fallback. Some players fetch
+		// their primary stream before their video element is attached, so resetting
+		// here would discard the only playable URL.
+		captured := captureMediaURLs(page)
+		if finishMediaCapture != nil {
+			captured = append(captured, finishMediaCapture()...)
+		}
+		resp.MediaURLs = uniqueMediaURLs(captured)
+	}
 
 	if err := saveDomainCookies(page, cookieDomain, cfg.CookieStoreDir, targetURL); err != nil {
 		return resp, fmt.Errorf("页面抓取成功，但保存 Cookie 失败: %w", err)
 	}
 
 	return resp, nil
+}
+
+const mediaResourceProbeScript = `async () => {
+  const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+  const uniq = (items) => [...new Set(items.map(v => String(v || '').trim()).filter(Boolean))];
+  const normalize = (raw) => {
+    try {
+      const u = new URL(String(raw || '').replaceAll('\\/', '/').replaceAll('\\u0026', '&'), location.href);
+      return /^https?:$/.test(u.protocol) ? u.href : '';
+    } catch (_) {
+      return '';
+    }
+  };
+  const isMediaURL = (raw) => {
+    const u = normalize(raw);
+    if (!u) return false;
+    const value = u.toLowerCase();
+    return /\.(?:mp4|m3u8|mpd|webm|mov)(?:[?#]|$)/.test(value)
+      || /(?:[?&](?:mime_type|media_type|content_type)=video(?:[_%2f-]|$))/.test(value);
+  };
+  const visibleByArea = (selector) => Array.from(document.querySelectorAll(selector)).filter(element => {
+    const rect = element.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0;
+  }).sort((a, b) => {
+    const ar = a.getBoundingClientRect();
+    const br = b.getBoundingClientRect();
+    return br.width * br.height - ar.width * ar.height;
+  });
+  const videos = () => visibleByArea('video');
+  const primaryVideo = () => videos()[0];
+  const primaryPlayer = () => primaryVideo()
+    || visibleByArea('[class*="player" i], [class*="video" i], [data-e2e*="player" i], [data-e2e*="video" i]')[0];
+  const player = primaryPlayer();
+  if (!player) return [];
+  try {
+    player.click();
+  } catch (_) {}
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const video = primaryVideo();
+    if (video) {
+      try {
+        video.muted = true;
+        await video.play();
+      } catch (_) {}
+      const videoURLs = [
+        video.currentSrc, video.src, video.getAttribute('src'),
+        ...Array.from(video.querySelectorAll('source')).map(source => source.src || source.getAttribute('src'))
+      ];
+      // A URL sourced directly from a <video> element is playable even when
+      // its CDN path intentionally omits a .mp4/.m3u8 extension.
+      const direct = uniq(videoURLs.map(normalize).filter(Boolean));
+      if (direct.length) return direct.slice(0, 8);
+    }
+    await sleep(500);
+  }
+  return [];
+}`
+
+func captureMediaURLs(page *rod.Page) []string {
+	if page == nil {
+		return nil
+	}
+	result, err := page.Eval(mediaResourceProbeScript)
+	if err != nil || result == nil {
+		return nil
+	}
+	raw, err := page.ObjectToJSON(result)
+	if err != nil {
+		return nil
+	}
+	var urls []string
+	if err := json.Unmarshal([]byte(raw.Str()), &urls); err != nil {
+		return nil
+	}
+	return urls
+}
+
+func startMediaResponseCapture(ctx context.Context, page *rod.Page) func() []string {
+	if page == nil {
+		return func() []string { return nil }
+	}
+	probeCtx, cancel := context.WithCancel(ctx)
+	probePage := page.Context(probeCtx)
+	if err := (proto.NetworkEnable{}).Call(probePage); err != nil {
+		cancel()
+		return func() []string { return nil }
+	}
+	seen := make(map[string]struct{})
+	var urls []string
+	var mu sync.Mutex
+	done := make(chan struct{})
+	wait := probePage.EachEvent(func(event *proto.NetworkResponseReceived) {
+		if event == nil || event.Response == nil || !isVideoMediaResponse(event) {
+			return
+		}
+		if u := strings.TrimSpace(event.Response.URL); u != "" {
+			mu.Lock()
+			if _, ok := seen[u]; !ok {
+				seen[u] = struct{}{}
+				urls = append(urls, u)
+			}
+			mu.Unlock()
+		}
+	})
+	go func() {
+		defer close(done)
+		wait()
+	}()
+	finish := func() []string {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(100 * time.Millisecond):
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]string(nil), urls...)
+	}
+	return finish
+}
+
+func isVideoMediaResponse(event *proto.NetworkResponseReceived) bool {
+	if event == nil || event.Response == nil {
+		return false
+	}
+	if event.Type == proto.NetworkResourceTypeMedia {
+		return true
+	}
+	mimeType := strings.ToLower(strings.TrimSpace(event.Response.MIMEType))
+	return strings.HasPrefix(mimeType, "video/") || strings.Contains(mimeType, "mpegurl") || strings.Contains(mimeType, "dash+xml")
+}
+
+func uniqueMediaURLs(urls []string) []string {
+	seen := make(map[string]struct{}, len(urls))
+	out := make([]string, 0, len(urls))
+	for _, raw := range urls {
+		u := strings.TrimSpace(raw)
+		if u == "" {
+			continue
+		}
+		if _, ok := seen[u]; ok {
+			continue
+		}
+		seen[u] = struct{}{}
+		out = append(out, u)
+	}
+	return out
 }
 
 func evalPageMetadata(page *rod.Page, script string) (map[string]any, error) {

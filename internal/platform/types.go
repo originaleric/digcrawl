@@ -63,6 +63,7 @@ type BrowseSpec struct {
 	CookieDomain    string
 	MetadataScript  string
 	Action          string // read | screenshot
+	CaptureMedia    bool
 }
 
 // NowRFC3339 返回当前采集时间。

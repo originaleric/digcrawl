@@ -55,6 +55,7 @@ func readVideoBrowser(ctx context.Context, in platform.ReadInput, norm *platform
 		ContentSelector: VideoContentSelector,
 		CookieDomain:    cookieDomain,
 		MetadataScript:  VideoMetadataScript(),
+		CaptureMedia:    in.IncludeMedia,
 	}
 	var resp *browser.BrowserBrowseResponse
 	err := platform.WithBrowseRetry(ctx, platform.BrowseRetryPolicy(), func(ctx context.Context) error {
@@ -150,7 +151,12 @@ func normalizeVideo(in platform.ReadInput, norm *platform.NormalizedURL, resp *b
 		if cover := platform.MetaString(meta, "cover_url"); cover != "" {
 			c.Media = append(c.Media, platform.MediaItem{Type: "image", URL: cover})
 		}
-		for _, u := range platform.MetaStringSlice(meta, "video_urls") {
+		videoURLs := platform.MetaStringSlice(meta, "video_urls")
+		if resp != nil && len(resp.MediaURLs) > 0 {
+			videoURLs = resp.MediaURLs
+			meta["media_extraction_source"] = "browser_resource"
+		}
+		for _, u := range videoURLs {
 			c.Media = append(c.Media, platform.MediaItem{Type: "video", URL: u})
 		}
 	}

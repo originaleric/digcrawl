@@ -26,7 +26,7 @@ func ReadContent(ctx context.Context, in platform.ReadInput) (*platform.Content,
 		cookieDomain = norm.CookieDomain
 	}
 	start := time.Now()
-	resp, err := platform.Browse(ctx, norm.EffectiveBrowseURL(), in, platform.BrowseSpec{WaitSelector: DefaultWaitSelector, ContentSelector: DefaultContentSelector, CookieDomain: cookieDomain, MetadataScript: MetadataScript()})
+	resp, err := platform.Browse(ctx, norm.EffectiveBrowseURL(), in, platform.BrowseSpec{WaitSelector: DefaultWaitSelector, ContentSelector: DefaultContentSelector, CookieDomain: cookieDomain, MetadataScript: MetadataScript(), CaptureMedia: in.IncludeMedia && norm.ContentKind == "video"})
 	if err != nil {
 		return nil, err
 	}

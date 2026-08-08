@@ -36,7 +36,11 @@ func normalizeVideo(in platform.ReadInput, norm *platform.NormalizedURL, resp *b
 	}
 	if in.IncludeMedia {
 		c.Media = platform.MediaFromMeta(meta)
-		for _, u := range platform.MetaStringSlice(meta, "video_urls") {
+		videoURLs := platform.MetaStringSlice(meta, "video_urls")
+		if resp != nil && len(resp.MediaURLs) > 0 {
+			videoURLs = resp.MediaURLs
+		}
+		for _, u := range videoURLs {
 			c.Media = append(c.Media, platform.MediaItem{Type: "video", URL: u})
 		}
 	}

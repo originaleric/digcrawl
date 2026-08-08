@@ -57,7 +57,7 @@ func normalizeNote(in platform.ReadInput, norm *platform.NormalizedURL, resp *br
 		c.Engagement = platform.EngagementFromMeta(resp.Metadata)
 		c.Tags = platform.MetaStringSlice(resp.Metadata, "tags")
 		if in.IncludeMedia {
-			c.Media = mediaFromMeta(resp.Metadata)
+			c.Media = mediaFromMeta(resp.Metadata, resp.MediaURLs)
 		}
 	}
 	if in.IncludeScreenshot {
@@ -66,11 +66,16 @@ func normalizeNote(in platform.ReadInput, norm *platform.NormalizedURL, resp *br
 	return c
 }
 
-func mediaFromMeta(meta map[string]any) []platform.MediaItem {
+func mediaFromMeta(meta map[string]any, browserURLs []string) []platform.MediaItem {
 	items := platform.MediaFromMeta(meta)
-	videoURL := strings.TrimSpace(platform.MetaString(meta, "video_url"))
-	if videoURL != "" {
-		items = append(items, platform.MediaItem{Type: "video", URL: videoURL})
+	videoURLs := browserURLs
+	if len(videoURLs) == 0 {
+		videoURLs = []string{strings.TrimSpace(platform.MetaString(meta, "video_url"))}
+	}
+	for _, videoURL := range videoURLs {
+		if videoURL != "" {
+			items = append(items, platform.MediaItem{Type: "video", URL: videoURL})
+		}
 	}
 	if len(items) == 0 {
 		return nil

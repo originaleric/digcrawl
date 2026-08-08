@@ -30,6 +30,7 @@ func ReadContent(ctx context.Context, in platform.ReadInput) (*platform.Content,
 		ContentSelector: "article, main, body",
 		CookieDomain:    strings.TrimSpace(in.UseCookieDomain),
 		MetadataScript:  MetadataScript(),
+		CaptureMedia:    in.IncludeMedia,
 	}
 	var resp *browser.BrowserBrowseResponse
 	start := time.Now()
@@ -65,7 +66,11 @@ func normalizeContent(in platform.ReadInput, norm *platform.NormalizedURL, resp 
 	title := platform.MetaString(meta, "title")
 	text := firstNonEmpty(platform.MetaString(meta, "description"), resp.Text)
 	media := platform.MediaFromMeta(meta)
-	for _, u := range platform.MetaStringSlice(meta, "video_urls") {
+	videoURLs := platform.MetaStringSlice(meta, "video_urls")
+	if resp != nil && len(resp.MediaURLs) > 0 {
+		videoURLs = resp.MediaURLs
+	}
+	for _, u := range videoURLs {
 		media = append(media, platform.MediaItem{Type: "video", URL: u})
 	}
 	contentType := "instagram_post"

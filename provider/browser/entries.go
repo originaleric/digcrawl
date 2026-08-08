@@ -17,14 +17,15 @@ import (
 )
 
 type browseInput struct {
-	URL             string `json:"url"`
-	Action          string `json:"action,omitempty"`
-	Mode            string `json:"mode,omitempty"`
-	TabID           string `json:"tab_id,omitempty"`
-	WaitSelector    string `json:"wait_selector,omitempty"`
-	ContentSelector string `json:"content_selector,omitempty"`
-	UseCookieDomain string `json:"use_cookie_domain,omitempty"`
-	IncludeOCR      bool   `json:"include_ocr,omitempty"`
+	URL               string `json:"url"`
+	Action            string `json:"action,omitempty"`
+	Mode              string `json:"mode,omitempty"`
+	TabID             string `json:"tab_id,omitempty"`
+	WaitSelector      string `json:"wait_selector,omitempty"`
+	ContentSelector   string `json:"content_selector,omitempty"`
+	UseCookieDomain   string `json:"use_cookie_domain,omitempty"`
+	IncludeScreenshot bool   `json:"include_screenshot,omitempty"`
+	IncludeOCR        bool   `json:"include_ocr,omitempty"`
 }
 
 // BrowseEntry returns registry entry for browser.browse.
@@ -37,13 +38,14 @@ func BrowseEntry(configDomains []string, artStore artifact.Store) registry.Entry
 				"type":     "object",
 				"required": []string{"url"},
 				"properties": map[string]any{
-					"url":               map[string]string{"type": "string"},
-					"action":            map[string]string{"type": "string"},
-					"mode":              map[string]string{"type": "string"},
-					"wait_selector":     map[string]string{"type": "string"},
-					"content_selector":  map[string]string{"type": "string"},
-					"use_cookie_domain": map[string]string{"type": "string"},
-					"include_ocr":       map[string]any{"type": "boolean"},
+					"url":                map[string]string{"type": "string"},
+					"action":             map[string]string{"type": "string"},
+					"mode":               map[string]string{"type": "string"},
+					"wait_selector":      map[string]string{"type": "string"},
+					"content_selector":   map[string]string{"type": "string"},
+					"use_cookie_domain":  map[string]string{"type": "string"},
+					"include_screenshot": map[string]any{"type": "boolean"},
+					"include_ocr":        map[string]any{"type": "boolean"},
 				},
 			}),
 			Capabilities: []string{"browser", "web.read", "cookie.local"},
@@ -65,7 +67,7 @@ func BrowseEntry(configDomains []string, artStore artifact.Store) registry.Entry
 				contentSelector = "body"
 			}
 			resp, err := browser.BrowserBrowse(ctx, &browser.BrowserBrowseRequest{
-				URL: in.URL, Action: in.Action, Mode: in.Mode, TabID: in.TabID,
+				URL: in.URL, Action: in.Action, CaptureScreenshot: in.IncludeScreenshot, Mode: in.Mode, TabID: in.TabID,
 				WaitSelector: in.WaitSelector, ContentSelector: contentSelector,
 				UseCookieDomain: in.UseCookieDomain,
 			})
@@ -93,7 +95,7 @@ func BrowseEntry(configDomains []string, artStore artifact.Store) registry.Entry
 				ocr.EnrichMap(ctx, out, config.Get().OCR, opts)
 			}
 			if !strings.HasPrefix(call.ID, "collect_") && in.IncludeOCR {
-				if err := skill.Enhance(ctx, out, config.Get().Skill, skill.EnhanceOptions{
+				if err := skill.Enhance(ctx, out, config.Skill(), skill.EnhanceOptions{
 					CallID: call.ID, IncludeOCR: true, ScreenshotBase64: resp.ScreenshotBase, ArtifactStore: artStore,
 				}); err != nil {
 					return out, nil, err

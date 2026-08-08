@@ -1,0 +1,58 @@
+version: 2
+project_name: digcrawl
+
+builds:
+  - id: digcrawl
+    main: ./cmd/digcrawl
+    binary: digcrawl
+    ldflags:
+      - -s -w -X github.com/originaleric/digcrawl/runtime/version.RuntimeVersion={{ .Version }} -X github.com/originaleric/digcrawl/runtime/version.Commit={{ .Commit }} -X github.com/originaleric/digcrawl/runtime/version.BuildDate={{ .Date }}
+    goos:
+      - darwin
+      - linux
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ignore:
+      - goos: windows
+        goarch: arm64
+
+archives:
+  - id: digcrawl
+    ids:
+      - digcrawl
+    name_template: "digcrawl_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    formats:
+      - tar.gz
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+
+checksum:
+  name_template: checksums.txt
+
+release:
+  github:
+    owner: originaleric
+    name: digcrawl
+
+# The tap remains a convenience layer over the same GitHub Release assets.
+# A Cask is the current Homebrew mechanism for pre-built binaries. Without a
+# cross-repository tap token, release assets still publish and the generated
+# Cask remains in dist for the maintainer to publish later.
+homebrew_casks:
+  - name: digcrawl
+    ids:
+      - digcrawl
+    binaries:
+      - digcrawl
+    repository:
+      owner: originaleric
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    homepage: "https://github.com/originaleric/digcrawl"
+    description: "Local content crawler and MCP server for agents"
+    license: "MIT"
+    skip_upload: "{{ if .Env.HOMEBREW_TAP_GITHUB_TOKEN }}false{{ else }}true{{ end }}"

@@ -100,6 +100,18 @@ func TestNewProviderRejectsUnsupportedAPIResponseFormat(t *testing.T) {
 	}
 }
 
+func TestNewProviderExpandsAPIKeyEnvironment(t *testing.T) {
+	t.Setenv("DIGCRAWL_TEST_ASR_API_KEY", "test-key")
+	p, err := newProvider(config.ASRConfig{Provider: "api", APIKey: "${DIGCRAWL_TEST_ASR_API_KEY}"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	api, ok := p.(*apiProvider)
+	if !ok || api.apiKey != "test-key" {
+		t.Fatalf("provider=%T apiKey=%q", p, api.apiKey)
+	}
+}
+
 func TestAPIProviderRejectsLargeAudio(t *testing.T) {
 	dir := t.TempDir()
 	audio := filepath.Join(dir, "audio.wav")

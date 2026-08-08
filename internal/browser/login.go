@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"io"
 	"net/url"
 	"os"
 	"strings"
@@ -80,6 +81,10 @@ func InteractiveLogin(ctx context.Context, platform string, cfg config.LocalBrow
 
 	headlessFalse := false
 	cfg.Headless = &headlessFalse
+	cfg.ChromePath = discoverInteractiveChromePath(cfg.ChromePath)
+	if cfg.ChromePath == "" {
+		return fmt.Errorf("未找到可显示登录窗口的 Chrome/Chromium；安装 Chrome/Chromium 或设置 LocalBrowser.ChromePath")
+	}
 	cfg = normalizeLocalBrowserConfig(cfg)
 	profileDir := ProfileDirForPlatform(cfg.UserDataDir, spec.Platform)
 	cfg.UserDataDir = profileDir
@@ -124,8 +129,11 @@ func InteractiveLogin(ctx context.Context, platform string, cfg config.LocalBrow
 	}
 	_ = page.WaitLoad()
 
-	fmt.Printf("请在浏览器中完成 %s 登录，完成后回到终端按 Enter 保存 Cookie...\n", spec.Platform)
-	_, _ = bufio.NewReader(os.Stdin).ReadString('\n')
+	fmt.Printf("已打开 DigCrawl 独立登录浏览器：%s\n", spec.IndexURL)
+	fmt.Printf("登录成功后回到终端按 Enter；Cookie 将保存到 %s\n", cfg.CookieStoreDir)
+	if err := waitForLoginConfirmation(os.Stdin); err != nil {
+		return err
+	}
 
 	target, err := url.Parse(spec.IndexURL)
 	if err != nil {
@@ -149,6 +157,13 @@ func InteractiveLogin(ctx context.Context, platform string, cfg config.LocalBrow
 		return fmt.Errorf("保存 cookie 失败: %w", err)
 	}
 	fmt.Printf("已保存 %s Cookie 到 %s\n", spec.Platform, cfg.CookieStoreDir)
+	return nil
+}
+
+func waitForLoginConfirmation(in io.Reader) error {
+	if _, err := bufio.NewReader(in).ReadString('\n'); err != nil {
+		return fmt.Errorf("未收到登录确认；请在可交互终端中按 Enter，或手动运行登录命令: %w", err)
+	}
 	return nil
 }
 

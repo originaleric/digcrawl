@@ -18,6 +18,9 @@ func TestNormalizeNoteWithMetadata(t *testing.T) {
 		URL:   norm.CanonicalURL,
 		Title: "page title",
 		Text:  "body",
+		MediaURLs: []string{
+			"https://video.example/browser.mp4",
+		},
 		Metadata: map[string]any{
 			"title":        "meta title",
 			"text":         "meta desc",
@@ -49,5 +52,8 @@ func TestNormalizeNoteWithMetadata(t *testing.T) {
 	}
 	if len(c.Media) < 2 {
 		t.Fatalf("media: %+v", c.Media)
+	}
+	if got := c.Media[len(c.Media)-1].URL; got != "https://video.example/browser.mp4" {
+		t.Fatalf("browser media url = %q", got)
 	}
 }

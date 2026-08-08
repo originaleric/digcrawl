@@ -114,6 +114,17 @@ func normalizeLocalBrowserConfig(cfg config.LocalBrowserConfig) config.LocalBrow
 	return cfg
 }
 
+// CheckAvailable verifies that DigCrawl can locate an executable Chromium
+// browser without launching it. It is used by the local doctor command so a
+// profile check stays side-effect free.
+func CheckAvailable(cfg config.LocalBrowserConfig) error {
+	cfg = normalizeLocalBrowserConfig(cfg)
+	if cfg.ChromePath == "" || !isExecutableFile(cfg.ChromePath) {
+		return fmt.Errorf("no supported Chrome/Chromium executable found; set LocalBrowser.ChromePath or install Chrome/Chromium")
+	}
+	return nil
+}
+
 func discoverLocalChromePath() string {
 	for _, key := range []string{"DIGCRAWL_CHROME_PATH", "CHROME_PATH", "CHROME_BIN"} {
 		if path := strings.TrimSpace(os.Getenv(key)); isExecutableFile(path) {
@@ -149,6 +160,39 @@ func discoverLocalChromePath() string {
 	return ""
 }
 
+// discoverInteractiveChromePath finds a browser that can show a login window.
+// The headless shell remains valid for crawling, but cannot satisfy an
+// interactive login flow.
+func discoverInteractiveChromePath(preferred string) string {
+	if isExecutableFile(preferred) && !isHeadlessShellPath(preferred) {
+		return strings.TrimSpace(preferred)
+	}
+	for _, key := range []string{"DIGCRAWL_CHROME_PATH", "CHROME_PATH", "CHROME_BIN"} {
+		if path := strings.TrimSpace(os.Getenv(key)); isExecutableFile(path) && !isHeadlessShellPath(path) {
+			return path
+		}
+	}
+	for _, path := range localChromeCandidates() {
+		if isExecutableFile(path) {
+			return path
+		}
+	}
+	for _, name := range []string{
+		"google-chrome",
+		"google-chrome-stable",
+		"chromium",
+		"chromium-browser",
+		"chrome",
+		"microsoft-edge",
+		"brave-browser",
+	} {
+		if path, err := exec.LookPath(name); err == nil && isExecutableFile(path) {
+			return path
+		}
+	}
+	return ""
+}
+
 func playwrightHeadlessShellCandidates() []string {
 	roots := []string{}
 	for _, key := range []string{"DIGCRAWL_PLAYWRIGHT_BROWSERS_PATH", "PLAYWRIGHT_BROWSERS_PATH"} {
@@ -162,8 +206,6 @@ func playwrightHeadlessShellCandidates() []string {
 			filepath.Join(home, ".cache/ms-playwright"),
 		)
 	}
-	roots = append(roots, "/Users/dig/projects/.cache/ms-playwright")
-
 	seen := map[string]struct{}{}
 	var candidates []string
 	for _, root := range roots {

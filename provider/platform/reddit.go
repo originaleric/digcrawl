@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/url"
 	"strings"
 
@@ -58,7 +59,7 @@ func RedditPostReadEntry(configDomains []string, artStore artifact.Store) regist
 			Capabilities: []string{"reddit", "platform.read", "browser"},
 			Risk:         "network",
 		},
-		Handler: redditPostReadHandler(configDomains, artStore),
+		Handler: redditPostReadHandler(configDomains, artStore, reddit.ReadPost),
 	}
 }
 
@@ -90,7 +91,7 @@ func RedditUserReadEntry(configDomains []string) registry.Entry {
 	}
 }
 
-func redditPostReadHandler(configDomains []string, artStore artifact.Store) func(context.Context, *protocol.ToolCall) (map[string]any, []protocol.Artifact, error) {
+func redditPostReadHandler(configDomains []string, artStore artifact.Store, read func(context.Context, reddit.ReadInput) (*platform.Content, error)) func(context.Context, *protocol.ToolCall) (map[string]any, []protocol.Artifact, error) {
 	return func(ctx context.Context, call *protocol.ToolCall) (map[string]any, []protocol.Artifact, error) {
 		in, err := executor.DecodeInput[redditPostReadInput](call)
 		if err != nil {
@@ -110,7 +111,7 @@ func redditPostReadHandler(configDomains []string, artStore artifact.Store) func
 		if in.ExpandMore != nil {
 			expandMore = *in.ExpandMore
 		}
-		content, err := reddit.ReadPost(ctx, reddit.ReadInput{
+		content, err := read(ctx, reddit.ReadInput{
 			ReadInput: platform.ReadInput{
 				URL:               in.URL,
 				Format:            in.Format,
@@ -135,14 +136,27 @@ func redditPostReadHandler(configDomains []string, artStore artifact.Store) func
 		}
 		out := platform.ApplyFormats(content, in.Format)
 		if !strings.HasPrefix(call.ID, "collect_") && (in.IncludeOCR || in.IncludeASR || in.IncludeSummary) {
-			if err := skill.Enhance(ctx, out, config.Get().Skill, skill.EnhanceOptions{
+			if err := skill.Enhance(ctx, out, config.Skill(), skill.EnhanceOptions{
 				CallID: call.ID, IncludeOCR: in.IncludeOCR, IncludeASR: in.IncludeASR,
 				IncludeSummary: in.IncludeSummary, SourceText: content.Text, ScreenshotBase64: content.ScreenshotBase64, ArtifactStore: artStore,
 			}); err != nil {
 				return out, nil, err
 			}
 		}
-		return out, nil, nil
+		var artifacts []protocol.Artifact
+		if content.ScreenshotBase64 != "" {
+			artID := call.ID + "_screenshot"
+			if artStore == nil {
+				return out, nil, fmt.Errorf("screenshot artifact store is unavailable")
+			}
+			art, err := artifact.PutBase64PNG(ctx, artStore, artID, content.ScreenshotBase64, config.Get().Gateway.ArtifactMaxInlineBytes)
+			if err != nil {
+				return out, nil, fmt.Errorf("persist screenshot artifact: %w", err)
+			}
+			artifacts = append(artifacts, art)
+			out["screenshot_artifact_id"] = art.ID
+		}
+		return out, artifacts, nil
 	}
 }
 

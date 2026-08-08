@@ -10,7 +10,7 @@ DigCrawl 是面向任意 Agent 编排系统的**本地工具网关**：在用户
 
 ### 环境要求
 
-- Go 1.24+（以 `go.mod` 为准）
+- Go 1.26.1+（以 `go.mod` 为准）
 - 使用浏览器类工具时需本机 Chrome/Chromium（go-rod 可自动查找，也可在配置中指定 `ChromePath`）。在 macOS sandbox 或 CI-like headless 环境中，建议使用 Playwright `chrome-headless-shell` 并显式配置启动参数。
 
 ### 本机 Headless Chromium（推荐兜底）
@@ -54,6 +54,19 @@ go build -o digcrawl ./cmd/digcrawl
 go build -o digcollect ./cmd/digcollect
 ```
 
+### 从 Release 安装（推荐给开源用户）
+
+从 [GitHub Releases](https://github.com/originaleric/digcrawl/releases) 下载当前系统与 CPU 架构对应的压缩包，并用 Release 中的 `checksums.txt` 校验。解压后的 `digcrawl` 放进用户自己管理的 `PATH` 目录即可；安装流程不会执行 `curl | sh`、修改 shell 配置或写入隐藏状态。
+
+```bash
+digcrawl version
+digcrawl init --profile skill
+digcrawl config validate --config "$HOME/.config/digcrawl/digcrawl-skill.yaml"
+digcrawl doctor --config "$HOME/.config/digcrawl/digcrawl-skill.yaml"
+```
+
+Release 提供 macOS Apple Silicon / Intel、Linux x86_64 / arm64 和 Windows x86_64 二进制。Homebrew tap 发布后可使用 `brew install --cask originaleric/tap/digcrawl`；它只是同一 GitHub Release 的便捷安装入口。
+
 ### 安装到 PATH（可选）
 
 ```bash
@@ -66,12 +79,13 @@ go install ./cmd/digcollect
 
 | 场景 | 默认路径 |
 |------|----------|
-| `gateway` / `collector` / `mcp` / `collect` 等 | 命令行 `--config`，未指定时为 `config/config.yaml` |
-| `connect` / `login` | `~/.digcrawl/config.yaml`（可用 `--config` 覆盖） |
+| `mcp` | 用户 Skill profile：`$XDG_CONFIG_HOME/digcrawl/digcrawl-skill.yaml`；未设置 XDG 时为 `~/.config/digcrawl/digcrawl-skill.yaml`；Windows 为 `%APPDATA%\DigCrawl\digcrawl-skill.yaml` |
+| `gateway` / `collector` / `collect` 等 | 命令行 `--config`，未指定时为 `config/config.yaml` |
+| `connect` / `login` | `$XDG_CONFIG_HOME/digcrawl/config.yaml`；未设置 XDG 时为 `~/.config/digcrawl/config.yaml`（可用 `--config` 覆盖） |
 | 本地 GORM 数据库连接 | `config/gorm.yml`，由 `config/gorm.example.yml` 复制生成；包含密码，默认不入 Git |
 | DigFlow 内嵌 Runtime 配置 | `config/digflow.yml`、`config/digflow-gorm.yml`、`config/eino.yml`、`agents/watchlist/agents.yml` |
 
-首次 `connect` 或 `login` 会自动创建 `~/.digcrawl/` 目录并写入配置。
+首次 `connect` 或 `login` 会自动创建用户配置目录并写入配置。
 
 ---
 
@@ -549,7 +563,7 @@ DigFlow 内嵌 Runtime 需要额外准备：
 - `agents/watchlist/summary-agent.yml`：watchlist 摘要 agent。
 - `config/runtime-env.yml`：本地运行时变量注入，参考 `config/runtime-env.example.yml`，由 `config/config.yaml` 的 `RuntimeEnv.ConfigPath` 显式启用。
 
-默认构建不编译私有 DigFlow runtime 依赖，`digflow_runtime` provider 会使用 stub 并回退到 extractive 摘要。DigFlow 已固定到 `v1.1.3`；需要真正嵌入 DigFlow runtime 时，先配置 SSH/GOPRIVATE，然后使用 `-tags digflow_embedded` 构建或测试。内嵌 runtime 首次构建会拉取 runtime 依赖树，建议显式设置可写 Go cache，避免本机权限或冷缓存导致长时间无输出。`config/digflow-gorm.yml` / `config/eino.yml` 中的 `${...}` 变量会由 DigCrawl 宿主侧在运行时展开到临时配置文件；缺失变量会直接报错，不会静默展开为空。
+默认构建不编译私有 DigFlow runtime 依赖，`digflow_runtime` provider 会使用 stub 并回退到 extractive 摘要。DigFlow 已升级到 `v1.1.4`；需要真正嵌入 DigFlow runtime 时，先配置 SSH/GOPRIVATE，然后使用 `-tags digflow_embedded` 构建或测试。内嵌 runtime 首次构建会拉取 runtime 依赖树，建议显式设置可写 Go cache，避免本机权限或冷缓存导致长时间无输出。`config/digflow-gorm.yml` / `config/eino.yml` 中的 `${...}` 变量会由 DigCrawl 宿主侧在运行时展开到临时配置文件；缺失变量会直接报错，不会静默展开为空。
 
 ```bash
 GOPRIVATE=github.com/originaleric/* \
@@ -561,7 +575,7 @@ TMPDIR=/private/tmp \
 go test -tags digflow_embedded ./internal/summary
 ```
 
-数据库 DDL 已对齐 DigFlow `v1.1.3`。该版本主要收口 `pkg/digflowapi` / `pkg/digflowtypes` 公共 DTO 轻量化，`pkg/digflow.NewRuntime`、`Invoke`、`Stream` 兼容既有宿主；digcrawl 当前内嵌路径仍直接使用 `pkg/digflow`，无需迁移 DTO import。本地单机运行推荐使用 SQLite，远端 MySQL 部署使用 MySQL DDL：
+数据库 DDL 已对齐 DigFlow `v1.1.4`。`pkg/digflow.NewRuntime`、`Invoke`、`Stream` 仍是本仓库使用的内嵌 Runtime 接口；digcrawl 当前内嵌路径仍直接使用 `pkg/digflow`，无需迁移 DTO import。本地单机运行推荐使用 SQLite，远端 MySQL 部署使用 MySQL DDL：
 
 - 新库完整初始化 MySQL：`sqls/full/digcrawl_full_sql_ddl.sql`
 - 新库完整初始化 SQLite：`sqls/full/digcrawl_full_sqlite_ddl.sql`，包含 Collect、Watchlist/Tasks runtime 和 DigFlow `df_*` embedded runtime 表
@@ -635,6 +649,9 @@ digcrawl collector [flags]     # WebSocket 反向连接宿主
 digcrawl connect [flags]       # 保存宿主配置并启动 Collector
 digcrawl login [flags]         # 仅保存 Token / 宿主地址
 digcrawl mcp [flags]           # MCP stdio（Cursor / Claude Desktop）
+digcrawl init --profile skill  # 创建用户级 Skill profile（已有文件须 --force）
+digcrawl config validate --config <profile> # 校验 profile YAML、路径、启用能力与边界
+digcrawl doctor --config <profile> # 检查 profile、artifact、浏览器、ffmpeg 与 MCP 初始化
 digcrawl stdio [flags]         # 逐行 JSON 协议
 digcrawl dev-host [flags]      # 本地参考宿主（仅开发调试）
 digcrawl collect <url>         # 采集单个 URL
@@ -804,14 +821,14 @@ digcrawl collector --server http://127.0.0.1:8790 --token dev
 
 ## 6. IDE 集成（MCP）
 
-在 Cursor、Claude Desktop 等支持 MCP 的客户端中，将 DigCrawl 注册为 stdio 服务：
+在 Codex、Claude Code、Cursor、WorkBuddy 等支持 MCP 的客户端中，将 DigCrawl 注册为 stdio 服务。先运行 `digcrawl init --profile skill`，再用 `digcrawl config validate --config <profile>` 和 `digcrawl doctor --config <profile>` 检查本机 profile。新安装时 `digcrawl mcp` 不传 `--config` 会发现用户级 `digcrawl-skill.yaml`；在宿主配置中仍建议显式传入 profile 的绝对路径：
 
 ```json
 {
   "mcpServers": {
     "digcrawl": {
       "command": "/path/to/digcrawl",
-      "args": ["mcp", "--config", "/path/to/config/config.yaml"]
+      "args": ["mcp", "--config", "/absolute/path/to/digcrawl-skill.yaml"]
     }
   }
 }
@@ -821,7 +838,7 @@ digcrawl collector --server http://127.0.0.1:8790 --token dev
 
 ### Agent Skill 最小 profile
 
-使用仓库级 `digcrawl` Skill 时，复制 `config/digcrawl-skill.example.yaml` 到用户目录，替换二进制、Cookie、artifact 与 `Skill.Media.Dir` 的绝对路径后，将该 profile 传给 `digcrawl mcp --config <profile>`。默认由宿主 Agent 总结返回的 Markdown、OCR 与 ASR；仅在明确请求本地 LLM 兜底时，启用 `Skill.Summary` 并配置其 OpenAI-compatible `LLM`。Skill 的本地 Summary 不支持 DigFlow；旧 profile 中的 `Provider`、`FallbackProvider`、`Mode`、`ImportanceThreshold`、`DigFlow` 和 `InputBudget.MetadataChars` 在启用时会被明确拒绝。
+使用仓库级 `digcrawl` Skill 时，优先通过 `digcrawl init --profile skill` 创建用户目录中的最小 profile；也可复制 `config/digcrawl-skill.example.yaml` 自行维护。宿主配置只保存二进制和 profile 的绝对路径，DigCrawl 不会自动修改它。图片文字和页面视觉理解优先由宿主 Agent 读取 MCP 返回的截图附件；`media` URL 只作来源引用。宿主也负责基于 Markdown、图片观察和 `asr_text` 完成总结。仅视频转写使用本地 `Skill.ASR`，用户明确请求时才需启用 `Skill.Media.DownloadMedia`、配置媒体目录和 ASR 依赖；`skill.asr.enable` 会在写入这两个 opt-in 开关前检查 ffmpeg 与当前 provider，缺失依赖时不会写入配置。默认 Skill profile 不包含 OCR 或 LLM API Key，也不使用 DigFlow。
 
 ---
 
@@ -876,7 +893,7 @@ digcrawl collect "https://example.com/article" --format md,html,json --out ./my-
 
 ### 平台登录与健康检查
 
-部分平台在未登录或 Cookie 过期时会返回 `LOGIN_REQUIRED`。可使用有头浏览器完成登录并保存 Cookie：
+部分平台在未登录或 Cookie 过期时会返回 `LOGIN_REQUIRED`。可使用 DigCrawl 的独立有头浏览器完成登录并保存 Cookie；它不会读取日常浏览器 profile。初始化 Skill profile 后，以下命令默认使用该 profile 的 `CookieStoreDir`，并会输出打开的登录 URL 和 Cookie 保存目录。若 MCP 使用自定义 profile，则登录和会话检查必须带同一个 `--config <profile>`，避免写入另一套 Cookie：
 
 ```bash
 digcrawl browser login --platform xiaohongshu
@@ -1181,7 +1198,7 @@ ExtraArgs:
 ### 16.1 构建与基础检查
 
 ```bash
-/Users/dig/.gvm/gos/go1.24.8/bin/go build -o digcrawl ./cmd/digcrawl
+GOROOT=/Users/dig/.gvm/gos/go1.26.1 /Users/dig/.gvm/gos/go1.26.1/bin/go build -o digcrawl ./cmd/digcrawl
 ./digcrawl --help
 ```
 

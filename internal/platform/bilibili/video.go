@@ -46,6 +46,7 @@ func ReadVideo(ctx context.Context, in platform.ReadInput) (*platform.Content, e
 		ContentSelector: DefaultContentSelector,
 		CookieDomain:    cookieDomain,
 		MetadataScript:  MetadataScript(),
+		CaptureMedia:    in.IncludeMedia,
 	})
 	if err != nil {
 		return nil, err

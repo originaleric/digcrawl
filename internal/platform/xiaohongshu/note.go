@@ -75,6 +75,7 @@ func readNoteBrowser(ctx context.Context, in platform.ReadInput, norm *platform.
 		ContentSelector: DefaultContentSelector,
 		CookieDomain:    cookieDomain,
 		MetadataScript:  MetadataScript(),
+		CaptureMedia:    in.IncludeMedia,
 	}
 
 	var resp *browser.BrowserBrowseResponse

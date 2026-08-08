@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 
@@ -12,6 +13,9 @@ import (
 
 // Config holds DigCrawl runtime settings.
 type Config struct {
+	// SourcePath records the local profile that produced this in-memory
+	// configuration. It is runtime metadata and is never written to YAML.
+	SourcePath    string              `yaml:"-" json:"-"`
 	Gateway       GatewayConfig       `yaml:"Gateway" json:"Gateway"`
 	Collector     CollectorConfig     `yaml:"Collector" json:"Collector"`
 	Collect       CollectConfig       `yaml:"Collect" json:"Collect"`
@@ -1079,6 +1083,7 @@ type ProvidersConfig struct {
 var (
 	defaultCfg Config
 	once       sync.Once
+	skillMu    sync.RWMutex
 )
 
 func init() {
@@ -1329,8 +1334,37 @@ func Get() *Config {
 	return &defaultCfg
 }
 
-// Load reads YAML from path and replaces the process-wide default config.
+// Skill returns the active Skill configuration as a stable snapshot. The MCP
+// opt-in can update this section while other stdio workers read content, so
+// callers in the Skill pipeline must not retain a mutable global pointer.
+func Skill() SkillConfig {
+	skillMu.RLock()
+	defer skillMu.RUnlock()
+	return defaultCfg.Skill
+}
+
+// SetSkill replaces the active Skill configuration. It is used by the local
+// Skill opt-in and by tests that exercise Skill-owned enhancement behavior.
+func SetSkill(cfg SkillConfig) {
+	skillMu.Lock()
+	defer skillMu.Unlock()
+	defaultCfg.Skill = cfg
+}
+
+// Load reads YAML from path, applies explicit runtime environment injection,
+// and replaces the process-wide default config.
 func Load(path string) (*Config, error) {
+	return load(path, true)
+}
+
+// Validate reads and normalizes a configuration file without changing process
+// environment or the process-wide active configuration. It is the safe read
+// path used by `digcrawl config validate`.
+func Validate(path string) (*Config, error) {
+	return load(path, false)
+}
+
+func load(path string, applyRuntimeEnv bool) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
@@ -1343,17 +1377,23 @@ func Load(path string) (*Config, error) {
 		return nil, err
 	}
 	mergeDefaults(&cfg)
-	if err := mergeLocalFeishuConfig(&cfg); err != nil {
-		return nil, err
+	cfg.SourcePath = normalizedConfigPath(path)
+	if applyRuntimeEnv {
+		if err := mergeLocalFeishuConfig(&cfg); err != nil {
+			return nil, err
+		}
+		if err := mergeLocalRuntimeEnvConfig(&cfg); err != nil {
+			return nil, err
+		}
+		if err := applyRuntimeEnvConfig(cfg.RuntimeEnv); err != nil {
+			return nil, err
+		}
+		skillMu.Lock()
+		defaultCfg = cfg
+		skillMu.Unlock()
+		return &defaultCfg, nil
 	}
-	if err := mergeLocalRuntimeEnvConfig(&cfg); err != nil {
-		return nil, err
-	}
-	if err := applyRuntimeEnvConfig(cfg.RuntimeEnv); err != nil {
-		return nil, err
-	}
-	defaultCfg = cfg
-	return &defaultCfg, nil
+	return &cfg, nil
 }
 
 // validateSkillSummaryConfig rejects fields that belonged to the former
@@ -1960,11 +2000,192 @@ func Save(path string, cfg *Config) error {
 	return os.WriteFile(path, data, 0o600)
 }
 
-// DefaultConfigPath returns the default user config path.
+// EnableDefaultSkillASR enables the two opt-in switches required for local
+// video ASR in the standard user Skill profile, persists them, and replaces
+// the active process configuration with that profile. It deliberately leaves
+// the chosen ASR provider and every credential untouched.
+func EnableDefaultSkillASR() (*Config, error) {
+	path := DefaultSkillProfilePath()
+	// Stage the update before writing. defaultCfg is also the configuration
+	// used by the current MCP runtime, so changing it before a failed write
+	// would leave this session claiming an opt-in that was not persisted.
+	skillMu.Lock()
+	defer skillMu.Unlock()
+	staged := defaultCfg.Skill
+	staged.Media.DownloadMedia = true
+	if strings.TrimSpace(staged.Media.Dir) == "" {
+		staged.Media.Dir = filepath.Join(DefaultConfigDir(), "media")
+	}
+	enabled := true
+	staged.ASR.Enabled = &enabled
+	if err := updateSkillASROptIn(path, staged.Media.Dir); err != nil {
+		return nil, err
+	}
+	defaultCfg.Skill = staged
+	result := defaultCfg
+	return &result, nil
+}
+
+// updateSkillASROptIn changes only the opt-in keys owned by this operation.
+// In particular, it must not serialize the merged runtime config: that could
+// rewrite unrelated user choices or persist values injected at runtime.
+func updateSkillASROptIn(path, mediaDir string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	var document yaml.Node
+	if err := yaml.Unmarshal(data, &document); err != nil {
+		return err
+	}
+	if len(document.Content) != 1 || document.Content[0].Kind != yaml.MappingNode {
+		return fmt.Errorf("Skill profile must contain a YAML mapping")
+	}
+	root := document.Content[0]
+	setYAMLBool(root, []string{"Skill", "Media", "DownloadMedia"}, true)
+	setYAMLBool(root, []string{"Skill", "ASR", "Enabled"}, true)
+	if strings.TrimSpace(yamlString(root, []string{"Skill", "Media", "Dir"})) == "" {
+		setYAMLString(root, []string{"Skill", "Media", "Dir"}, mediaDir)
+	}
+	updated, err := yaml.Marshal(&document)
+	if err != nil {
+		return err
+	}
+	return writeConfigAtomically(path, updated)
+}
+
+func setYAMLBool(root *yaml.Node, path []string, value bool) {
+	setYAMLScalar(root, path, "!!bool", fmt.Sprintf("%t", value))
+}
+
+func setYAMLString(root *yaml.Node, path []string, value string) {
+	setYAMLScalar(root, path, "!!str", value)
+}
+
+func setYAMLScalar(root *yaml.Node, path []string, tag, value string) {
+	current := root
+	for _, part := range path[:len(path)-1] {
+		current = yamlMappingValue(current, part, true)
+	}
+	key := path[len(path)-1]
+	for i := 0; i+1 < len(current.Content); i += 2 {
+		if current.Content[i].Value == key {
+			current.Content[i+1] = &yaml.Node{Kind: yaml.ScalarNode, Tag: tag, Value: value}
+			return
+		}
+	}
+	current.Content = append(current.Content,
+		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: key},
+		&yaml.Node{Kind: yaml.ScalarNode, Tag: tag, Value: value},
+	)
+}
+
+func yamlString(root *yaml.Node, path []string) string {
+	current := root
+	for _, part := range path {
+		current = yamlMappingValue(current, part, false)
+		if current == nil {
+			return ""
+		}
+	}
+	return current.Value
+}
+
+func yamlMappingValue(node *yaml.Node, key string, create bool) *yaml.Node {
+	if node == nil || node.Kind != yaml.MappingNode {
+		return nil
+	}
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		if node.Content[i].Value == key {
+			return node.Content[i+1]
+		}
+	}
+	if !create {
+		return nil
+	}
+	child := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+	node.Content = append(node.Content,
+		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: key}, child,
+	)
+	return child
+}
+
+func writeConfigAtomically(path string, data []byte) error {
+	info, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	temporary, err := os.CreateTemp(filepath.Dir(path), ".digcrawl-skill-*.yaml")
+	if err != nil {
+		return err
+	}
+	temporaryPath := temporary.Name()
+	defer os.Remove(temporaryPath)
+	if err := temporary.Chmod(info.Mode().Perm()); err != nil {
+		_ = temporary.Close()
+		return err
+	}
+	if _, err := temporary.Write(data); err != nil {
+		_ = temporary.Close()
+		return err
+	}
+	if err := temporary.Close(); err != nil {
+		return err
+	}
+	return os.Rename(temporaryPath, path)
+}
+
+// IsDefaultSkillProfile reports whether a runtime was started from the
+// standard user-owned Skill profile. The MCP configuration tool is limited to
+// that profile and must never modify a repository or arbitrary --config file.
+func IsDefaultSkillProfile(path string) bool {
+	return normalizedConfigPath(path) == normalizedConfigPath(DefaultSkillProfilePath())
+}
+
+func normalizedConfigPath(path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return ""
+	}
+	abs, err := filepath.Abs(path)
+	if err == nil {
+		path = abs
+	}
+	return filepath.Clean(path)
+}
+
+// DefaultConfigPath returns the default user config path. New user-level
+// configuration follows the operating system convention instead of assuming a
+// repository working directory.
 func DefaultConfigPath() string {
+	return filepath.Join(DefaultConfigDir(), "config.yaml")
+}
+
+// DefaultSkillProfilePath is the profile discovered by `digcrawl mcp` when
+// --config is not supplied. Keeping it separate from the general configuration
+// file preserves the existing explicit --config workflow for repository users.
+func DefaultSkillProfilePath() string {
+	return filepath.Join(DefaultConfigDir(), "digcrawl-skill.yaml")
+}
+
+// DefaultConfigDir returns the user-owned DigCrawl configuration directory.
+func DefaultConfigDir() string {
+	if runtime.GOOS == "windows" {
+		if appData := strings.TrimSpace(os.Getenv("APPDATA")); appData != "" {
+			return filepath.Join(appData, "DigCrawl")
+		}
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "DigCrawl"
+		}
+		return filepath.Join(home, "AppData", "Roaming", "DigCrawl")
+	}
+	if xdgDir := strings.TrimSpace(os.Getenv("XDG_CONFIG_HOME")); xdgDir != "" {
+		return filepath.Join(xdgDir, "digcrawl")
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return "config/config.yaml"
+		return filepath.Join(".config", "digcrawl")
 	}
-	return filepath.Join(home, ".digcrawl", "config.yaml")
+	return filepath.Join(home, ".config", "digcrawl")
 }

@@ -63,14 +63,17 @@ func collectProviders(cfg *config.Config, opts RegistryOptions) []provider.Provi
 			ArtifactStore: opts.ArtifactStore,
 		})
 	}
-	if cfg.Providers.ASREnabled == nil || *cfg.Providers.ASREnabled {
+	asrEnabled := cfg.Providers.ASREnabled == nil || *cfg.Providers.ASREnabled
+	if asrEnabled || config.IsDefaultSkillProfile(cfg.SourcePath) {
 		readPaths := opts.AllowedReadPaths
 		if len(readPaths) == 0 {
 			readPaths = cfg.Gateway.AllowedReadPaths
 		}
 		out = append(out, &asrprov.Provider{
-			Config:           cfg.ASR,
-			AllowedReadPaths: readPaths,
+			Config:            cfg.ASR,
+			AllowedReadPaths:  readPaths,
+			SkillProfilePath:  cfg.SourcePath,
+			DisableTranscribe: !asrEnabled,
 		})
 	}
 	if cfg.Providers.ExampleEnabled == nil || *cfg.Providers.ExampleEnabled {

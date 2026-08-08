@@ -4,6 +4,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/originaleric/digcrawl/internal/browser"
 	"github.com/originaleric/digcrawl/internal/platform"
 )
 
@@ -43,6 +44,20 @@ func TestMapAPIResponse(t *testing.T) {
 	}
 	if got := platform.MetaString(content.PlatformMetadata, "extraction_source"); got != "api" {
 		t.Fatalf("expected api extraction source, got %q", got)
+	}
+}
+
+func TestNormalizePostPrefersBrowserMediaResources(t *testing.T) {
+	t.Parallel()
+	content := normalizePost(platform.ReadInput{IncludeMedia: true}, &platform.NormalizedURL{
+		OriginalURL:  "https://weibo.com/123",
+		CanonicalURL: "https://weibo.com/123",
+	}, &browser.BrowserBrowseResponse{
+		Metadata:  map[string]any{"title": "post", "description": "text", "video_urls": []string{"https://old.example/video.mp4"}},
+		MediaURLs: []string{"https://cdn.example/video.mp4"},
+	})
+	if len(content.Media) != 1 || content.Media[0].URL != "https://cdn.example/video.mp4" {
+		t.Fatalf("media = %#v", content.Media)
 	}
 }
 

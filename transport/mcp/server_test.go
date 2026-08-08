@@ -8,9 +8,24 @@ import (
 	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/originaleric/digcrawl/config"
 	"github.com/originaleric/digcrawl/protocol"
 	"github.com/originaleric/digcrawl/runtime/artifact"
 )
+
+func TestMCPTimeoutMatchesCollectForReadAndExtendsExplicitASR(t *testing.T) {
+	browserCfg := config.LocalBrowserConfig{TotalTimeoutSec: 90}
+	skillCfg := config.SkillConfig{
+		Media: config.SkillMediaConfig{TimeoutSec: 30},
+		ASR:   config.ASRConfig{TimeoutSec: 300},
+	}
+	if got := mcpTimeoutMs(browserCfg, skillCfg, map[string]any{}); got != 120000 {
+		t.Fatalf("normal read timeout=%d want 120000", got)
+	}
+	if got := mcpTimeoutMs(browserCfg, skillCfg, map[string]any{"include_asr": true}); got != 450000 {
+		t.Fatalf("ASR read timeout=%d want 450000", got)
+	}
+}
 
 func TestBuildMCPToolPreservesRuntimeSchemasAndDoesNotOverclaimReadOnly(t *testing.T) {
 	input := json.RawMessage(`{"type":"object","required":["url"],"properties":{"url":{"type":"string"}}}`)
@@ -43,6 +58,15 @@ func TestBuildMCPToolMarksHealthCheckReadOnlyAndIdempotent(t *testing.T) {
 		tool.Annotations.DestructiveHint == nil || *tool.Annotations.DestructiveHint ||
 		tool.Annotations.IdempotentHint == nil || !*tool.Annotations.IdempotentHint {
 		t.Fatalf("health check annotations are not safe: %+v", tool.Annotations)
+	}
+}
+
+func TestBuildMCPToolMarksLocalSkillSettingAsDestructive(t *testing.T) {
+	tool := buildMCPTool(protocol.ToolDescriptor{
+		Name: "skill.asr.enable",
+	})
+	if tool.Annotations.DestructiveHint == nil || !*tool.Annotations.DestructiveHint {
+		t.Fatalf("local configuration tool must advertise a local write: %+v", tool.Annotations)
 	}
 }
 

@@ -3,6 +3,8 @@ package asr
 import (
 	"context"
 	"fmt"
+	"os"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -50,6 +52,31 @@ type provider interface {
 	Transcribe(ctx context.Context, audioPath string) (*Result, error)
 	Name() string
 	Model() string
+}
+
+// CheckAvailable verifies the local prerequisites that Transcribe will need
+// before a caller persists an ASR opt-in. It does not invoke a provider or
+// make a network request.
+func CheckAvailable(cfg config.ASRConfig) error {
+	ffmpeg := cfg.FFmpegPathOrDefault()
+	if _, err := exec.LookPath(ffmpeg); err != nil {
+		return fmt.Errorf("ffmpeg %q is not available: %w", ffmpeg, err)
+	}
+	p, err := newProvider(cfg)
+	if err != nil {
+		return err
+	}
+	local, ok := p.(*localProvider)
+	if !ok {
+		return nil
+	}
+	if _, err := exec.LookPath(local.command); err == nil {
+		return nil
+	}
+	if _, _, ok := localCommandFallback(local.command, local.args); ok {
+		return nil
+	}
+	return fmt.Errorf("local ASR command %q is not available", local.command)
 }
 
 // Transcribe extracts audio with ffmpeg and transcribes it with the configured ASR provider.
@@ -110,7 +137,8 @@ func Transcribe(ctx context.Context, mediaPath string, cfg config.ASRConfig, opt
 func newProvider(cfg config.ASRConfig) (provider, error) {
 	switch cfg.ProviderOrDefault() {
 	case "api":
-		if strings.TrimSpace(cfg.APIKey) == "" {
+		apiKey := strings.TrimSpace(os.ExpandEnv(cfg.APIKey))
+		if apiKey == "" {
 			return nil, fmt.Errorf("ASR APIKey is empty")
 		}
 		responseFormat := cfg.ResponseFormatOrDefault()
@@ -118,7 +146,7 @@ func newProvider(cfg config.ASRConfig) (provider, error) {
 			return nil, fmt.Errorf("unsupported ASR response format %q", cfg.ResponseFormat)
 		}
 		return &apiProvider{
-			apiKey:         strings.TrimSpace(cfg.APIKey),
+			apiKey:         apiKey,
 			baseURL:        cfg.BaseURLOrDefault(),
 			model:          cfg.ModelOrDefault(),
 			language:       strings.TrimSpace(cfg.Language),

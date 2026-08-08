@@ -1,4 +1,4 @@
-# Minimal local profile for the Phase 1 digcrawl Skill.
+# Minimal local profile for the open-source digcrawl Skill.
 # Copy it outside the repository, then pass its absolute path to `digcrawl mcp`.
 Gateway:
   InstanceID: "digcrawl-skill-local"
@@ -7,6 +7,8 @@ Gateway:
   AllowedDomains: []
   AllowedTools:
     - gateway.ping
+    # One-time, confirmation-protected switch for local video ASR.
+    - skill.asr.enable
     - browser.browse
     - wechat.article.read
     - xiaohongshu.note.read
@@ -39,32 +41,17 @@ Gateway:
 LocalBrowser:
   CookieStoreDir: "/absolute/path/to/digcrawl/browser_cookies"
 
-# Explicit Skill enrichment is configured independently from collect. The Agent
-# normally summarizes returned Markdown/OCR/ASR itself. It only requests
-# include_ocr/include_asr/include_summary when the user explicitly asks for
-# that local capability; providers and keys stay in this local profile.
+# The open-source Skill uses the host Agent's native vision and model for image
+# reading and summaries. This profile therefore has no OCR or LLM API key.
+# Only video ASR remains a local optional capability.
 Skill:
   Media:
     DownloadMedia: false
-    # Required only for explicit OCR/ASR/summary when DownloadMedia is true.
+    # Required only for explicit ASR when DownloadMedia is true.
     # Replace with a user-owned absolute directory.
     Dir: "/absolute/path/to/digcrawl/skill-media"
     MaxBytes: 10485760
     TimeoutSec: 30
-  OCR:
-    Enabled: false
-    # openai_compatible | stub
-    Provider: "openai_compatible"
-    APIKey: ""
-    BaseURL: "https://api.openai.com/v1"
-    Model: "gpt-4o-mini"
-    Prompt: "Extract all readable text from this image. Return only the OCR text. Preserve line breaks when useful."
-    TimeoutSec: 30
-    MaxImages: 8
-    MaxImageBytes: 5242880
-    MaxTokens: 1200
-    AppendToMarkdown: true
-    AppendToText: false
   ASR:
     # Operational settings mirror the root OCR/ASR settings used by Collect.
     # Enabled remains false so the Skill stays explicit opt-in.
@@ -72,7 +59,6 @@ Skill:
     # api | local | stub
     # api uses OpenAI-compatible /audio/transcriptions; local uses faster-whisper/whisper.cpp.
     Provider: "local"
-    APIKey: ""
     BaseURL: "https://api.openai.com/v1"
     # The default model is whisper-1 for api and small for local.
     Model: "small"
@@ -94,21 +80,6 @@ Skill:
       - "json"
       - "--output_dir"
       - "{output_dir}"
-  Summary:
-    # Keep disabled unless an operator explicitly needs DigCrawl's local LLM
-    # fallback. Host Agents should normally summarize returned content instead.
-    Enabled: false
-    TimeoutSec: 60
-    MaxInputChars: 30000
-    InputBudget:
-      TextChars: 12000
-      ASRChars: 12000
-      OCRChars: 4000
-    LLM:
-      APIKey: ""
-      BaseURL: "https://api.openai.com/v1"
-      Model: "gpt-4o-mini"
-
 # These root settings remain available to the existing CLI/collect workflow.
 OCR:
   Enabled: false
@@ -117,4 +88,5 @@ Providers:
   ExampleEnabled: true
   PlatformEnabled: true
   BrowserEnabled: true
-  ASREnabled: false
+  # Registers skill.asr.enable; asr.transcribe remains outside AllowedTools.
+  ASREnabled: true
