@@ -36,20 +36,56 @@ URL 或来源列表
 优先静态 HTML / API / RSS；按配置需要时回退到本地浏览器
 ```
 
-## 快速开始
+## DigCrawl Skill：在 Agent 中运行
 
-从源码构建：
+DigCrawl 内置官方 [Agent Skill](./.agents/skills/digcrawl/)，可用于 Codex、Claude Code 和其他兼容 MCP 的 Agent。Skill 为 Agent 提供平台感知的链接路由、登录与频控状态的安全处理，以及清晰的本地浏览器会话边界。
+
+安装 `digcrawl` 二进制后，只需三步即可接入：
 
 ```bash
-go build -o digcrawl ./cmd/digcrawl
-go build -o digcollect ./cmd/digcollect
+# 1. 创建无密钥的本地 Skill profile。
+digcrawl init --profile skill
 
-./digcrawl collect "https://example.com/article" --format md,html,json
+# 2. 检查 profile 和本地运行环境。
+digcrawl doctor --config "$HOME/.config/digcrawl/digcrawl-skill.yaml"
+
+# 3. 启动 MCP 服务（通常由 Agent 的配置自动启动）。
+digcrawl mcp --config "$HOME/.config/digcrawl/digcrawl-skill.yaml"
 ```
 
-使用本地 Agent/MCP profile 时，先初始化并检查配置：
+将同一条本地 MCP 命令添加到你使用的 Agent：
+
+| Agent | 配置示例 |
+| --- | --- |
+| Codex | [`codex/config.toml.example`](./.agents/skills/digcrawl/codex/config.toml.example) |
+| Claude Code | [`claude-code/.mcp.json.example`](./.agents/skills/digcrawl/claude-code/.mcp.json.example) |
+| 任意兼容 MCP 的 Agent | 将 `digcrawl mcp --config <profile-absolute-path>` 配置为本地 stdio 服务。 |
+
+配置完成后，只需把支持的 URL 发给 Agent，并要求它读取、总结、比较、引用，或在明确请求时转写视频。Agent 会在本机调用 DigCrawl，并保留需要登录、验证码、频控等结构化结果。
+
+Skill 不包含 API Key，也不会暴露浏览器 Cookie。路由规则详见 [Agent Skill](./.agents/skills/digcrawl/)；安全细节详见[在 AI Agent 中使用](#在-ai-agent-中使用)。
+
+## 快速开始
+
+在 macOS 或 Linux 上安装当前已校验的 Release——**不需要 Go**：
 
 ```bash
+curl -fsSL https://raw.githubusercontent.com/originaleric/digcrawl/main/scripts/install.sh | sh
+```
+
+安装脚本会识别系统和 CPU 架构，下载匹配的 GitHub Release，以 `checksums.txt` 校验后仅将 `digcrawl` 安装到 `~/.local/bin`。它不会使用 `sudo`，也不会修改 shell 配置。需要审查脚本或固定版本时，先下载脚本，或传入 Release tag：
+
+```bash
+curl -fsSLO https://raw.githubusercontent.com/originaleric/digcrawl/main/scripts/install.sh
+sh install.sh --version vX.Y.Z
+```
+
+若 `~/.local/bin` 不在 `PATH` 中，请按当前 shell 的常规方式添加后重启 shell。Windows 用户请从 [GitHub Releases](https://github.com/originaleric/digcrawl/releases) 下载对应的 `.zip`。手动安装和 checksum 校验详见[使用说明](./USAGE.md)。
+
+确认二进制可用后，初始化本地 Agent/MCP profile：
+
+```bash
+digcrawl version
 digcrawl init --profile skill
 digcrawl config validate --config "$HOME/.config/digcrawl/digcrawl-skill.yaml"
 digcrawl doctor --config "$HOME/.config/digcrawl/digcrawl-skill.yaml"
@@ -57,7 +93,7 @@ digcrawl doctor --config "$HOME/.config/digcrawl/digcrawl-skill.yaml"
 
 macOS 与 Linux 默认将 profile 保存在 `$XDG_CONFIG_HOME/digcrawl/`；未设置时为 `~/.config/digcrawl/`。Windows 默认路径为 `%APPDATA%\DigCrawl\`。除非显式传入 `--force`，`init` 不会覆盖已有 profile。
 
-安装、Release 校验、完整配置和排障请查看[使用说明](./USAGE.md)。
+需要从源码构建的开发者请准备 Go 1.26.1+，并查看[源码运行说明](./USAGE.md#从源码运行)。安装、Release 校验、完整配置和排障请查看[使用说明](./USAGE.md)。
 
 ## 你可以用它做什么
 

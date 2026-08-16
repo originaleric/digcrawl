@@ -6,12 +6,39 @@ DigCrawl 是面向任意 Agent 编排系统的**本地工具网关**：在用户
 
 ---
 
-## 1. 安装与构建
+## 1. 安装
 
-### 环境要求
+### 从 Release 安装（推荐给开源用户）
 
-- Go 1.26.1+（以 `go.mod` 为准）
-- 使用浏览器类工具时需本机 Chrome/Chromium（go-rod 可自动查找，也可在配置中指定 `ChromePath`）。在 macOS sandbox 或 CI-like headless 环境中，建议使用 Playwright `chrome-headless-shell` 并显式配置启动参数。
+常规用户不需要安装 Go。Release 提供 macOS Apple Silicon / Intel、Linux x86_64 / arm64 和 Windows x86_64 二进制。
+
+macOS / Linux 可使用仓库内的安装脚本：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/originaleric/digcrawl/main/scripts/install.sh | sh
+```
+
+脚本自动识别系统与 CPU 架构，从 GitHub Release 下载对应压缩包与 `checksums.txt`，完成 SHA-256 校验后安装到 `~/.local/bin`。它不会使用 `sudo`、修改 shell 配置或写入隐藏状态。要固定版本或先审查脚本：
+
+```bash
+curl -fsSLO https://raw.githubusercontent.com/originaleric/digcrawl/main/scripts/install.sh
+sh install.sh --version vX.Y.Z
+```
+
+也可以从 [GitHub Releases](https://github.com/originaleric/digcrawl/releases) 手动下载当前系统与 CPU 架构对应的压缩包，并用 Release 中的 `checksums.txt` 校验。Windows 用户请使用对应的 `.zip`。Homebrew tap 发布后可使用 `brew install --cask originaleric/tap/digcrawl`；它只是同一 GitHub Release 的便捷安装入口。
+
+安装后执行：
+
+```bash
+digcrawl version
+digcrawl init --profile skill
+digcrawl config validate --config "$HOME/.config/digcrawl/digcrawl-skill.yaml"
+digcrawl doctor --config "$HOME/.config/digcrawl/digcrawl-skill.yaml"
+```
+
+### 浏览器能力（按需）
+
+使用浏览器类工具时需本机 Chrome/Chromium（go-rod 可自动查找，也可在配置中指定 `ChromePath`）。在 macOS sandbox 或 CI-like headless 环境中，建议使用 Playwright `chrome-headless-shell` 并显式配置启动参数。
 
 ### 本机 Headless Chromium（推荐兜底）
 
@@ -45,7 +72,9 @@ LocalBrowser:
     - "--disable-features=Crashpad"
 ```
 
-### 从源码运行
+### 从源码运行（仅开发者）
+
+需要 Go 1.26.1+（以 `go.mod` 为准）。
 
 ```bash
 git clone https://github.com/originaleric/digcrawl.git
@@ -53,19 +82,6 @@ cd digcrawl
 go build -o digcrawl ./cmd/digcrawl
 go build -o digcollect ./cmd/digcollect
 ```
-
-### 从 Release 安装（推荐给开源用户）
-
-从 [GitHub Releases](https://github.com/originaleric/digcrawl/releases) 下载当前系统与 CPU 架构对应的压缩包，并用 Release 中的 `checksums.txt` 校验。解压后的 `digcrawl` 放进用户自己管理的 `PATH` 目录即可；安装流程不会执行 `curl | sh`、修改 shell 配置或写入隐藏状态。
-
-```bash
-digcrawl version
-digcrawl init --profile skill
-digcrawl config validate --config "$HOME/.config/digcrawl/digcrawl-skill.yaml"
-digcrawl doctor --config "$HOME/.config/digcrawl/digcrawl-skill.yaml"
-```
-
-Release 提供 macOS Apple Silicon / Intel、Linux x86_64 / arm64 和 Windows x86_64 二进制。Homebrew tap 发布后可使用 `brew install --cask originaleric/tap/digcrawl`；它只是同一 GitHub Release 的便捷安装入口。
 
 ### 安装到 PATH（可选）
 

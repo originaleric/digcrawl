@@ -36,20 +36,56 @@ identify → collect → normalize → export / index / notify
 static HTML / API / RSS first, local browser fallback when configured
 ```
 
-## Quick Start
+## DigCrawl Skill: Run It in Your Agent
 
-Build from source:
+DigCrawl includes an official [Agent Skill](./.agents/skills/digcrawl/) for Codex, Claude Code, and other MCP-compatible agents. The Skill gives an agent platform-aware link routing, safe handling for sign-in and rate-limit states, and clear boundaries around local browser sessions.
+
+Once the `digcrawl` binary is installed, the setup has three steps:
 
 ```bash
-go build -o digcrawl ./cmd/digcrawl
-go build -o digcollect ./cmd/digcollect
+# 1. Create the keyless local Skill profile.
+digcrawl init --profile skill
 
-./digcrawl collect "https://example.com/article" --format md,html,json
+# 2. Verify the profile and local runtime.
+digcrawl doctor --config "$HOME/.config/digcrawl/digcrawl-skill.yaml"
+
+# 3. Start the MCP server (your Agent normally starts this from its configuration).
+digcrawl mcp --config "$HOME/.config/digcrawl/digcrawl-skill.yaml"
 ```
 
-For a local Agent/MCP profile, initialize and check the profile first:
+Add the same local MCP command to the Agent you use:
+
+| Agent | Configuration example |
+| --- | --- |
+| Codex | [`codex/config.toml.example`](./.agents/skills/digcrawl/codex/config.toml.example) |
+| Claude Code | [`claude-code/.mcp.json.example`](./.agents/skills/digcrawl/claude-code/.mcp.json.example) |
+| Any MCP-compatible Agent | Configure `digcrawl mcp --config <absolute-profile-path>` as a local stdio server. |
+
+After configuration, simply give your Agent a supported URL and ask it to read, summarize, compare, quote, or—when explicitly requested—transcribe it. The Agent uses DigCrawl locally and preserves structured outcomes such as login required, captcha, or rate limiting.
+
+The Skill does not include API keys or expose browser cookies. See the [Agent Skill](./.agents/skills/digcrawl/) for routing behavior and [Use with AI Agents](#use-with-ai-agents) for security details.
+
+## Quick Start
+
+Install the current verified release on macOS or Linux—**Go is not required**:
 
 ```bash
+curl -fsSL https://raw.githubusercontent.com/originaleric/digcrawl/main/scripts/install.sh | sh
+```
+
+The installer detects the operating system and CPU architecture, downloads the matching GitHub Release, verifies it against `checksums.txt`, and installs only `digcrawl` to `~/.local/bin`. It never uses `sudo` or changes shell configuration. To review or pin the installer, download it first or pass a release tag:
+
+```bash
+curl -fsSLO https://raw.githubusercontent.com/originaleric/digcrawl/main/scripts/install.sh
+sh install.sh --version vX.Y.Z
+```
+
+If `~/.local/bin` is not in `PATH`, add it using your shell’s normal configuration, then restart the shell. Windows users should download the matching `.zip` from [GitHub Releases](https://github.com/originaleric/digcrawl/releases). Full manual-install and checksum instructions are in the [usage guide](./USAGE.md).
+
+Confirm the binary, then initialize a local Agent/MCP profile:
+
+```bash
+digcrawl version
 digcrawl init --profile skill
 digcrawl config validate --config "$HOME/.config/digcrawl/digcrawl-skill.yaml"
 digcrawl doctor --config "$HOME/.config/digcrawl/digcrawl-skill.yaml"
@@ -57,7 +93,7 @@ digcrawl doctor --config "$HOME/.config/digcrawl/digcrawl-skill.yaml"
 
 On macOS and Linux, the default profile is stored in `$XDG_CONFIG_HOME/digcrawl/` (or `~/.config/digcrawl/`). On Windows it is stored in `%APPDATA%\DigCrawl\`. `init` never overwrites an existing profile unless `--force` is supplied.
 
-For install, release verification, configuration, and troubleshooting, see the [usage guide](./USAGE.md).
+Developers who want to build from source need Go 1.26.1+; see the [development installation instructions](./USAGE.md#从源码运行). For installation, release verification, configuration, and troubleshooting, see the [usage guide](./USAGE.md).
 
 ## What You Can Do
 
