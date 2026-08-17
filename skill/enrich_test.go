@@ -7,11 +7,11 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 
 	"github.com/originaleric/digcrawl/config"
+	"github.com/originaleric/digcrawl/internal/testutil"
 )
 
 func TestEnhanceUsesSkillOCRConfig(t *testing.T) {
@@ -171,18 +171,12 @@ func TestEnhanceASRRecordsErrorForInvalidDownloadedVideo(t *testing.T) {
 }
 
 func TestEnhanceASRSuccessClearsPreviousMediaError(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("shell fake ffmpeg is not portable on windows")
-	}
 	enabled := true
 	assetsDir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(assetsDir, "002.mp4"), []byte("fake video"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	ffmpeg := filepath.Join(assetsDir, "ffmpeg")
-	if err := os.WriteFile(ffmpeg, []byte("#!/bin/sh\nfor out do :; done\nprintf 'wav' > \"$out\"\n"), 0o700); err != nil {
-		t.Fatal(err)
-	}
+	ffmpeg := testutil.FakeFFmpeg(t, assetsDir)
 	out := map[string]any{"platform_metadata": map[string]any{}}
 	changed := enrichASRFromDownloadedMedia(context.Background(), out, config.ASRConfig{Enabled: &enabled, Provider: "stub", FFmpegPath: ffmpeg, TempDir: assetsDir}, []map[string]any{{"type": "video", "local": "001.mp4"}, {"type": "video", "local": "002.mp4"}}, assetsDir)
 	if !changed || out["asr_text"] != "stub ASR transcript" {

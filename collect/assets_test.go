@@ -5,12 +5,12 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/originaleric/digcrawl/config"
+	"github.com/originaleric/digcrawl/internal/testutil"
 	"github.com/originaleric/digcrawl/protocol"
 )
 
@@ -93,14 +93,7 @@ func TestASRSuccessClearsPreviousMediaError(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(assetsDir, "002.mp4"), []byte("fake video"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	ffmpeg := filepath.Join(assetsDir, "ffmpeg")
-	script := "#!/bin/sh\nfor out do :; done\nprintf 'wav' > \"$out\"\n"
-	if runtime.GOOS == "windows" {
-		t.Skip("shell fake ffmpeg is not portable on windows")
-	}
-	if err := os.WriteFile(ffmpeg, []byte(script), 0o700); err != nil {
-		t.Fatal(err)
-	}
+	ffmpeg := testutil.FakeFFmpeg(t, assetsDir)
 	out := map[string]any{"platform_metadata": map[string]any{}}
 	changed := enrichASRFromDownloadedMedia(context.Background(), out, config.ASRConfig{
 		Enabled:    &enabled,

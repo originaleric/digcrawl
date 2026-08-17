@@ -185,7 +185,7 @@ func writeExecutable(t *testing.T, path string) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+	if err := os.WriteFile(path, []byte("browser"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 }

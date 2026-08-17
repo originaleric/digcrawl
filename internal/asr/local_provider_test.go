@@ -3,7 +3,9 @@ package asr
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -14,21 +16,65 @@ import (
 	"github.com/originaleric/digcrawl/config"
 )
 
+var localASRHelper struct {
+	once sync.Once
+	path string
+	err  error
+}
+
+// localASRTestCommand builds a tiny Go fixture instead of using a shell script.
+// The production provider executes an external command, so keeping this boundary
+// in tests catches process and environment regressions on every supported OS.
+func localASRTestCommand(t *testing.T) string {
+	t.Helper()
+	localASRHelper.once.Do(func() {
+		_, sourceFile, _, ok := runtime.Caller(0)
+		if !ok {
+			localASRHelper.err = os.ErrNotExist
+			return
+		}
+		dir, err := os.MkdirTemp("", "digcrawl-local-asr-test-")
+		if err != nil {
+			localASRHelper.err = err
+			return
+		}
+		name := "local-asr-helper"
+		if runtime.GOOS == "windows" {
+			name += ".exe"
+		}
+		localASRHelper.path = filepath.Join(dir, name)
+		command := exec.Command("go", "build", "-o", localASRHelper.path, "./testdata/local_asr_helper")
+		command.Dir = filepath.Dir(sourceFile)
+		output, err := command.CombinedOutput()
+		if err != nil {
+			localASRHelper.err = fmt.Errorf("build local ASR test helper: %w: %s", err, strings.TrimSpace(string(output)))
+		}
+	})
+	if localASRHelper.err != nil {
+		t.Fatal(localASRHelper.err)
+	}
+	return localASRHelper.path
+}
+
+func copyLocalASRTestCommand(t *testing.T, path string) {
+	t.Helper()
+	data, err := os.ReadFile(localASRTestCommand(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0o700); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestLocalProviderParsesStdoutJSON(t *testing.T) {
 	dir := t.TempDir()
 	audio := filepath.Join(dir, "audio.wav")
 	if err := os.WriteFile(audio, []byte("wav"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	cmd := filepath.Join(dir, "fake-asr")
-	script := "#!/bin/sh\nprintf '{\"text\":\"local transcript\",\"segments\":[{\"start\":0,\"end\":1,\"text\":\"local transcript\"}]}'\n"
-	if runtime.GOOS != "windows" {
-		script = "#!/bin/sh\nprintf '{\"text\":\"local transcript\",\"segments\":[{\"start\":0,\"end\":1,\"text\":\"local transcript\"}]}'\n"
-	}
-	if err := os.WriteFile(cmd, []byte(script), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	p := &localProvider{command: cmd, model: "small", timeout: 5 * time.Second, modelCacheDir: filepath.Join(dir, "models")}
+	t.Setenv("DIGCRAWL_TEST_LOCAL_ASR_MODE", "transcript")
+	p := &localProvider{command: localASRTestCommand(t), model: "small", timeout: 5 * time.Second, modelCacheDir: filepath.Join(dir, "models")}
 	result, err := p.Transcribe(context.Background(), audio)
 	if err != nil {
 		t.Fatal(err)
@@ -47,12 +93,8 @@ func TestLocalProviderSetsWritableHuggingFaceCache(t *testing.T) {
 	if err := os.WriteFile(audio, []byte("wav"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	cmd := filepath.Join(dir, "fake-asr")
-	script := "#!/bin/sh\ncase \"$HF_HOME\" in */storage/digcrawl/asr_models) ;; *) echo \"bad HF_HOME=$HF_HOME\" >&2; exit 2;; esac\nprintf '{\"text\":\"local transcript\"}'\n"
-	if err := os.WriteFile(cmd, []byte(script), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	p := &localProvider{command: cmd, model: "small", timeout: 5 * time.Second, modelCacheDir: filepath.Join(dir, "storage", "digcrawl", "asr_models")}
+	t.Setenv("DIGCRAWL_TEST_LOCAL_ASR_MODE", "cache")
+	p := &localProvider{command: localASRTestCommand(t), model: "small", timeout: 5 * time.Second, modelCacheDir: filepath.Join(dir, "storage", "digcrawl", "asr_models")}
 	if _, err := p.Transcribe(context.Background(), audio); err != nil {
 		t.Fatal(err)
 	}
@@ -230,33 +272,24 @@ func TestLocalProviderMissingCommandReturnsReadinessError(t *testing.T) {
 }
 
 func TestCheckAvailableRejectsMissingLocalDependencies(t *testing.T) {
-	ffmpeg := filepath.Join(t.TempDir(), "ffmpeg")
-	if err := os.WriteFile(ffmpeg, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	err := CheckAvailable(config.ASRConfig{Provider: "local", FFmpegPath: ffmpeg, LocalCommand: "digcrawl-missing-local-asr-command"})
+	err := CheckAvailable(config.ASRConfig{Provider: "local", FFmpegPath: localASRTestCommand(t), LocalCommand: "digcrawl-missing-local-asr-command"})
 	if err == nil || !strings.Contains(err.Error(), "local ASR command") {
 		t.Fatalf("error=%v", err)
 	}
 }
 
 func TestCheckAvailableRunsBundledFasterWhisperPreflight(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("shell fixture is POSIX-only; Windows command discovery is covered by cross-compilation")
-	}
 	dir := t.TempDir()
-	ffmpeg := filepath.Join(dir, "ffmpeg")
-	if err := os.WriteFile(ffmpeg, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
-		t.Fatal(err)
+	pythonName := "python"
+	if runtime.GOOS == "windows" {
+		pythonName = "python.exe"
 	}
-	python := filepath.Join(dir, "python")
-	if err := os.WriteFile(python, []byte("#!/bin/sh\n[ \"$2\" = \"--check\" ] && [ \"$3\" = \"--check-model\" ] && [ \"$4\" = \"--model\" ] && [ \"$5\" = \"small\" ] || exit 13\nprintf '{\\\"status\\\":\\\"ok\\\"}'\n"), 0o700); err != nil {
-		t.Fatal(err)
-	}
+	copyLocalASRTestCommand(t, filepath.Join(dir, pythonName))
+	t.Setenv("DIGCRAWL_TEST_LOCAL_ASR_MODE", "preflight-ok")
 	t.Setenv("PATH", dir)
 	if err := CheckAvailable(config.ASRConfig{
 		Provider:      "local",
-		FFmpegPath:    ffmpeg,
+		FFmpegPath:    localASRTestCommand(t),
 		LocalCommand:  "faster-whisper",
 		ModelCacheDir: filepath.Join(dir, "models"),
 	}); err != nil {
@@ -266,18 +299,11 @@ func TestCheckAvailableRunsBundledFasterWhisperPreflight(t *testing.T) {
 
 func TestCheckAvailableReportsBundledFasterWhisperPreflightFailure(t *testing.T) {
 	dir := t.TempDir()
-	ffmpeg := filepath.Join(dir, "ffmpeg")
-	if err := os.WriteFile(ffmpeg, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	python := filepath.Join(dir, "python")
-	if err := os.WriteFile(python, []byte("#!/bin/sh\necho 'faster_whisper import failed: missing' >&2\nexit 2\n"), 0o700); err != nil {
-		t.Fatal(err)
-	}
+	t.Setenv("DIGCRAWL_TEST_LOCAL_ASR_MODE", "preflight-fail")
 	err := CheckAvailable(config.ASRConfig{
 		Provider:     "local",
-		FFmpegPath:   ffmpeg,
-		LocalCommand: python,
+		FFmpegPath:   localASRTestCommand(t),
+		LocalCommand: localASRTestCommand(t),
 		LocalArgs:    []string{filepath.Join(dir, "faster_whisper_asr.py")},
 	})
 	if err == nil || !strings.Contains(err.Error(), "faster_whisper import failed: missing") {
@@ -293,9 +319,7 @@ func TestLocalCommandFallbackUsesEmbeddedRunnerOutsideWorkingDirectory(t *testin
 		pythonName = "python.exe"
 	}
 	python := filepath.Join(binDir, pythonName)
-	if err := os.WriteFile(python, []byte("placeholder"), 0o700); err != nil {
-		t.Fatal(err)
-	}
+	copyLocalASRTestCommand(t, python)
 	t.Setenv("PATH", binDir)
 	cacheDir := filepath.Join(t.TempDir(), "models")
 

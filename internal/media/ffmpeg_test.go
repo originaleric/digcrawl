@@ -4,8 +4,9 @@ import (
 	"context"
 	"os"
 	"path/filepath"
-	"runtime"
 	"testing"
+
+	"github.com/originaleric/digcrawl/internal/testutil"
 )
 
 func TestExtractAudioUsesFFmpegCommand(t *testing.T) {
@@ -14,14 +15,7 @@ func TestExtractAudioUsesFFmpegCommand(t *testing.T) {
 	if err := os.WriteFile(input, []byte("fake video"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	ffmpeg := filepath.Join(dir, "ffmpeg")
-	script := "#!/bin/sh\nfor out do :; done\nprintf 'wav' > \"$out\"\n"
-	if runtime.GOOS != "windows" {
-		script = "#!/bin/sh\nfor out do :; done\nprintf 'wav' > \"$out\"\n"
-	}
-	if err := os.WriteFile(ffmpeg, []byte(script), 0o700); err != nil {
-		t.Fatal(err)
-	}
+	ffmpeg := testutil.FakeFFmpeg(t, dir)
 
 	audio, err := ExtractAudio(context.Background(), input, AudioExtractOptions{
 		FFmpegPath: ffmpeg,
@@ -50,10 +44,7 @@ func TestExtractAudioCreatesConfiguredTempDirectory(t *testing.T) {
 	if err := os.WriteFile(input, []byte("fake video"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	ffmpeg := filepath.Join(dir, "ffmpeg")
-	if err := os.WriteFile(ffmpeg, []byte("#!/bin/sh\nfor out do :; done\nprintf 'wav' > \"$out\"\n"), 0o700); err != nil {
-		t.Fatal(err)
-	}
+	ffmpeg := testutil.FakeFFmpeg(t, dir)
 	baseTemp := filepath.Join(dir, "missing", "asr")
 	audio, err := ExtractAudio(context.Background(), input, AudioExtractOptions{FFmpegPath: ffmpeg, TempDir: baseTemp})
 	if err != nil {

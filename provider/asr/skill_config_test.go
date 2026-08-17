@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/originaleric/digcrawl/config"
+	"github.com/originaleric/digcrawl/internal/testutil"
 	"github.com/originaleric/digcrawl/runtime/registry"
 )
 
@@ -132,13 +133,9 @@ func TestEnableSkillASRRejectsUnavailableConfiguredDependenciesWithoutWriting(t 
 	}
 }
 
-func writeReadyExecutable(t *testing.T, dir, name string) string {
+func writeReadyExecutable(t *testing.T, dir, _ string) string {
 	t.Helper()
-	path := filepath.Join(dir, name)
-	if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	return path
+	return testutil.FakeFFmpeg(t, dir)
 }
 
 func TestProviderRegistersSkillEnableToolOnlyForDefaultProfile(t *testing.T) {
