@@ -136,7 +136,9 @@ LocalBrowser:
     - www.threads.com
     - instagram.com
     - www.instagram.com
-  ChromePath: "/Users/dig/Library/Caches/ms-playwright/chromium_headless_shell-1217/chrome-headless-shell-mac-arm64/chrome-headless-shell"
+  # 留空时自动发现当前可用的 Playwright Chromium / 本机 Chrome。
+  # 不要写入 chromium_headless_shell-xxxx 这类 Playwright 缓存路径：版本升级会替换目录。
+  ChromePath: ""
   Headless: true
   CookieStoreDir: "storage/digcrawl/browser_cookies"
   CDPMode: false
@@ -241,24 +243,14 @@ ASR:
   ResponseFormat: "verbose_json"
   TimeoutSec: 300
   FFmpegPath: "${DIGCRAWL_FFMPEG_PATH}"
+  # 本地 faster-whisper 模型缓存；生产环境应使用持久目录，doctor 会离线验证模型可加载。
+  ModelCacheDir: "storage/digcrawl/asr_models"
   TempDir: ""
   AudioSampleRate: 16000
   MaxAudioBytes: 26214400
-  LocalCommand: ".venv-asr/bin/python"
-  # 留空时默认执行：
-  # faster-whisper <audio_path> --model <model> --output_format json --output_dir <output_dir>
-  # 如果 PATH 中没有 faster-whisper 命令，会自动 fallback 到：
-  # python3 scripts/faster_whisper_asr.py <audio_path> --model <model> --output_format json --output_dir <output_dir>
-  # 可使用占位符：{audio_path} {model} {language} {output_dir}
-  LocalArgs:
-    - "scripts/faster_whisper_asr.py"
-    - "{audio_path}"
-    - "--model"
-    - "{model}"
-    - "--output_format"
-    - "json"
-    - "--output_dir"
-    - "{output_dir}"
+  # Leave LocalCommand/LocalArgs unset for the portable default: use the
+  # faster-whisper command when installed, otherwise DigCrawl's bundled runner.
+  # Set both only when intentionally using a custom Python environment/script.
 
 Watchlist:
   Enabled: true

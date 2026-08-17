@@ -46,7 +46,7 @@ func registerTools(s *mcpserver.MCPServer, rt *runtime.Runtime) {
 				Tool:  desc.Name,
 				Input: input,
 			}
-			call.Policy.TimeoutMs = mcpTimeoutMs(config.Get().LocalBrowser, config.Skill(), args)
+			call.Policy.TimeoutMs = int(runtime.RecommendedCallTimeout(config.Get(), call).Milliseconds())
 			result := rt.Execute(ctx, call)
 			return toolResultToMCP(ctx, result, rt.ArtifactStore())
 		})
@@ -58,24 +58,8 @@ func registerTools(s *mcpserver.MCPServer, rt *runtime.Runtime) {
 // otherwise Runtime's generic 60-second default can cancel a valid ASR job
 // after page retrieval has already completed.
 func mcpTimeoutMs(browserCfg config.LocalBrowserConfig, skillCfg config.SkillConfig, args map[string]any) int {
-	browserSeconds := browserCfg.TotalTimeoutSec
-	if browserSeconds <= 0 {
-		browserSeconds = 90
-	}
-	seconds := browserSeconds + 30
-	includeASR, _ := args["include_asr"].(bool)
-	includeSummary, _ := args["include_summary"].(bool)
-	if includeASR || includeSummary {
-		mediaSeconds := skillCfg.Media.TimeoutSec
-		if mediaSeconds <= 0 {
-			mediaSeconds = 30
-		}
-		seconds += mediaSeconds + skillCfg.ASR.TimeoutSecOrDefault()
-	}
-	if includeSummary {
-		seconds += skillCfg.Summary.TimeoutSecOrDefault()
-	}
-	return seconds * 1000
+	input, _ := json.Marshal(args)
+	return int(runtime.RecommendedCallTimeout(&config.Config{LocalBrowser: browserCfg, Skill: skillCfg}, &protocol.ToolCall{Input: input}).Milliseconds())
 }
 
 func buildMCPTool(desc protocol.ToolDescriptor) mcp.Tool {
@@ -138,7 +122,14 @@ func toolResultToMCP(ctx context.Context, result *protocol.ToolResult, store art
 			code = result.Error.Code
 			message = result.Error.Message
 		}
-		output["error"] = map[string]string{"code": code, "message": message}
+		// Keep the established string-only error object compatible with MCP
+		// consumers that decode it as map[string]string. Rich diagnostics live in
+		// a sibling field instead of changing that object's value types.
+		errorOutput := map[string]string{"code": code, "message": message}
+		if result.Error != nil && len(result.Error.Details) > 0 {
+			output["error_details"] = result.Error.Details
+		}
+		output["error"] = errorOutput
 		mcpResult := mcp.NewToolResultStructuredOnly(output)
 		mcpResult.Content = append(mcpResult.Content, artifactContent...)
 		mcpResult.IsError = true

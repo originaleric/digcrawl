@@ -49,6 +49,12 @@ func isRetryableBrowseError(err error) bool {
 	if err == nil {
 		return false
 	}
+	var retryable interface {
+		ToolErrorRetryable() bool
+	}
+	if errors.As(err, &retryable) {
+		return retryable.ToolErrorRetryable()
+	}
 	var re *ReadError
 	if errors.As(err, &re) {
 		switch re.Code {

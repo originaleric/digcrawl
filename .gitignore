@@ -12,6 +12,8 @@
 
 # DigCrawl runtime data
 /storage/
+/.cache/
+__pycache__/
 
 # Local planning notes
 /plans/

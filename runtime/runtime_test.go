@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/originaleric/digcrawl/config"
 	"github.com/originaleric/digcrawl/protocol"
@@ -27,6 +28,40 @@ func TestExecuteUnknownTool(t *testing.T) {
 	res := rt.Execute(context.Background(), call)
 	if res.Status != "error" || res.Error == nil {
 		t.Fatalf("expected error result, got %+v", res)
+	}
+}
+
+func TestRecommendedCallTimeoutIncludesExplicitASRBudgets(t *testing.T) {
+	t.Parallel()
+	cfg := &config.Config{
+		LocalBrowser: config.LocalBrowserConfig{TotalTimeoutSec: 90},
+		Skill: config.SkillConfig{
+			Media: config.SkillMediaConfig{TimeoutSec: 30},
+			ASR:   config.ASRConfig{TimeoutSec: 300},
+		},
+	}
+	plain := &protocol.ToolCall{Input: json.RawMessage(`{"url":"https://example.com"}`)}
+	if got := RecommendedCallTimeout(cfg, plain); got != 120*time.Second {
+		t.Fatalf("plain timeout=%s want 2m", got)
+	}
+	asr := &protocol.ToolCall{Input: json.RawMessage(`{"include_asr":true}`)}
+	if got := RecommendedCallTimeout(cfg, asr); got != 450*time.Second {
+		t.Fatalf("ASR timeout=%s want 7m30s", got)
+	}
+	summary := &protocol.ToolCall{Input: json.RawMessage(`{"include_summary":true}`)}
+	if got := RecommendedCallTimeout(cfg, summary); got != 180*time.Second {
+		t.Fatalf("summary timeout=%s want 3m", got)
+	}
+}
+
+func TestExecutionTimeoutUsesConfiguredDefaultUnlessHostOverrides(t *testing.T) {
+	t.Parallel()
+	rt := New(registry.New(), Options{TimeoutForCall: func(*protocol.ToolCall) time.Duration { return 5 * time.Minute }})
+	if got := rt.ExecutionTimeout(&protocol.ToolCall{}); got != 5*time.Minute {
+		t.Fatalf("configured timeout=%s", got)
+	}
+	if got := rt.ExecutionTimeout(&protocol.ToolCall{Policy: protocol.CallPolicy{TimeoutMs: 2500}}); got != 2500*time.Millisecond {
+		t.Fatalf("host timeout=%s", got)
 	}
 }
 
@@ -181,6 +216,21 @@ func TestExecutePreservesStructuredOutputOnHandlerError(t *testing.T) {
 	}
 }
 
+func TestExecuteExposesStructuredErrorDetails(t *testing.T) {
+	t.Parallel()
+	reg := registry.New()
+	reg.Register(registry.Entry{
+		Descriptor: protocol.ToolDescriptor{Name: "detailed.error"},
+		Handler: func(ctx context.Context, call *protocol.ToolCall) (map[string]any, []protocol.Artifact, error) {
+			return nil, nil, testDetailedError{}
+		},
+	})
+	res := New(reg, Options{}).Execute(context.Background(), &protocol.ToolCall{Type: protocol.TypeToolCall, ID: "c1", Tool: "detailed.error"})
+	if res.Error == nil || res.Error.Code != "BROWSER_PAGE_CLOSED" || res.Error.Details["stage"] != "extract_content" {
+		t.Fatalf("expected detailed browser error, got %+v", res.Error)
+	}
+}
+
 type testStructuredError struct {
 	code string
 	msg  string
@@ -189,6 +239,15 @@ type testStructuredError struct {
 func (e testStructuredError) Error() string            { return e.msg }
 func (e testStructuredError) ToolErrorCode() string    { return e.code }
 func (e testStructuredError) ToolErrorMessage() string { return e.msg }
+
+type testDetailedError struct{}
+
+func (testDetailedError) Error() string            { return "page closed" }
+func (testDetailedError) ToolErrorCode() string    { return "BROWSER_PAGE_CLOSED" }
+func (testDetailedError) ToolErrorMessage() string { return "page closed" }
+func (testDetailedError) ToolErrorDetails() map[string]any {
+	return map[string]any{"component": "local_browser", "stage": "extract_content", "retryable": true}
+}
 
 func TestDefaultRegistryIncludesASRTranscribe(t *testing.T) {
 	t.Parallel()

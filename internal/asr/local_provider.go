@@ -2,6 +2,9 @@ package asr
 
 import (
 	"context"
+	"crypto/sha256"
+	_ "embed"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -13,12 +16,23 @@ import (
 )
 
 type localProvider struct {
-	command  string
-	args     []string
-	model    string
-	language string
-	timeout  time.Duration
+	command              string
+	args                 []string
+	model                string
+	language             string
+	timeout              time.Duration
+	modelCacheDir        string
+	legacyModelCacheDirs []string
+	legacyHubCacheDir    string
 }
+
+// bundledFasterWhisperRunner is materialized beneath the configured model
+// cache when the faster-whisper console command is unavailable. Embedding it
+// keeps the fallback independent of the current directory and of whether a
+// release package exposes a repository-level scripts/ directory.
+//
+//go:embed assets/faster_whisper_asr.py
+var bundledFasterWhisperRunner []byte
 
 func (p *localProvider) Name() string  { return "local" }
 func (p *localProvider) Model() string { return p.model }
@@ -29,8 +43,11 @@ func (p *localProvider) Transcribe(ctx context.Context, audioPath string) (*Resu
 		return nil, fmt.Errorf("stat audio: %w", err)
 	}
 	if _, err := exec.LookPath(p.command); err != nil {
-		fallbackCommand, fallbackArgs, ok := localCommandFallback(p.command, p.args)
-		if !ok {
+		fallbackCommand, fallbackArgs, fallbackErr := localCommandFallback(p.command, p.args, p.modelCacheDir, p.legacyModelCacheDirs, p.legacyHubCacheDir)
+		if fallbackErr != nil {
+			return nil, fallbackErr
+		}
+		if fallbackCommand == "" {
 			return nil, fmt.Errorf("local ASR command %q not found in PATH; install it or configure ASR.LocalCommand / --local-command", p.command)
 		}
 		p.command = fallbackCommand
@@ -63,7 +80,7 @@ func (p *localProvider) Transcribe(ctx context.Context, audioPath string) (*Resu
 	}
 	defer cancel()
 	cmd := exec.CommandContext(cmdCtx, p.command, args...)
-	env, envErr := localASREnv(os.Environ())
+	env, envErr := localASREnv(os.Environ(), p.modelCacheDir, p.legacyModelCacheDirs, p.legacyHubCacheDir)
 	if envErr != nil {
 		return nil, envErr
 	}
@@ -91,17 +108,25 @@ func (p *localProvider) Transcribe(ctx context.Context, audioPath string) (*Resu
 	return result, nil
 }
 
-func localASREnv(base []string) ([]string, error) {
+func localASREnv(base []string, modelCacheDir string, legacyModelCacheDirs []string, legacyHubCacheDir string) ([]string, error) {
 	env := append([]string{}, base...)
-	if !envHasValue(env, "HF_HOME") && !envHasValue(env, "HUGGINGFACE_HUB_CACHE") {
-		cacheDir, err := defaultLocalASRCacheDir()
-		if err != nil {
-			return nil, err
-		}
-		if err := os.MkdirAll(cacheDir, 0o755); err != nil {
-			return nil, fmt.Errorf("create local ASR model cache dir: %w", err)
-		}
-		env = append(env, "HF_HOME="+cacheDir)
+	cache, err := resolveLocalASRCacheLocation(modelCacheDir, legacyModelCacheDirs, legacyHubCacheDir)
+	if err != nil {
+		return nil, err
+	}
+	// ModelCacheDir is the configured source of truth for both normal
+	// transcription and the bundled runner's offline preflight. Remove a
+	// process-global hub override so it cannot silently split model state across
+	// two directories, then pass the path explicitly to Python as well.
+	env = setEnvValue(env, "HF_HOME", cache.modelCacheDir)
+	env = removeEnvValue(env, "HUGGINGFACE_HUB_CACHE")
+	if cache.hubCacheDir != "" {
+		env = setEnvValue(env, "HUGGINGFACE_HUB_CACHE", cache.hubCacheDir)
+	}
+	env = setEnvValue(env, "DIGCRAWL_ASR_MODEL_CACHE_DIR", cache.modelCacheDir)
+	env = removeEnvValue(env, "DIGCRAWL_ASR_LEGACY_HUB_CACHE_DIR")
+	if cache.hubCacheDir != "" {
+		env = setEnvValue(env, "DIGCRAWL_ASR_LEGACY_HUB_CACHE_DIR", cache.hubCacheDir)
 	}
 	if !envHasValue(env, "HF_HUB_DISABLE_PROGRESS_BARS") {
 		env = append(env, "HF_HUB_DISABLE_PROGRESS_BARS=1")
@@ -109,16 +134,199 @@ func localASREnv(base []string) ([]string, error) {
 	return env, nil
 }
 
-func defaultLocalASRCacheDir() (string, error) {
+func setEnvValue(env []string, key, value string) []string {
+	env = removeEnvValue(env, key)
+	return append(env, key+"="+value)
+}
+
+func removeEnvValue(env []string, key string) []string {
+	prefix := key + "="
+	out := env[:0]
+	for _, item := range env {
+		if strings.HasPrefix(item, prefix) {
+			continue
+		}
+		out = append(out, item)
+	}
+	return out
+}
+
+func localASRCacheDir(configured string) (string, error) {
+	if configured = strings.TrimSpace(configured); configured != "" {
+		return configured, nil
+	}
 	wd, err := os.Getwd()
 	if err == nil && strings.TrimSpace(wd) != "" {
-		return filepath.Join(wd, ".cache", "huggingface"), nil
+		return filepath.Join(wd, "storage", "digcrawl", "asr_models"), nil
 	}
 	tmp := os.TempDir()
 	if strings.TrimSpace(tmp) == "" {
 		return "", fmt.Errorf("resolve local ASR model cache dir: empty temp dir")
 	}
-	return filepath.Join(tmp, "digcrawl-huggingface"), nil
+	return filepath.Join(tmp, "digcrawl-asr-models"), nil
+}
+
+const localASRCacheStateName = ".digcrawl-asr-cache-v1.json"
+
+type localASRCacheState struct {
+	ActiveModelCacheDir string `json:"active_model_cache_dir"`
+	HubCacheDir         string `json:"hub_cache_dir,omitempty"`
+}
+
+type localASRCacheLocation struct {
+	modelCacheDir string
+	hubCacheDir   string
+}
+
+// resolveLocalASRCacheDir selects one stable cache for a provider invocation.
+// The configured directory remains the canonical owner of compatibility state.
+// For an old profile with no explicit cache, an existing legacy cache is adopted
+// in place and recorded atomically rather than moved: model downloads are large,
+// may cross volumes, and may also be shared with an earlier installation.
+func resolveLocalASRCacheDir(configured string, legacyCandidates []string) (string, error) {
+	cache, err := resolveLocalASRCacheLocation(configured, legacyCandidates, "")
+	if err != nil {
+		return "", err
+	}
+	return cache.modelCacheDir, nil
+}
+
+func resolveLocalASRCacheLocation(configured string, legacyCandidates []string, legacyHubCacheDir string) (localASRCacheLocation, error) {
+	canonical, err := localASRCacheDir(configured)
+	if err != nil {
+		return localASRCacheLocation{}, err
+	}
+	canonical = filepath.Clean(canonical)
+	if err := validateASRCacheDirectory(canonical); err != nil {
+		return localASRCacheLocation{}, err
+	}
+	if hasASRModelData(canonical) {
+		return localASRCacheLocation{modelCacheDir: canonical}, nil
+	}
+	if state, ok := readLocalASRCacheState(canonical); ok {
+		activeIsCanonical := filepath.Clean(state.ActiveModelCacheDir) == canonical
+		if (activeIsCanonical || validASRCacheCandidate(state.ActiveModelCacheDir, canonical)) &&
+			(state.HubCacheDir == "" || validASRCacheDirectory(state.HubCacheDir)) {
+			return localASRCacheLocation{modelCacheDir: state.ActiveModelCacheDir, hubCacheDir: state.HubCacheDir}, nil
+		}
+	}
+	legacyHubCacheDir = filepath.Clean(strings.TrimSpace(legacyHubCacheDir))
+	if legacyHubCacheDir != "." && validASRCacheDirectory(legacyHubCacheDir) && hasASRModelData(legacyHubCacheDir) {
+		state := localASRCacheState{ActiveModelCacheDir: canonical, HubCacheDir: legacyHubCacheDir}
+		if err := writeLocalASRCacheState(canonical, state); err != nil {
+			return localASRCacheLocation{}, fmt.Errorf("record ASR cache compatibility state: %w", err)
+		}
+		return localASRCacheLocation{modelCacheDir: canonical, hubCacheDir: legacyHubCacheDir}, nil
+	}
+	for _, candidate := range legacyCandidates {
+		candidate = filepath.Clean(strings.TrimSpace(candidate))
+		if !validASRCacheCandidate(candidate, canonical) || !hasASRModelData(candidate) {
+			continue
+		}
+		state := localASRCacheState{ActiveModelCacheDir: candidate}
+		if err := writeLocalASRCacheState(canonical, state); err != nil {
+			return localASRCacheLocation{}, fmt.Errorf("record ASR cache compatibility state: %w", err)
+		}
+		return localASRCacheLocation{modelCacheDir: candidate}, nil
+	}
+	return localASRCacheLocation{modelCacheDir: canonical}, nil
+}
+
+func validateASRCacheDirectory(path string) error {
+	info, err := os.Stat(path)
+	if err == nil {
+		if !info.IsDir() {
+			return fmt.Errorf("ASR model cache path is not a directory: %s", path)
+		}
+		return nil
+	}
+	if !os.IsNotExist(err) {
+		return err
+	}
+	if err := os.MkdirAll(path, 0o755); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validASRCacheCandidate(candidate, canonical string) bool {
+	if candidate == "" || filepath.Clean(candidate) == filepath.Clean(canonical) {
+		return false
+	}
+	info, err := os.Stat(candidate)
+	return err == nil && info.IsDir()
+}
+
+func validASRCacheDirectory(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.IsDir()
+}
+
+func hasASRModelData(dir string) bool {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return false
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		if !isASRCacheControlEntry(name) {
+			return true
+		}
+	}
+	return false
+}
+
+func isASRCacheControlEntry(name string) bool {
+	return name == localASRCacheStateName ||
+		name == "digcrawl-runner" ||
+		strings.HasPrefix(name, ".digcrawl-asr-cache-") ||
+		name == ".DS_Store" ||
+		name == "Thumbs.db"
+}
+
+func readLocalASRCacheState(canonical string) (localASRCacheState, bool) {
+	data, err := os.ReadFile(filepath.Join(canonical, localASRCacheStateName))
+	if err != nil {
+		return localASRCacheState{}, false
+	}
+	var state localASRCacheState
+	if json.Unmarshal(data, &state) != nil || strings.TrimSpace(state.ActiveModelCacheDir) == "" {
+		return localASRCacheState{}, false
+	}
+	state.ActiveModelCacheDir = filepath.Clean(state.ActiveModelCacheDir)
+	state.HubCacheDir = strings.TrimSpace(state.HubCacheDir)
+	if state.HubCacheDir != "" {
+		state.HubCacheDir = filepath.Clean(state.HubCacheDir)
+	}
+	return state, true
+}
+
+func writeLocalASRCacheState(canonical string, state localASRCacheState) error {
+	data, err := json.Marshal(state)
+	if err != nil {
+		return err
+	}
+	temporary, err := os.CreateTemp(canonical, ".digcrawl-asr-cache-*.tmp")
+	if err != nil {
+		return err
+	}
+	temporaryPath := temporary.Name()
+	defer os.Remove(temporaryPath)
+	if _, err := temporary.Write(data); err != nil {
+		_ = temporary.Close()
+		return err
+	}
+	if err := temporary.Close(); err != nil {
+		return err
+	}
+	statePath := filepath.Join(canonical, localASRCacheStateName)
+	if err := os.Rename(temporaryPath, statePath); err != nil {
+		if existing, ok := readLocalASRCacheState(canonical); ok && existing == state {
+			return nil
+		}
+		return err
+	}
+	return nil
 }
 
 func envHasValue(env []string, key string) bool {
@@ -131,28 +339,89 @@ func envHasValue(env []string, key string) bool {
 	return false
 }
 
-func localCommandFallback(command string, args []string) (string, []string, bool) {
+func localCommandFallback(command string, args []string, modelCacheDir string, legacyModelCacheDirs []string, legacyHubCacheDir string) (string, []string, error) {
 	if len(args) > 0 {
-		return "", nil, false
+		return "", nil, nil
 	}
 	command = strings.ToLower(strings.TrimSpace(command))
 	if command != "faster-whisper" && command != "faster_whisper" {
-		return "", nil, false
+		return "", nil, nil
 	}
-	if _, err := os.Stat(filepath.Join("scripts", "faster_whisper_asr.py")); err != nil {
-		return "", nil, false
-	}
-	python, err := exec.LookPath("python3")
+	runner, err := ensureBundledFasterWhisperRunner(modelCacheDir, legacyModelCacheDirs, legacyHubCacheDir)
 	if err != nil {
-		return "", nil, false
+		return "", nil, fmt.Errorf("prepare bundled faster-whisper runner: %w", err)
+	}
+	python, err := findPythonInterpreter()
+	if err != nil {
+		return "", nil, nil
 	}
 	return python, []string{
-		filepath.Join("scripts", "faster_whisper_asr.py"),
+		runner,
 		"{audio_path}",
 		"--model", "{model}",
 		"--output_format", "json",
 		"--output_dir", "{output_dir}",
-	}, true
+	}, nil
+}
+
+func findPythonInterpreter() (string, error) {
+	// python3 is conventional on macOS/Linux; Windows installations normally
+	// expose python.exe or the py launcher. Try all stable names without making
+	// the configured LocalCommand platform-specific.
+	for _, name := range []string{"python3", "python", "py"} {
+		if path, err := exec.LookPath(name); err == nil {
+			return path, nil
+		}
+	}
+	return "", fmt.Errorf("python interpreter is not available on PATH")
+}
+
+func ensureBundledFasterWhisperRunner(modelCacheDir string, legacyModelCacheDirs []string, legacyHubCacheDir string) (string, error) {
+	cache, err := resolveLocalASRCacheLocation(modelCacheDir, legacyModelCacheDirs, legacyHubCacheDir)
+	if err != nil {
+		return "", err
+	}
+	runnerDir := filepath.Join(cache.modelCacheDir, "digcrawl-runner")
+	if err := os.MkdirAll(runnerDir, 0o755); err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(bundledFasterWhisperRunner)
+	runnerPath := filepath.Join(runnerDir, "faster_whisper_asr-"+hex.EncodeToString(sum[:8])+".py")
+	if info, err := os.Stat(runnerPath); err == nil {
+		if info.IsDir() {
+			return "", fmt.Errorf("bundled ASR runner path is a directory: %s", runnerPath)
+		}
+		return runnerPath, nil
+	} else if !os.IsNotExist(err) {
+		return "", err
+	}
+
+	temporary, err := os.CreateTemp(runnerDir, ".faster-whisper-*.tmp")
+	if err != nil {
+		return "", err
+	}
+	temporaryPath := temporary.Name()
+	defer os.Remove(temporaryPath)
+	if _, err := temporary.Write(bundledFasterWhisperRunner); err != nil {
+		_ = temporary.Close()
+		return "", err
+	}
+	if err := temporary.Chmod(0o700); err != nil {
+		_ = temporary.Close()
+		return "", err
+	}
+	if err := temporary.Close(); err != nil {
+		return "", err
+	}
+	if err := os.Rename(temporaryPath, runnerPath); err != nil {
+		// Concurrent MCP/doctor starts can race only on this final publish. A
+		// complete runner published by another process is equally valid.
+		if info, statErr := os.Stat(runnerPath); statErr == nil && !info.IsDir() {
+			return runnerPath, nil
+		}
+		return "", err
+	}
+	return runnerPath, nil
 }
 
 func expandArgs(args []string, values map[string]string) []string {

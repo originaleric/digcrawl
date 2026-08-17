@@ -14,9 +14,22 @@ from pathlib import Path
 
 
 def ensure_model_cache_env() -> None:
-    if not os.environ.get("HF_HOME") and not os.environ.get("HUGGINGFACE_HUB_CACHE"):
-        repo_root = Path(__file__).resolve().parent.parent
-        cache_dir = repo_root / ".cache" / "huggingface"
+    configured_cache = os.environ.get("DIGCRAWL_ASR_MODEL_CACHE_DIR", "").strip()
+    legacy_hub_cache = os.environ.get("DIGCRAWL_ASR_LEGACY_HUB_CACHE_DIR", "").strip()
+    if configured_cache:
+        # Go passes ModelCacheDir through this variable. It must take precedence
+        # over inherited Hugging Face settings so doctor and transcription use
+        # exactly the same offline model files.
+        cache_dir = Path(configured_cache).expanduser()
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        os.environ["HF_HOME"] = str(cache_dir)
+        if legacy_hub_cache:
+            os.environ["HUGGINGFACE_HUB_CACHE"] = legacy_hub_cache
+        else:
+            os.environ.pop("HUGGINGFACE_HUB_CACHE", None)
+    elif not os.environ.get("HF_HOME") and not os.environ.get("HUGGINGFACE_HUB_CACHE"):
+        cache_root = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache"))
+        cache_dir = cache_root / "digcrawl" / "asr_models"
         cache_dir.mkdir(parents=True, exist_ok=True)
         os.environ["HF_HOME"] = str(cache_dir)
     os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
@@ -24,7 +37,17 @@ def ensure_model_cache_env() -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("audio_path")
+    parser.add_argument("audio_path", nargs="?")
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help="verify that faster-whisper is importable",
+    )
+    parser.add_argument(
+        "--check-model",
+        action="store_true",
+        help="with --check, verify the selected model is already available offline",
+    )
     parser.add_argument("--model", default="small")
     parser.add_argument("--language", default="")
     parser.add_argument("--output_format", default="json")
@@ -40,6 +63,25 @@ def main() -> int:
     except Exception as exc:  # pragma: no cover - exercised by runtime readiness.
         print(f"faster_whisper import failed: {exc}", file=sys.stderr)
         return 2
+
+    if args.check_model and not args.check:
+        parser.error("--check-model requires --check")
+    if args.check:
+        if args.check_model:
+            try:
+                WhisperModel(
+                    args.model,
+                    device=args.device,
+                    compute_type=args.compute_type,
+                    local_files_only=True,
+                )
+            except Exception as exc:  # pragma: no cover - exercised by doctor.
+                print(f"faster_whisper model check failed: {exc}", file=sys.stderr)
+                return 3
+        print(json.dumps({"status": "ok", "provider": "faster-whisper", "model": args.model, "model_verified": args.check_model}))
+        return 0
+    if not args.audio_path:
+        parser.error("audio_path is required unless --check is used")
 
     model = WhisperModel(args.model, device=args.device, compute_type=args.compute_type)
     kwargs = {"vad_filter": True, "beam_size": 5}

@@ -3,6 +3,7 @@ package browser
 import (
 	"context"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"github.com/go-rod/rod"
+	"github.com/go-rod/rod/lib/cdp"
 	"github.com/go-rod/rod/lib/launcher"
 	"github.com/go-rod/rod/lib/launcher/flags"
 	"github.com/go-rod/stealth"
@@ -23,23 +25,29 @@ import (
 type browserSession struct {
 	id        uint64
 	page      *rod.Page
+	conn      *browserConnection
 	startedAt time.Time
 	released  atomic.Bool
 }
 
 type browserManager struct {
-	mu         sync.Mutex
-	cfg        config.LocalBrowserConfig
-	browser    *rod.Browser
+	mu  sync.Mutex
+	cfg config.LocalBrowserConfig
+	// active is the only connection allowed to receive new page leases. A
+	// retired connection remains visible separately until every lease has been
+	// returned and its owner-specific teardown has completed.
+	active   *browserConnection
+	retiring *browserConnection
+	opening  chan struct{}
+	// openFn is injected only by lifecycle tests. Keeping the state machine
+	// independent from Chromium makes teardown/replacement invariants testable.
+	openFn     func(context.Context) (*browserConnection, error)
 	slots      chan struct{}
 	sessions   map[uint64]*browserSession
 	nextID     uint64
 	stopCh     chan struct{}
 	stopOnce   sync.Once
 	cleanupRun sync.Once
-	// 新增：标签页管理
-	tabManager  *TabManager
-	tabExecutor *TabExecutor
 }
 
 var (
@@ -50,39 +58,15 @@ var (
 func getBrowserManager() *browserManager {
 	browserManagerOnce.Do(func() {
 		cfg := normalizeLocalBrowserConfig(config.Get().LocalBrowser)
-		executor := NewTabExecutor(cfg.MaxConcurrency)
 		globalBrowserMgr = &browserManager{
-			cfg:         cfg,
-			slots:       make(chan struct{}, cfg.MaxConcurrency),
-			sessions:    make(map[uint64]*browserSession),
-			stopCh:      make(chan struct{}),
-			tabExecutor: executor,
+			cfg:      cfg,
+			slots:    make(chan struct{}, cfg.MaxConcurrency),
+			sessions: make(map[uint64]*browserSession),
+			stopCh:   make(chan struct{}),
 		}
 		globalBrowserMgr.startCleanupLoop()
 	})
 	return globalBrowserMgr
-}
-
-// getTabManager 获取或创建标签页管理器
-func (m *browserManager) getTabManager() (*TabManager, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	if m.tabManager != nil {
-		return m.tabManager, nil
-	}
-
-	// 确保浏览器已初始化
-	ctx := context.Background()
-	browser, err := m.ensureBrowser(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	// 创建标签页管理器
-	tabTTL := time.Duration(m.cfg.TotalTimeoutSec*2) * time.Second
-	m.tabManager = NewTabManager(browser, m.tabExecutor, m.cfg.MaxConcurrency*2, tabTTL)
-	return m.tabManager, nil
 }
 
 func normalizeLocalBrowserConfig(cfg config.LocalBrowserConfig) config.LocalBrowserConfig {
@@ -105,7 +89,11 @@ func normalizeLocalBrowserConfig(cfg config.LocalBrowserConfig) config.LocalBrow
 		defaultHeadless := true
 		cfg.Headless = &defaultHeadless
 	}
-	if strings.TrimSpace(cfg.ChromePath) == "" {
+	// Playwright stores Chromium in a versioned cache directory. A path that was
+	// valid at configuration time can therefore disappear after `playwright
+	// install` or a dependency update. Treat a missing explicit path the same as
+	// an unset one so the discovery order below can select a current executable.
+	if !isExecutableFile(cfg.ChromePath) {
 		cfg.ChromePath = discoverLocalChromePath()
 	}
 	if isHeadlessShellPath(cfg.ChromePath) {
@@ -132,16 +120,11 @@ func discoverLocalChromePath() string {
 		}
 	}
 
-	for _, path := range playwrightHeadlessShellCandidates() {
-		if isExecutableFile(path) {
-			return path
-		}
-	}
-
-	for _, path := range localChromeCandidates() {
-		if isExecutableFile(path) {
-			return path
-		}
+	// A bundled Playwright headless shell is an ephemeral cache artifact. Prefer
+	// an installed browser when available: it survives Playwright cache cleanup
+	// and is less sensitive to version-specific launch flags on desktop hosts.
+	if path := firstExecutablePath(localChromeCandidates(), playwrightHeadlessShellCandidates()); path != "" {
+		return path
 	}
 
 	for _, name := range []string{
@@ -155,6 +138,17 @@ func discoverLocalChromePath() string {
 	} {
 		if path, err := exec.LookPath(name); err == nil && isExecutableFile(path) {
 			return path
+		}
+	}
+	return ""
+}
+
+func firstExecutablePath(groups ...[]string) string {
+	for _, paths := range groups {
+		for _, path := range paths {
+			if isExecutableFile(path) {
+				return path
+			}
 		}
 	}
 	return ""
@@ -332,6 +326,14 @@ func appendMissingArgs(existing []string, required ...string) []string {
 	return existing
 }
 
+// browserProcessOwned reports whether this manager launched the Chromium
+// process itself. An externally managed CDP browser is a durable service owned
+// by the user; rod.Browser.Close sends Browser.close and must never be used for
+// that connection.
+func browserProcessOwned(cfg config.LocalBrowserConfig) bool {
+	return cfg.CDPConnectExisting == nil || !*cfg.CDPConnectExisting
+}
+
 func (m *browserManager) acquire(ctx context.Context) (*browserSession, error) {
 	select {
 	case m.slots <- struct{}{}:
@@ -339,22 +341,25 @@ func (m *browserManager) acquire(ctx context.Context) (*browserSession, error) {
 		return nil, fmt.Errorf("等待浏览器并发槽位超时: %w", ctx.Err())
 	}
 
-	browser, err := m.ensureBrowser(ctx)
+	conn, err := m.acquireConnection(ctx)
 	if err != nil {
 		<-m.slots
 		return nil, err
 	}
 
-	page, err := stealth.Page(browser)
+	page, err := stealth.Page(conn.browser)
 	if err != nil {
-		_ = m.resetBrowser()
-		browser, err = m.ensureBrowser(ctx)
+		m.retireConnection(conn)
+		m.releaseConnection(conn)
+		conn, err = m.acquireConnection(ctx)
 		if err != nil {
 			<-m.slots
 			return nil, err
 		}
-		page, err = stealth.Page(browser)
+		page, err = stealth.Page(conn.browser)
 		if err != nil {
+			m.retireConnection(conn)
+			m.releaseConnection(conn)
 			<-m.slots
 			return nil, fmt.Errorf("创建 stealth 页面失败: %w", err)
 		}
@@ -364,6 +369,7 @@ func (m *browserManager) acquire(ctx context.Context) (*browserSession, error) {
 	s := &browserSession{
 		id:        id,
 		page:      page,
+		conn:      conn,
 		startedAt: time.Now(),
 	}
 
@@ -379,12 +385,21 @@ func (m *browserManager) release(s *browserSession) {
 	}
 
 	if s.page != nil {
-		_ = s.page.Close()
+		// A renderer crash can leave the CDP close command unanswered. Releasing
+		// a pool slot must never inherit that stuck request and hold the caller
+		// (or the next crawl) indefinitely.
+		if err := closePageWithin(s.page, 3*time.Second); err != nil {
+			// A page that cannot acknowledge close may keep renderer/CDP state
+			// behind after its slot is returned. Retire the shared connection so
+			// it drains safely instead of reusing an uncertain process forever.
+			m.retireConnection(s.conn)
+		}
 	}
 
 	m.mu.Lock()
 	delete(m.sessions, s.id)
 	m.mu.Unlock()
+	m.releaseConnection(s.conn)
 
 	select {
 	case <-m.slots:
@@ -392,80 +407,193 @@ func (m *browserManager) release(s *browserSession) {
 	}
 }
 
-func (m *browserManager) ensureBrowser(ctx context.Context) (*rod.Browser, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	if m.browser != nil {
-		if _, err := m.browser.Version(); err == nil {
-			return m.browser, nil
-		}
-		_ = m.browser.Close()
-		m.browser = nil
+func closePageWithin(page *rod.Page, timeout time.Duration) error {
+	if page == nil {
+		return nil
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	// Rod binds CDP calls to the page context. Using a timed clone keeps a
+	// renderer crash from blocking a pool release without leaving one goroutine
+	// behind for every stuck Close call.
+	return page.Context(ctx).Close()
+}
 
-	controlURL, err := m.launchControlURL(ctx)
+// browserOperationContext keeps CDP setup and health checks bounded by both
+// the caller's deadline and the configured browser limit. A shared browser
+// must outlive a call; a shared *operation* must not.
+func browserOperationContext(ctx context.Context, limit time.Duration) (context.Context, context.CancelFunc) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if limit <= 0 {
+		limit = 60 * time.Second
+	}
+	return context.WithTimeout(ctx, limit)
+}
+
+// connectCDPBrowser separates process ownership from transport ownership.
+// Rod's Browser.Close sends Browser.close, which would terminate the persistent
+// Chrome service. By retaining the WebSocket we can abort a slow setup or reset
+// only DigCrawl's connection while leaving Chrome running.
+func connectCDPBrowser(ctx context.Context, controlURL string, timeout time.Duration) (*rod.Browser, *cdp.WebSocket, error) {
+	transport := &cdp.WebSocket{}
+	dialer := &cancelableCDPDialer{}
+	transport.Dialer = dialer
+	if err := connectWebSocketWithin(ctx, transport, dialer, controlURL); err != nil {
+		safeCloseCDPTransport(transport)
+		return nil, nil, fmt.Errorf("连接 Chromium CDP 失败: %w", err)
+	}
+	browser := rod.New().
+		Context(context.Background()).
+		ControlURL("").
+		Client(cdp.New().Start(transport)).
+		Timeout(timeout)
+	if err := connectBrowserWithin(ctx, browser, transport); err != nil {
+		safeCloseCDPTransport(transport)
+		return nil, nil, fmt.Errorf("连接 Chromium CDP 失败: %w", err)
+	}
+	return browser, transport, nil
+}
+
+// cancelableCDPDialer closes a connection that was established just as the
+// caller timed out. rod's WebSocket handshake otherwise blocks in ReadResponse
+// and does not observe the context after the TCP dial succeeds.
+type cancelableCDPDialer struct {
+	mu     sync.Mutex
+	dialer net.Dialer
+	conn   net.Conn
+	closed bool
+}
+
+func (d *cancelableCDPDialer) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
+	conn, err := d.dialer.DialContext(ctx, network, address)
 	if err != nil {
 		return nil, err
 	}
-
-	browser := rod.New().
-		Context(ctx).
-		ControlURL(controlURL).
-		Timeout(time.Duration(m.cfg.TotalTimeoutSec) * time.Second)
-	if err := browser.Connect(); err != nil {
-		return nil, fmt.Errorf("连接 Chromium 失败: %w", err)
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.closed {
+		_ = conn.Close()
+		return nil, context.Canceled
 	}
-
-	m.browser = browser
-	return m.browser, nil
+	d.conn = conn
+	return conn, nil
 }
 
-func (m *browserManager) launchControlURL(ctx context.Context) (string, error) {
+func (d *cancelableCDPDialer) Close() {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.closed = true
+	if d.conn != nil {
+		_ = d.conn.Close()
+	}
+}
+
+func connectWebSocketWithin(ctx context.Context, transport *cdp.WebSocket, dialer *cancelableCDPDialer, controlURL string) error {
+	done := make(chan error, 1)
+	go func() { done <- transport.Connect(ctx, controlURL, nil) }()
+	select {
+	case err := <-done:
+		return err
+	case <-ctx.Done():
+		dialer.Close()
+		<-done // closing the tracked socket unblocks a stalled HTTP handshake
+		return ctx.Err()
+	}
+}
+
+// connectBrowserWithin makes Rod's post-handshake discovery cancellable even
+// though the retained Browser deliberately uses a background lifetime context.
+func connectBrowserWithin(ctx context.Context, browser *rod.Browser, transport *cdp.WebSocket) error {
+	done := make(chan error, 1)
+	go func() { done <- browser.Connect() }()
+	select {
+	case err := <-done:
+		return err
+	case <-ctx.Done():
+		safeCloseCDPTransport(transport)
+		err := <-done
+		if err != nil {
+			return ctx.Err()
+		}
+		return ctx.Err()
+	}
+}
+
+func safeCloseCDPTransport(transport *cdp.WebSocket) {
+	if transport == nil {
+		return
+	}
+	// cdp.WebSocket does not expose whether dialing reached a connection; Close
+	// panics when it did not. Its transport is private to this package, so turn
+	// that library edge case into a harmless best-effort cleanup.
+	defer func() { _ = recover() }()
+	_ = transport.Close()
+}
+
+func (m *browserManager) openBrowserConnection(ctx context.Context) (*browserConnection, error) {
+	operationCtx, cancel := browserOperationContext(ctx, time.Duration(m.cfg.TotalTimeoutSec)*time.Second)
+	defer cancel()
+	owned := browserProcessOwned(m.cfg)
+	var started *launcher.Launcher
+	profileDir := strings.TrimSpace(m.cfg.UserDataDir)
+	cdpPort := 0
+	var controlURL string
+	var err error
 	if m.cfg.CDPConnectExisting != nil && *m.cfg.CDPConnectExisting {
 		port := m.cfg.CDPPort
 		if port <= 0 {
 			port = 9222
 		}
 		u := fmt.Sprintf("http://127.0.0.1:%d", port)
-		ws, err := launcher.ResolveURL(u)
+		controlURL, err = launcher.ResolveURL(u)
 		if err != nil {
-			return "", fmt.Errorf("连接已有 CDP 浏览器失败: %w", err)
+			return nil, fmt.Errorf("连接已有 CDP 浏览器失败: %w", err)
 		}
-		return ws, nil
-	}
-
-	l := launcher.New().
-		Context(ctx).
-		NoSandbox(true).
-		Headless(*m.cfg.Headless).
-		Set(flags.Flag("disable-gpu"))
-	if m.cfg.ChromePath != "" {
-		l = l.Bin(m.cfg.ChromePath)
-	}
-	if dir := strings.TrimSpace(m.cfg.UserDataDir); dir != "" {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			return "", fmt.Errorf("创建 UserDataDir 失败: %w", err)
+	} else {
+		started = launcher.New().
+			Context(operationCtx).
+			NoSandbox(true).
+			Headless(*m.cfg.Headless).
+			Set(flags.Flag("disable-gpu"))
+		if m.cfg.ChromePath != "" {
+			started = started.Bin(m.cfg.ChromePath)
 		}
-		l = l.UserDataDir(dir)
-	}
-	if m.cfg.CDPMode != nil && *m.cfg.CDPMode {
-		port := m.cfg.CDPPort
-		if port <= 0 {
-			port = 9222
+		if profileDir != "" {
+			if err := os.MkdirAll(profileDir, 0o755); err != nil {
+				return nil, fmt.Errorf("创建 UserDataDir 失败: %w", err)
+			}
+			started = started.UserDataDir(profileDir)
 		}
-		l = l.RemoteDebuggingPort(port)
+		if m.cfg.CDPMode != nil && *m.cfg.CDPMode {
+			port := m.cfg.CDPPort
+			if port <= 0 {
+				port = 9222
+			}
+			cdpPort = port
+			started = started.RemoteDebuggingPort(port)
+		}
+		if proxy := strings.TrimSpace(m.cfg.ProxyURL); proxy != "" {
+			started = started.Proxy(proxy)
+		}
+		started = applyLauncherExtraArgs(started, m.cfg.ExtraArgs)
+		controlURL, err = started.Launch()
 	}
-	if proxy := strings.TrimSpace(m.cfg.ProxyURL); proxy != "" {
-		l = l.Proxy(proxy)
-	}
-	l = applyLauncherExtraArgs(l, m.cfg.ExtraArgs)
-
-	controlURL, err := l.Launch()
 	if err != nil {
-		return "", fmt.Errorf("启动 Chromium 失败: %w", err)
+		return nil, fmt.Errorf("启动 Chromium 失败: %w", err)
 	}
-	return controlURL, nil
+	browser, transport, err := connectCDPBrowser(operationCtx, controlURL, time.Duration(m.cfg.TotalTimeoutSec)*time.Second)
+	if err != nil {
+		if started != nil {
+			started.Kill()
+			if releaseErr := waitForBrowserResourceRelease(operationCtx, profileDir, cdpPort); releaseErr != nil {
+				return newBrowserConnection(nil, nil, started, true, profileDir, cdpPort), fmt.Errorf("cleanup failed browser launch: %w", releaseErr)
+			}
+		}
+		return nil, err
+	}
+	return newBrowserConnection(browser, transport, started, owned, profileDir, cdpPort), nil
 }
 
 // ProfileDirForPlatform returns persistent profile path for a platform login session.
@@ -479,17 +607,6 @@ func ProfileDirForPlatform(baseDir, platform string) string {
 		platform = "default"
 	}
 	return filepath.Join(baseDir, platform)
-}
-
-func (m *browserManager) resetBrowser() error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.browser != nil {
-		err := m.browser.Close()
-		m.browser = nil
-		return err
-	}
-	return nil
 }
 
 func (m *browserManager) startCleanupLoop() {

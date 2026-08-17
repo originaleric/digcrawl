@@ -38,28 +38,28 @@ digcrawl doctor --config "$HOME/.config/digcrawl/digcrawl-skill.yaml"
 
 ### 浏览器能力（按需）
 
-使用浏览器类工具时需本机 Chrome/Chromium（go-rod 可自动查找，也可在配置中指定 `ChromePath`）。在 macOS sandbox 或 CI-like headless 环境中，建议使用 Playwright `chrome-headless-shell` 并显式配置启动参数。
+使用浏览器类工具时需本机 Chrome/Chromium。`ChromePath` 留空时 DigCrawl 会优先发现系统浏览器，再发现当前可用的 Playwright `chrome-headless-shell`；不要把 `chromium_headless_shell-<版本>` 这类会随 Playwright 更新而变化的路径写死到配置中。在 macOS sandbox 或 CI-like headless 环境中，可使用 Playwright `chrome-headless-shell` 作为兜底，并按需要配置启动参数。
 
 ### 本机 Headless Chromium（推荐兜底）
 
 当系统 Chrome、Chrome for Testing 或 Rod 自动下载的 Chromium 无法 headless 启动时，可安装 Playwright 的 `chrome-headless-shell`：
 
 ```bash
-mkdir -p /Users/dig/projects/.cache/digcrawl-playwright
-cd /Users/dig/projects/.cache/digcrawl-playwright
+mkdir -p "$HOME/.cache/digcrawl-playwright"
+cd "$HOME/.cache/digcrawl-playwright"
 
 npm_config_cache=/private/tmp/npm-cache \
-PLAYWRIGHT_BROWSERS_PATH=/Users/dig/projects/.cache/ms-playwright \
+PLAYWRIGHT_BROWSERS_PATH="$HOME/.cache/ms-playwright" \
 npx -y playwright install chromium
 
-find /Users/dig/projects/.cache/ms-playwright -type f -name 'chrome-headless-shell'
+export DIGCRAWL_PLAYWRIGHT_BROWSERS_PATH="$HOME/.cache/ms-playwright"
 ```
 
-将找到的 `chrome-headless-shell` 路径写入 `LocalBrowser.ChromePath`。在 macOS sandbox 下通常还需要 `--single-process` / `--no-zygote` 以及禁用 crashpad：
+安装后保持 `LocalBrowser.ChromePath: ""`，DigCrawl 会动态选择当前可用的 shell。macOS sandbox 下通常还需要 `--single-process` / `--no-zygote` 以及禁用 crashpad：
 
 ```yaml
 LocalBrowser:
-  ChromePath: "/Users/dig/projects/.cache/ms-playwright/chromium_headless_shell-1228/chrome-headless-shell-mac-arm64/chrome-headless-shell"
+  ChromePath: ""
   Headless: true
   UserDataDir: "/private/tmp/digcrawl-pw-headless-profile"
   ExtraArgs:
@@ -158,7 +158,7 @@ go install ./cmd/digcollect
 |------|------|
 | `Enabled` | 为 `false` 时禁用浏览器及依赖它的 Provider |
 | `AllowedDomains` | 允许访问的域名列表（Collect / 平台工具均受约束） |
-| `ChromePath` | 指定 Chrome/Chromium/headless shell 可执行文件路径；为空时由 go-rod 自动查找或下载 |
+| `ChromePath` | 指定 Chrome/Chromium/headless shell 可执行文件路径；为空时自动发现系统浏览器或当前可用的 Playwright 缓存，不应写死版本化缓存路径 |
 | `Headless` | 是否无头模式 |
 | `CookieStoreDir` | 按域名持久化 Cookie，便于登录态采集 |
 | `CDPMode` / `CDPPort` | 启动浏览器时开启 CDP 调试端口 |
@@ -166,6 +166,35 @@ go install ./cmd/digcollect
 | `UserDataDir` | 持久化浏览器 profile 根目录 |
 | `ProxyURL` | 浏览器代理地址，页面 fetch/API fallback 共用 |
 | `ExtraArgs` | 额外 Chromium 启动参数；适合配置 `--single-process`、`--no-zygote`、禁用 crashpad 等 headless 兼容参数 |
+
+### 持久 CDP 浏览器服务
+
+如果本机需要长期使用 `CDPConnectExisting: true`，可使用专用服务启动系统 Chrome，而不是把 `ChromePath` 指向 Playwright 的版本化缓存目录：
+
+```bash
+./scripts/digcrawl-cdp-browser-service.sh install
+./scripts/digcrawl-cdp-browser-service.sh status
+```
+
+Windows 使用 PowerShell 与当前用户的 Task Scheduler：
+
+```powershell
+.\scripts\digcrawl-cdp-browser-service.ps1 install
+.\scripts\digcrawl-cdp-browser-service.ps1 status
+```
+
+Bash 脚本在 macOS 使用用户级 `launchd`、在 Linux 使用 `systemd --user`；PowerShell 脚本在 Windows 使用 Task Scheduler。三者都会在异常退出后重启，Chrome 只监听 `127.0.0.1`，并使用持久 profile。安装时会把已经验证的 Chrome 可执行路径与端口/profile 配置保存到服务定义，避免后台服务因没有交互式 `PATH` 而找不到浏览器；若主动移动自定义浏览器路径，重新执行一次 `install` 即可更新该定义。macOS 还会将启动脚本的私有副本写入 `~/Library/Application Support/DigCrawl/bin`，避免 LaunchAgent 被系统拒绝执行 `Documents` 等受保护目录中的项目脚本。默认端口为 `9323`，通过 `DIGCRAWL_CDP_PORT`、`DIGCRAWL_CDP_USER_DATA_DIR`、`DIGCRAWL_CDP_LOG_DIR` 和 `DIGCRAWL_CHROME_PATH` 覆盖。Skill profile 对应配置为：
+
+```yaml
+LocalBrowser:
+  CDPMode: true
+  CDPConnectExisting: true
+  CDPPort: 9323
+```
+
+这些均为**当前用户**的服务：macOS 与 Windows 会在该用户登录后运行；Linux 的 `systemd --user` 若需在无人登录、重启后仍启动，需由管理员或该用户执行 `loginctl enable-linger <user>`。CDP 只绑定回环地址，但它仍允许同一台机器上能访问该端口的本地进程控制专用浏览器；不要在不受信任的多用户主机上复用这个 profile。
+
+服务安装会把服务身份、端口、profile、日志目录和 Chrome 路径写入当前用户的私有状态目录，并记录“活动服务”。因此安装了自定义服务后，后续的 `start`、`status`、`logs`、`restart`、`uninstall` **不必再次传环境变量**。这些管理命令始终使用保存的运行配置，避免 shell 中残留的端口/profile 变量与已安装服务定义不一致；要修改运行配置请重新执行 `install`。安装和状态检查同时验证 CDP 响应与 Chrome 的 `--remote-debugging-port`、`--user-data-dir`：端口被其他 profile 占用时会明确失败，绝不会把对方的登录会话当成 DigCrawl 专用浏览器。macOS 使用 `DIGCRAWL_CDP_BROWSER_SERVICE_LABEL`，Linux/Windows 使用 `DIGCRAWL_CDP_BROWSER_SERVICE_NAME`；如需在多服务之间切换，可仅为该次命令显式传入对应身份。服务身份只接受字母、数字、`.`、`_`、`-`（Windows 额外允许空格），避免服务文件路径歧义。旧版本已安装的服务仍可按原默认值管理；重新执行一次 `install` 即可迁移到持久状态。
 
 ### Platform（平台读取）
 
@@ -253,10 +282,11 @@ OCR 启用后会在平台工具、通用浏览器读取和 Collect 导出中统�
 | `TimeoutSec` | ffmpeg + ASR 总超时 |
 | `FFmpegPath` | ffmpeg 可执行文件路径，默认 `ffmpeg` |
 | `TempDir` | 抽取音频的临时目录，空则使用系统临时目录 |
+| `ModelCacheDir` | 本地 ASR 模型的唯一持久缓存目录；`doctor` 会以离线模式验证所选模型已可加载。旧版未配置该字段的 Skill 会在首次启动时原地复用旧 `HF_HOME`（或旧 cwd 下的 `.cache/huggingface`），并在新目录记录兼容状态，不移动模型、不依赖后续 cwd，也无需重新下载。显式配置该字段时该目录完全由用户负责。 |
 | `AudioSampleRate` | ffmpeg 抽取 wav 的采样率，默认 `16000` |
 | `MaxAudioBytes` | API provider 上传音频大小上限 |
-| `LocalCommand` | 本地 ASR 命令，默认 `faster-whisper`；命令不存在且未配置 `LocalArgs` 时，会尝试 fallback 到 `python3 scripts/faster_whisper_asr.py` |
-| `LocalArgs` | 本地 ASR 参数模板，支持 `{audio_path}`、`{model}`、`{language}`、`{output_dir}` |
+| `LocalCommand` | 本地 ASR 命令，默认 `faster-whisper`；命令不存在且未配置 `LocalArgs` 时，会使用内置 runner，并依次查找 `python3`、`python`、`py` |
+| `LocalArgs` | 本地 ASR 参数模板，支持 `{audio_path}`、`{model}`、`{language}`、`{output_dir}`；Skill profile 内带路径的命令和首个脚本参数相对 profile 目录解析 |
 
 配置示例：
 

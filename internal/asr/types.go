@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -55,8 +56,9 @@ type provider interface {
 }
 
 // CheckAvailable verifies the local prerequisites that Transcribe will need
-// before a caller persists an ASR opt-in. It does not invoke a provider or
-// make a network request.
+// before a caller persists an ASR opt-in. The bundled faster-whisper runner is
+// checked against the configured cache in offline mode, so this never downloads
+// a model but does prove the selected model can be loaded.
 func CheckAvailable(cfg config.ASRConfig) error {
 	ffmpeg := cfg.FFmpegPathOrDefault()
 	if _, err := exec.LookPath(ffmpeg); err != nil {
@@ -70,13 +72,51 @@ func CheckAvailable(cfg config.ASRConfig) error {
 	if !ok {
 		return nil
 	}
-	if _, err := exec.LookPath(local.command); err == nil {
+	if _, err := exec.LookPath(local.command); err != nil {
+		fallbackCommand, fallbackArgs, fallbackErr := localCommandFallback(local.command, local.args, local.modelCacheDir, local.legacyModelCacheDirs, local.legacyHubCacheDir)
+		if fallbackErr != nil {
+			return fallbackErr
+		}
+		if fallbackCommand == "" {
+			return fmt.Errorf("local ASR command %q is not available", local.command)
+		}
+		local.command, local.args = fallbackCommand, fallbackArgs
+	}
+	if !usesBundledFasterWhisperRunner(local.args) {
 		return nil
 	}
-	if _, _, ok := localCommandFallback(local.command, local.args); ok {
-		return nil
+	// LocalArgs is a runtime template and commonly contains {audio_path},
+	// {output_dir}, and {model}. A readiness probe has no audio/output and must
+	// use the already-resolved config value rather than passing those placeholders
+	// through to argparse.
+	checkArgs := []string{local.args[0], "--check", "--check-model", "--model", local.model}
+	cmd := exec.Command(local.command, checkArgs...)
+	env, envErr := localASREnv(os.Environ(), local.modelCacheDir, local.legacyModelCacheDirs, local.legacyHubCacheDir)
+	if envErr != nil {
+		return envErr
 	}
-	return fmt.Errorf("local ASR command %q is not available", local.command)
+	cmd.Env = env
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		message := strings.TrimSpace(string(output))
+		if message == "" {
+			message = err.Error()
+		}
+		return fmt.Errorf("local faster-whisper runtime check failed: %s", message)
+	}
+	return nil
+}
+
+func usesBundledFasterWhisperRunner(args []string) bool {
+	if len(args) == 0 {
+		return false
+	}
+	name := filepath.Base(args[0])
+	// Keep the historical standalone-script name compatible while recognizing
+	// versioned embedded runners. The versioned form is required so an upgraded
+	// DigCrawl binary cannot silently execute a stale cached runner.
+	return name == "faster_whisper_asr.py" ||
+		(strings.HasPrefix(name, "faster_whisper_asr-") && strings.HasSuffix(name, ".py"))
 }
 
 // Transcribe extracts audio with ffmpeg and transcribes it with the configured ASR provider.
@@ -157,11 +197,14 @@ func newProvider(cfg config.ASRConfig) (provider, error) {
 		}, nil
 	case "local":
 		return &localProvider{
-			command:  cfg.LocalCommandOrDefault(),
-			args:     cfg.LocalArgs,
-			model:    cfg.ModelOrDefault(),
-			language: strings.TrimSpace(cfg.Language),
-			timeout:  time.Duration(cfg.TimeoutSecOrDefault()) * time.Second,
+			command:              cfg.LocalCommandOrDefault(),
+			args:                 cfg.LocalArgs,
+			model:                cfg.ModelOrDefault(),
+			language:             strings.TrimSpace(cfg.Language),
+			timeout:              time.Duration(cfg.TimeoutSecOrDefault()) * time.Second,
+			modelCacheDir:        cfg.ModelCacheDirOrDefault(),
+			legacyModelCacheDirs: append([]string(nil), cfg.LegacyModelCacheDirs...),
+			legacyHubCacheDir:    cfg.LegacyHubCacheDir,
 		}, nil
 	case "stub":
 		return stubProvider{model: cfg.ModelOrDefault()}, nil

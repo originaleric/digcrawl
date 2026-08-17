@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/originaleric/digcrawl/config"
+	"github.com/originaleric/digcrawl/internal/asr"
 	"github.com/originaleric/digcrawl/internal/browser"
 	"github.com/originaleric/digcrawl/runtime"
 	"gopkg.in/yaml.v3"
@@ -133,8 +134,9 @@ func defaultSkillProfile(baseDir string) map[string]any {
 				"TimeoutSec":    30,
 			},
 			"ASR": map[string]any{
-				"Enabled":  false,
-				"Provider": "local",
+				"Enabled":       false,
+				"Provider":      "local",
+				"ModelCacheDir": filepath.Join(baseDir, "asr_models"),
 			},
 		},
 		"Providers": map[string]any{
@@ -270,14 +272,7 @@ func checkASRProvider(cfg *config.Config) error {
 	if !cfg.Skill.ASR.EnabledOrDefault() || cfg.Skill.ASR.ProviderOrDefault() != "local" {
 		return nil
 	}
-	command := cfg.Skill.ASR.LocalCommandOrDefault()
-	if strings.ContainsRune(command, filepath.Separator) {
-		return checkExecutable(command)
-	}
-	if _, err := exec.LookPath(command); err != nil {
-		return fmt.Errorf("%s is not available on PATH", command)
-	}
-	return nil
+	return asr.CheckAvailable(cfg.Skill.ASR)
 }
 
 func checkMCPStartup(cfg *config.Config) error {

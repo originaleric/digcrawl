@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -39,7 +40,7 @@ func TestMCPPhaseOneProfileExposesOnlyReadTools(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var stderr bytes.Buffer
+	var stderr lockedBuffer
 	cmd.Stderr = &stderr
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
@@ -160,6 +161,26 @@ func TestMCPPhaseOneProfileExposesOnlyReadTools(t *testing.T) {
 	if err := ctx.Err(); err != nil {
 		t.Fatalf("MCP stdio integration test timed out: %v; stderr=%s", err, stderr.String())
 	}
+}
+
+// lockedBuffer owns child-process stderr for this streaming integration test.
+// os/exec copies stderr in a goroutine after Start, while assertion failures
+// need a snapshot before Wait; bytes.Buffer alone is not safe for that pair.
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
 }
 
 func writeMCPPhaseOneProfile(t *testing.T) string {

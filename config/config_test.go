@@ -56,6 +56,105 @@ func TestDefaultConfigPathsUseXDGDirectory(t *testing.T) {
 	}
 }
 
+func TestValidateAnchorsSkillASRCacheToProfilePath(t *testing.T) {
+	profileDir := t.TempDir()
+	path := filepath.Join(profileDir, "digcrawl-skill.yaml")
+	if err := os.WriteFile(path, []byte("Skill:\n  ASR:\n    ModelCacheDir: models\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Validate(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(profileDir, "models")
+	if cfg.Skill.ASR.ModelCacheDir != want {
+		t.Fatalf("Skill.ASR.ModelCacheDir=%q want %q", cfg.Skill.ASR.ModelCacheDir, want)
+	}
+}
+
+func TestValidateUsesProfileLocalDefaultForSkillASRCache(t *testing.T) {
+	legacyCWD := t.TempDir()
+	t.Chdir(legacyCWD)
+	hfHome := filepath.Join(t.TempDir(), "custom-hf-home")
+	t.Setenv("HF_HOME", hfHome)
+	t.Setenv("HUGGINGFACE_HUB_CACHE", "")
+	profileDir := t.TempDir()
+	path := filepath.Join(profileDir, "digcrawl-skill.yaml")
+	if err := os.WriteFile(path, []byte("Gateway: {}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Validate(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(profileDir, "asr_models")
+	if cfg.Skill.ASR.ModelCacheDir != want {
+		t.Fatalf("default Skill.ASR.ModelCacheDir=%q want %q", cfg.Skill.ASR.ModelCacheDir, want)
+	}
+	legacy := filepath.Join(legacyCWD, ".cache", "huggingface")
+	wantLegacyCandidates := []string{hfHome, legacy}
+	if !reflect.DeepEqual(cfg.Skill.ASR.LegacyModelCacheDirs, wantLegacyCandidates) {
+		t.Fatalf("default Skill legacy cache candidates=%q want %q", cfg.Skill.ASR.LegacyModelCacheDirs, wantLegacyCandidates)
+	}
+}
+
+func TestValidateDoesNotInferLegacyCacheForExplicitSkillASRCache(t *testing.T) {
+	t.Chdir(t.TempDir())
+	profileDir := t.TempDir()
+	path := filepath.Join(profileDir, "digcrawl-skill.yaml")
+	if err := os.WriteFile(path, []byte("Skill:\n  ASR:\n    ModelCacheDir: models\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Validate(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Skill.ASR.LegacyModelCacheDirs) != 0 {
+		t.Fatalf("explicit Skill cache must not receive implicit legacy candidates: %q", cfg.Skill.ASR.LegacyModelCacheDirs)
+	}
+}
+
+func TestValidatePreservesCustomLegacyHubCacheForOldSkillProfile(t *testing.T) {
+	t.Chdir(t.TempDir())
+	customHub := filepath.Join(t.TempDir(), "custom-hub-cache")
+	t.Setenv("HF_HOME", "")
+	t.Setenv("HUGGINGFACE_HUB_CACHE", customHub)
+	path := filepath.Join(t.TempDir(), "digcrawl-skill.yaml")
+	if err := os.WriteFile(path, []byte("Gateway: {}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Validate(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Skill.ASR.LegacyHubCacheDir != customHub {
+		t.Fatalf("LegacyHubCacheDir=%q want %q", cfg.Skill.ASR.LegacyHubCacheDir, customHub)
+	}
+}
+
+func TestValidateAnchorsSkillASRRunnerPathsToProfilePath(t *testing.T) {
+	t.Chdir(t.TempDir())
+	profileDir := t.TempDir()
+	path := filepath.Join(profileDir, "digcrawl-skill.yaml")
+	data := []byte("Skill:\n  ASR:\n    LocalCommand: .venv-asr/bin/python\n    LocalArgs:\n      - scripts/faster_whisper_asr.py\n      - --check\n")
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Validate(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := cfg.Skill.ASR.LocalCommand, filepath.Join(profileDir, ".venv-asr", "bin", "python"); got != want {
+		t.Fatalf("Skill.ASR.LocalCommand=%q want %q", got, want)
+	}
+	if got, want := cfg.Skill.ASR.LocalArgs[0], filepath.Join(profileDir, "scripts", "faster_whisper_asr.py"); got != want {
+		t.Fatalf("Skill.ASR.LocalArgs[0]=%q want %q", got, want)
+	}
+}
+
 func TestWatchlistPersistenceDefaults(t *testing.T) {
 	t.Parallel()
 
@@ -321,6 +420,26 @@ func TestDigCrawlSkillExampleUsesHostVisionAndCollectASROperationalSettings(t *t
 	wantASR.APIKey = ""
 	if !reflect.DeepEqual(skillCfg.Skill.ASR, wantASR) {
 		t.Fatalf("Skill.ASR must copy the Collect ASR operational settings: skill=%+v collect=%+v", skillCfg.Skill.ASR, wantASR)
+	}
+}
+
+func TestConfigExamplesUsePortableBundledASRDefault(t *testing.T) {
+	for _, name := range []string{"config.yaml", "digcrawl-skill.example.yaml"} {
+		data, err := os.ReadFile(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var cfg Config
+		if err := yaml.Unmarshal(data, &cfg); err != nil {
+			t.Fatalf("parse %s: %v", name, err)
+		}
+		asrCfg := cfg.ASR
+		if name == "digcrawl-skill.example.yaml" {
+			asrCfg = cfg.Skill.ASR
+		}
+		if asrCfg.LocalCommand != "" || len(asrCfg.LocalArgs) != 0 {
+			t.Fatalf("%s must leave LocalCommand/LocalArgs empty for bundled fallback, got command=%q args=%q", name, asrCfg.LocalCommand, asrCfg.LocalArgs)
+		}
 	}
 }
 

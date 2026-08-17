@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/originaleric/digcrawl/config"
+	"github.com/originaleric/digcrawl/protocol"
 	"github.com/originaleric/digcrawl/provider"
 	asrprov "github.com/originaleric/digcrawl/provider/asr"
 	browserprov "github.com/originaleric/digcrawl/provider/browser"
@@ -121,6 +122,9 @@ func runtimeOptions(cfg *config.Config, instanceID string, allowedTools []string
 		ConfigDomains:   domains,
 		ArtifactStore:   store,
 		RequireApproval: cfg.Gateway.RequireApproval == nil || *cfg.Gateway.RequireApproval,
+		TimeoutForCall: func(call *protocol.ToolCall) time.Duration {
+			return RecommendedCallTimeout(cfg, call)
+		},
 	}
 }
 

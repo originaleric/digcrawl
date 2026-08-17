@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"github.com/originaleric/digcrawl/config"
-	"github.com/originaleric/digcrawl/internal/ocr"
 	iplatform "github.com/originaleric/digcrawl/internal/platform"
 	"github.com/originaleric/digcrawl/protocol"
 	"github.com/originaleric/digcrawl/runtime/artifact"
@@ -132,13 +131,6 @@ func platformReadHandler(
 			return nil, nil, err
 		}
 		skillEnhancement := in.IncludeOCR || in.IncludeASR || in.IncludeSummary
-		if !strings.HasPrefix(call.ID, "collect_") && !skillEnhancement {
-			opts := ocr.EnrichOptions{}
-			if content.ScreenshotBase64 != "" {
-				opts.ExtraImages = []ocr.ImageRef{ocr.PNGDataURLImageRef("screenshot", content.ScreenshotBase64)}
-			}
-			ocr.EnrichContentWithOptions(ctx, content, config.Get().OCR, opts)
-		}
 		out := iplatform.ApplyFormats(content, in.Format)
 		if !strings.HasPrefix(call.ID, "collect_") && skillEnhancement {
 			if err := skill.Enhance(ctx, out, config.Skill(), skill.EnhanceOptions{

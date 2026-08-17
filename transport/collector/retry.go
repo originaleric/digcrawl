@@ -15,7 +15,12 @@ func shouldRetryToolResult(result *protocol.ToolResult) bool {
 	if result.Error == nil {
 		return false
 	}
+	if retryable, ok := result.Error.Details["retryable"].(bool); ok {
+		return retryable
+	}
 	switch result.Error.Code {
+	case "BROWSER_NAVIGATION_FAILED", "BROWSER_PAGE_LOAD_FAILED", "BROWSER_SELECTOR_TIMEOUT", "BROWSER_PAGE_CLOSED", "BROWSER_TIMEOUT":
+		return true
 	case "TOOL_EXEC_FAILED":
 		msg := strings.ToLower(result.Error.Message)
 		for _, p := range []string{

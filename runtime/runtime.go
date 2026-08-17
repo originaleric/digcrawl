@@ -24,6 +24,9 @@ type Options struct {
 	ArtifactStore   artifact.Store
 	Audit           *audit.Logger
 	RequireApproval bool
+	// TimeoutForCall supplies a configuration-aware default when a transport
+	// did not set ToolCall.Policy.TimeoutMs explicitly.
+	TimeoutForCall func(*protocol.ToolCall) time.Duration
 }
 
 // Runtime executes ToolCall against a tool registry.
@@ -114,10 +117,7 @@ func (r *Runtime) Execute(ctx context.Context, call *protocol.ToolCall) *protoco
 		return result
 	}
 
-	timeout := time.Duration(call.Policy.TimeoutMs) * time.Millisecond
-	if timeout <= 0 {
-		timeout = 60 * time.Second
-	}
+	timeout := r.ExecutionTimeout(call)
 	execCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
@@ -159,6 +159,21 @@ func (r *Runtime) Execute(ctx context.Context, call *protocol.ToolCall) *protoco
 	return result
 }
 
+// ExecutionTimeout resolves the effective runtime deadline without modifying a
+// call. HTTP uses it to align its response write deadline with Runtime's
+// context, while MCP and Collector rely on the same value through Execute.
+func (r *Runtime) ExecutionTimeout(call *protocol.ToolCall) time.Duration {
+	if call != nil && call.Policy.TimeoutMs > 0 {
+		return time.Duration(call.Policy.TimeoutMs) * time.Millisecond
+	}
+	if r != nil && r.opts.TimeoutForCall != nil {
+		if timeout := r.opts.TimeoutForCall(call); timeout > 0 {
+			return timeout
+		}
+	}
+	return 60 * time.Second
+}
+
 func (r *Runtime) validateCall(call *protocol.ToolCall) error {
 	if call == nil {
 		return fmt.Errorf("%s: nil tool call", policy.CodeInvalidInput)
@@ -188,7 +203,14 @@ func mapError(err error) *protocol.ToolError {
 		if msg == "" {
 			msg = err.Error()
 		}
-		return &protocol.ToolError{Code: strings.TrimSpace(coded.ToolErrorCode()), Message: msg}
+		mapped := &protocol.ToolError{Code: strings.TrimSpace(coded.ToolErrorCode()), Message: msg}
+		var detailed interface {
+			ToolErrorDetails() map[string]any
+		}
+		if errors.As(err, &detailed) {
+			mapped.Details = detailed.ToolErrorDetails()
+		}
+		return mapped
 	}
 	msg := err.Error()
 	for _, code := range []string{

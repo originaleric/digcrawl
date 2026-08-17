@@ -21,6 +21,9 @@ func TestWriteAndValidateSkillProfile(t *testing.T) {
 	if !filepath.IsAbs(cfg.Gateway.ArtifactDir) || !filepath.IsAbs(cfg.LocalBrowser.CookieStoreDir) {
 		t.Fatalf("profile paths must be absolute: artifact=%q cookie=%q", cfg.Gateway.ArtifactDir, cfg.LocalBrowser.CookieStoreDir)
 	}
+	if !filepath.IsAbs(cfg.Skill.ASR.ModelCacheDir) {
+		t.Fatalf("Skill.ASR.ModelCacheDir must be absolute: %q", cfg.Skill.ASR.ModelCacheDir)
+	}
 	if cfg.Skill.Media.DownloadMedia || cfg.Skill.ASR.EnabledOrDefault() {
 		t.Fatal("new Skill profile must not opt into local media or ASR")
 	}
@@ -135,7 +138,7 @@ func TestCheckASRProviderRejectsUnavailableLocalCommand(t *testing.T) {
 	err := checkASRProvider(&config.Config{Skill: config.SkillConfig{ASR: config.ASRConfig{
 		Enabled: &enabled, Provider: "local", LocalCommand: "digcrawl-test-command-that-does-not-exist",
 	}}})
-	if err == nil || !strings.Contains(err.Error(), "not available on PATH") {
+	if err == nil || !strings.Contains(err.Error(), "not available") {
 		t.Fatalf("error=%v", err)
 	}
 }

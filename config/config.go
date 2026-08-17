@@ -338,21 +338,30 @@ func (c OCRConfig) AppendToTextOrDefault() bool {
 
 // ASRConfig controls optional audio transcription.
 type ASRConfig struct {
-	Enabled         *bool    `yaml:"Enabled" json:"Enabled,omitempty"`
-	Provider        string   `yaml:"Provider" json:"Provider,omitempty"` // api | local | stub
-	APIKey          string   `yaml:"APIKey" json:"APIKey,omitempty"`
-	BaseURL         string   `yaml:"BaseURL" json:"BaseURL,omitempty"`
-	Model           string   `yaml:"Model" json:"Model,omitempty"`
-	Language        string   `yaml:"Language" json:"Language,omitempty"`
-	Prompt          string   `yaml:"Prompt" json:"Prompt,omitempty"`
-	ResponseFormat  string   `yaml:"ResponseFormat" json:"ResponseFormat,omitempty"`
-	TimeoutSec      int      `yaml:"TimeoutSec" json:"TimeoutSec,omitempty"`
-	FFmpegPath      string   `yaml:"FFmpegPath" json:"FFmpegPath,omitempty"`
-	TempDir         string   `yaml:"TempDir" json:"TempDir,omitempty"`
-	AudioSampleRate int      `yaml:"AudioSampleRate" json:"AudioSampleRate,omitempty"`
-	MaxAudioBytes   int64    `yaml:"MaxAudioBytes" json:"MaxAudioBytes,omitempty"`
-	LocalCommand    string   `yaml:"LocalCommand" json:"LocalCommand,omitempty"`
-	LocalArgs       []string `yaml:"LocalArgs" json:"LocalArgs,omitempty"`
+	Enabled        *bool  `yaml:"Enabled" json:"Enabled,omitempty"`
+	Provider       string `yaml:"Provider" json:"Provider,omitempty"` // api | local | stub
+	APIKey         string `yaml:"APIKey" json:"APIKey,omitempty"`
+	BaseURL        string `yaml:"BaseURL" json:"BaseURL,omitempty"`
+	Model          string `yaml:"Model" json:"Model,omitempty"`
+	Language       string `yaml:"Language" json:"Language,omitempty"`
+	Prompt         string `yaml:"Prompt" json:"Prompt,omitempty"`
+	ResponseFormat string `yaml:"ResponseFormat" json:"ResponseFormat,omitempty"`
+	TimeoutSec     int    `yaml:"TimeoutSec" json:"TimeoutSec,omitempty"`
+	FFmpegPath     string `yaml:"FFmpegPath" json:"FFmpegPath,omitempty"`
+	TempDir        string `yaml:"TempDir" json:"TempDir,omitempty"`
+	ModelCacheDir  string `yaml:"ModelCacheDir" json:"ModelCacheDir,omitempty"`
+	// LegacyModelCacheDirs is runtime-only compatibility metadata populated for
+	// old Skill profiles that predate ModelCacheDir. It is deliberately not
+	// persisted: users retain one canonical ModelCacheDir while the ASR runtime
+	// can safely adopt an existing old cache without moving or re-downloading it.
+	LegacyModelCacheDirs []string `yaml:"-" json:"-"`
+	// LegacyHubCacheDir preserves the old HUGGINGFACE_HUB_CACHE contract when
+	// it points to a custom directory that is not the conventional HF_HOME/hub.
+	LegacyHubCacheDir string   `yaml:"-" json:"-"`
+	AudioSampleRate   int      `yaml:"AudioSampleRate" json:"AudioSampleRate,omitempty"`
+	MaxAudioBytes     int64    `yaml:"MaxAudioBytes" json:"MaxAudioBytes,omitempty"`
+	LocalCommand      string   `yaml:"LocalCommand" json:"LocalCommand,omitempty"`
+	LocalArgs         []string `yaml:"LocalArgs" json:"LocalArgs,omitempty"`
 }
 
 // EnabledOrDefault reports whether ASR tooling is enabled.
@@ -430,6 +439,16 @@ func (c ASRConfig) FFmpegPathOrDefault() string {
 		}
 	}
 	return "ffmpeg"
+}
+
+// ModelCacheDirOrDefault returns the persistent cache used by local ASR
+// models. Keeping it outside transient directories makes doctor checks and
+// production runs observe the same model state.
+func (c ASRConfig) ModelCacheDirOrDefault() string {
+	if path := strings.TrimSpace(os.ExpandEnv(c.ModelCacheDir)); path != "" {
+		return path
+	}
+	return filepath.Join("storage", "digcrawl", "asr_models")
 }
 
 // AudioSampleRateOrDefault returns extracted audio sample rate.
@@ -1273,6 +1292,7 @@ func init() {
 				ResponseFormat:  "verbose_json",
 				TimeoutSec:      300,
 				FFmpegPath:      "ffmpeg",
+				ModelCacheDir:   filepath.Join("storage", "digcrawl", "asr_models"),
 				AudioSampleRate: 16000,
 				MaxAudioBytes:   25 * 1024 * 1024,
 				LocalCommand:    "faster-whisper",
@@ -1378,6 +1398,7 @@ func load(path string, applyRuntimeEnv bool) (*Config, error) {
 	}
 	mergeDefaults(&cfg)
 	cfg.SourcePath = normalizedConfigPath(path)
+	normalizeSkillASRPaths(&cfg)
 	if applyRuntimeEnv {
 		if err := mergeLocalFeishuConfig(&cfg); err != nil {
 			return nil, err
@@ -1394,6 +1415,99 @@ func load(path string, applyRuntimeEnv bool) (*Config, error) {
 		return &defaultCfg, nil
 	}
 	return &cfg, nil
+}
+
+// normalizeSkillASRPaths makes a Skill profile self-contained: persistent
+// model state and explicitly configured local runner paths are anchored to the
+// profile that selected them, never to the process working directory. Root ASR
+// configuration keeps its existing project-relative semantics.
+func normalizeSkillASRPaths(cfg *Config) {
+	if cfg == nil || cfg.SourcePath == "" {
+		return
+	}
+	profileDir := filepath.Dir(cfg.SourcePath)
+	cacheDir := strings.TrimSpace(os.ExpandEnv(cfg.Skill.ASR.ModelCacheDir))
+	if cacheDir == "" {
+		cacheDir = filepath.Join(profileDir, "asr_models")
+		cfg.Skill.ASR.LegacyModelCacheDirs, cfg.Skill.ASR.LegacyHubCacheDir = legacySkillASRCacheDirs()
+	}
+	if !filepath.IsAbs(cacheDir) {
+		cacheDir = filepath.Join(profileDir, cacheDir)
+	}
+	cfg.Skill.ASR.ModelCacheDir = filepath.Clean(cacheDir)
+	cfg.Skill.ASR.LocalCommand = resolveSkillASRPath(profileDir, cfg.Skill.ASR.LocalCommand)
+	if len(cfg.Skill.ASR.LocalArgs) > 0 {
+		args := append([]string(nil), cfg.Skill.ASR.LocalArgs...)
+		args[0] = resolveSkillASRPath(profileDir, args[0])
+		cfg.Skill.ASR.LocalArgs = args
+	}
+}
+
+// legacySkillASRCacheDirs records the only implicit cache location used by
+// pre-ModelCacheDir Skill profiles. The active runtime persists an adoption
+// marker after the first successful discovery, so future service starts do not
+// depend on cwd again. Explicit ModelCacheDir values are always authoritative
+// and never receive implicit migration candidates.
+func legacySkillASRCacheDirs() ([]string, string) {
+	var candidates []string
+	// Before ModelCacheDir existed, the local runner respected Hugging Face's
+	// standard HF_HOME override. Preserve that higher-priority legacy contract
+	// before considering DigCrawl's former cwd-relative fallback.
+	legacyHubCacheDir := ""
+	if hubCache := strings.TrimSpace(os.ExpandEnv(os.Getenv("HUGGINGFACE_HUB_CACHE"))); hubCache != "" {
+		hubCache = absoluteCleanPath(hubCache)
+		if filepath.Base(hubCache) == "hub" {
+			candidates = append(candidates, filepath.Dir(hubCache))
+		} else {
+			legacyHubCacheDir = hubCache
+		}
+	}
+	if hfHome := strings.TrimSpace(os.ExpandEnv(os.Getenv("HF_HOME"))); hfHome != "" {
+		candidates = append(candidates, absoluteCleanPath(hfHome))
+	}
+	wd, err := os.Getwd()
+	if err == nil && strings.TrimSpace(wd) != "" {
+		candidates = append(candidates, absoluteCleanPath(filepath.Join(wd, ".cache", "huggingface")))
+	}
+	return uniqueCleanPaths(candidates), legacyHubCacheDir
+}
+
+func uniqueCleanPaths(paths []string) []string {
+	seen := make(map[string]struct{}, len(paths))
+	result := make([]string, 0, len(paths))
+	for _, path := range paths {
+		path = strings.TrimSpace(path)
+		if path == "" {
+			continue
+		}
+		path = absoluteCleanPath(path)
+		if _, exists := seen[path]; exists {
+			continue
+		}
+		seen[path] = struct{}{}
+		result = append(result, path)
+	}
+	return result
+}
+
+func absoluteCleanPath(path string) string {
+	path = filepath.Clean(path)
+	if absolute, err := filepath.Abs(path); err == nil {
+		return filepath.Clean(absolute)
+	}
+	return path
+}
+
+func resolveSkillASRPath(profileDir, value string) string {
+	value = strings.TrimSpace(os.ExpandEnv(value))
+	if value == "" || filepath.IsAbs(value) || !looksLikeLocalPath(value) {
+		return value
+	}
+	return filepath.Clean(filepath.Join(profileDir, value))
+}
+
+func looksLikeLocalPath(value string) bool {
+	return strings.ContainsRune(value, filepath.Separator) || strings.Contains(value, "/") || strings.Contains(value, "\\")
 }
 
 // validateSkillSummaryConfig rejects fields that belonged to the former

@@ -10,6 +10,8 @@ import (
 	"github.com/originaleric/digcrawl/internal/platform"
 )
 
+const videoBrowserReadTimeout = 40 * time.Second
+
 // ReadVideo reads a Toutiao video page through the local browser.
 func ReadVideo(ctx context.Context, in platform.ReadInput) (*platform.Content, error) {
 	rawURL := strings.TrimSpace(in.URL)
@@ -46,6 +48,12 @@ func ReadVideo(ctx context.Context, in platform.ReadInput) (*platform.Content, e
 }
 
 func readVideoBrowser(ctx context.Context, in platform.ReadInput, norm *platform.NormalizedURL, cookieDomain string) (*platform.Content, int, error) {
+	// A video page is only a metadata/text read at this stage. Keep selector
+	// fallbacks and the one transient retry inside one shared deadline rather
+	// than allowing every combination to consume the full browser timeout.
+	ctx, cancel := context.WithTimeout(ctx, videoBrowserReadTimeout)
+	defer cancel()
+
 	browseURL := norm.EffectiveBrowseURL()
 	if browseURL == "" {
 		browseURL = norm.ResolvedURL
@@ -58,7 +66,9 @@ func readVideoBrowser(ctx context.Context, in platform.ReadInput, norm *platform
 		CaptureMedia:    in.IncludeMedia,
 	}
 	var resp *browser.BrowserBrowseResponse
+	attempts := 0
 	err := platform.WithBrowseRetry(ctx, platform.BrowseRetryPolicy(), func(ctx context.Context) error {
+		attempts++
 		r, browseErr := platform.BrowseWithFallbacks(ctx, browseURL, in, base, VideoBrowseAttempts)
 		if browseErr != nil {
 			return browseErr
@@ -67,26 +77,33 @@ func readVideoBrowser(ctx context.Context, in platform.ReadInput, norm *platform
 		return nil
 	})
 	if err != nil {
-		return nil, 0, err
+		return nil, retryCount(attempts), err
 	}
 	if resp == nil {
-		return nil, 0, fmt.Errorf("未能读取头条视频页面")
+		return nil, retryCount(attempts), fmt.Errorf("未能读取头条视频页面")
 	}
 	if resp != nil && resp.URL != "" {
 		norm.ResolvedURL = resp.URL
 	}
 	code := platform.MetaErrorCode(resp.Metadata)
 	if platform.IsFatalErrorCode(code) {
-		return nil, 0, platform.NewReadError(code, platform.MetaString(resp.Metadata, "error_message"), PlatformName, resp.Metadata)
+		return nil, retryCount(attempts), platform.NewReadError(code, platform.MetaString(resp.Metadata, "error_message"), PlatformName, resp.Metadata)
 	}
 	content := normalizeVideo(in, norm, resp)
 	if code == platform.ErrPartialContent || code == platform.ErrSelectorStale {
 		content.PlatformMetadata = platform.SetMetaError(content.PlatformMetadata, code, platform.MetaString(resp.Metadata, "error_message"))
 	}
 	if err := validateVideoContent(content, in.IncludeMedia); err != nil {
-		return nil, 0, err
+		return nil, retryCount(attempts), err
 	}
-	return content, 0, nil
+	return content, retryCount(attempts), nil
+}
+
+func retryCount(attempts int) int {
+	if attempts <= 1 {
+		return 0
+	}
+	return attempts - 1
 }
 
 func normalizeVideo(in platform.ReadInput, norm *platform.NormalizedURL, resp *browser.BrowserBrowseResponse) *platform.Content {

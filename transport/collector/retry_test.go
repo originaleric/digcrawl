@@ -27,3 +27,33 @@ func TestShouldRetryToolResult(t *testing.T) {
 		t.Fatal("rate limited should not retry")
 	}
 }
+
+func TestShouldRetryToolResultUsesStructuredRetryableDetail(t *testing.T) {
+	t.Parallel()
+	result := &protocol.ToolResult{
+		Status: "error",
+		Error: &protocol.ToolError{
+			Code:    "BROWSER_CONTENT_NOT_FOUND",
+			Message: "提取页面正文失败",
+			Details: map[string]any{"retryable": true},
+		},
+	}
+	if !shouldRetryToolResult(result) {
+		t.Fatal("structured retryable browser error should retry")
+	}
+}
+
+func TestShouldRetryToolResultDoesNotRetryPermanentContentFailure(t *testing.T) {
+	t.Parallel()
+	result := &protocol.ToolResult{
+		Status: "error",
+		Error: &protocol.ToolError{
+			Code:    "BROWSER_CONTENT_NOT_FOUND",
+			Message: "提取页面正文失败",
+			Details: map[string]any{"retryable": false},
+		},
+	}
+	if shouldRetryToolResult(result) {
+		t.Fatal("permanent content failure should not retry")
+	}
+}

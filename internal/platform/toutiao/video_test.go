@@ -67,3 +67,12 @@ func TestCleanVideoPublishedAtRejectsPlayerClock(t *testing.T) {
 		t.Fatal("real published_at should be preserved")
 	}
 }
+
+func TestRetryCount(t *testing.T) {
+	t.Parallel()
+	for attempts, want := range map[int]int{0: 0, 1: 0, 2: 1, 3: 2} {
+		if got := retryCount(attempts); got != want {
+			t.Fatalf("retryCount(%d)=%d want %d", attempts, got, want)
+		}
+	}
+}

@@ -40,6 +40,12 @@ Gateway:
 # Replace the placeholder with a user-owned absolute path before first login.
 LocalBrowser:
   CookieStoreDir: "/absolute/path/to/digcrawl/browser_cookies"
+  # Optional: connect to the persistent Chrome started by
+  # scripts/digcrawl-cdp-browser-service.sh. This avoids any dependency on
+  # Playwright's versioned browser cache.
+  # CDPMode: true
+  # CDPConnectExisting: true
+  # CDPPort: 9323
 
 # The open-source Skill uses the host Agent's native vision and model for image
 # reading and summaries. This profile therefore has no OCR or LLM API key.
@@ -67,19 +73,16 @@ Skill:
     ResponseFormat: "verbose_json"
     TimeoutSec: 300
     FFmpegPath: "${DIGCRAWL_FFMPEG_PATH}"
+    # Persistent directory containing locally prepared Whisper model files.
+    # Relative paths are resolved from this profile's directory, never cwd.
+    ModelCacheDir: "storage/digcrawl/asr_models"
     TempDir: ""
     AudioSampleRate: 16000
     MaxAudioBytes: 26214400
-    LocalCommand: ".venv-asr/bin/python"
-    LocalArgs:
-      - "scripts/faster_whisper_asr.py"
-      - "{audio_path}"
-      - "--model"
-      - "{model}"
-      - "--output_format"
-      - "json"
-      - "--output_dir"
-      - "{output_dir}"
+    # Leave LocalCommand/LocalArgs unset for the portable default: use the
+    # faster-whisper command when installed, otherwise DigCrawl's bundled
+    # runner with python3/python/py found on PATH. Set both only for a custom
+    # Python environment/script; relative paths resolve from this profile.
 # These root settings remain available to the existing CLI/collect workflow.
 OCR:
   Enabled: false

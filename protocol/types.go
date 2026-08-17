@@ -70,8 +70,9 @@ type ToolResult struct {
 
 // ToolError 结构化错误。
 type ToolError struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
+	Code    string         `json:"code"`
+	Message string         `json:"message"`
+	Details map[string]any `json:"details,omitempty"`
 }
 
 // Usage 执行用量。

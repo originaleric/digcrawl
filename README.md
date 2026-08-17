@@ -182,6 +182,7 @@ Read the [runtime documentation](./runtime/README.md) before exposing a Gateway 
 
 | Date | Highlight | Why it matters |
 | --- | --- | --- |
+| 2026-08-17 | Browser recovery, CDP service management, and local ASR startup were rebuilt around explicit lifecycle and cache state. | Browser profiles are not relaunched before they are released; Playwright cache paths are discovered dynamically; existing local ASR models and upgraded runners remain usable across restarts. |
 | 2026-08 | OCR uses DigCrawl’s OpenAI-compatible vision client and remains opt-in. | Image enrichment stays independent of DigFlow and does not require a bundled key. |
 | 2026-07 | ASR supports API-compatible and local `faster-whisper` providers. | Video and audio collections can include explicit, locally controlled transcripts. |
 | 2026-07 | Watchlists gained persistent sources, task scheduling, summaries, and notifications. | Sources can be monitored repeatedly instead of collected only once. |

@@ -93,11 +93,15 @@ func BrowserBrowse(ctx context.Context, req *BrowserBrowseRequest) (*BrowserBrow
 	manager := getBrowserManager()
 	session, err := manager.acquire(ctx)
 	if err != nil {
-		return nil, err
+		return nil, newBrowseError(ErrorBrowserUnavailable, "acquire", "无法启动或连接本地浏览器", err, false)
 	}
 	defer manager.release(session)
 
-	page := session.page.Timeout(time.Duration(cfg.TotalTimeoutSec) * time.Second)
+	// Bind every CDP operation to the caller's context. A page returned by the
+	// pool otherwise keeps the browser-level context, so a tool timeout can
+	// expire while WaitLoad/Element keeps blocking on a page that has already
+	// navigated away or closed.
+	page := session.page.Context(ctx).Timeout(time.Duration(cfg.TotalTimeoutSec) * time.Second)
 	var finishMediaCapture func() []string
 	if req.CaptureMedia {
 		finishMediaCapture = startMediaResponseCapture(ctx, page)
@@ -108,19 +112,26 @@ func BrowserBrowse(ctx context.Context, req *BrowserBrowseRequest) (*BrowserBrow
 			return nil, fmt.Errorf("cookie 域名不在白名单: %w", err)
 		}
 		if err := loadDomainCookies(page, req.UseCookieDomain, cfg.CookieStoreDir, targetURL); err != nil {
-			return nil, err
+			return nil, newBrowseError(ErrorBrowserCookieFailed, "load_cookies", "加载本地浏览器 Cookie 失败", err, false)
 		}
 	}
 
 	if err := page.Timeout(time.Duration(cfg.NavigateTimeoutSec) * time.Second).Navigate(targetURL.String()); err != nil {
-		return nil, fmt.Errorf("页面导航失败: %w", err)
+		return nil, newBrowseError(ErrorBrowserNavigationFailed, "navigate", "页面导航失败", err, true)
 	}
 	if err := page.WaitLoad(); err != nil {
-		return nil, fmt.Errorf("页面加载失败: %w", err)
+		// Modern video and SPA pages can replace the initial document while the
+		// load event is pending. If CDP can still inspect the page, let the
+		// platform-specific selector wait decide DOM readiness instead of
+		// discarding a usable page solely because the load event was interrupted.
+		if _, infoErr := page.Info(); infoErr != nil {
+			return nil, newBrowseError(ErrorBrowserPageLoadFailed, "wait_load", "页面加载失败", err, true)
+		}
+		log.Printf("[browser] load event interrupted; page remains inspectable, continuing with DOM readiness check: %v", err)
 	}
 	if req.WaitSelector != "" {
 		if _, err := page.Timeout(time.Duration(cfg.WaitSelectorTimeoutSec) * time.Second).Element(req.WaitSelector); err != nil {
-			return nil, fmt.Errorf("等待选择器失败: %w", err)
+			return nil, newBrowseError(ErrorBrowserSelectorTimeout, "wait_selector", "等待页面内容选择器失败", err, true)
 		}
 	}
 
@@ -144,7 +155,7 @@ func BrowserBrowse(ctx context.Context, req *BrowserBrowseRequest) (*BrowserBrow
 			// 快照模式：仅返回可交互元素
 			elements, _, err := FetchAXTree(ctx, page)
 			if err != nil {
-				return nil, fmt.Errorf("获取快照失败: %w", err)
+				return nil, newBrowseError(ErrorBrowserContentNotFound, "snapshot", "获取页面快照失败", err, false)
 			}
 			// 过滤仅可交互元素
 			resp.Elements = filterElements(elements, FilterInteractive)
@@ -152,7 +163,7 @@ func BrowserBrowse(ctx context.Context, req *BrowserBrowseRequest) (*BrowserBrow
 			// 摘要模式：提取关键信息
 			summary, err := extractSummary(page, cfg.WaitSelectorTimeoutSec)
 			if err != nil {
-				return nil, fmt.Errorf("提取摘要失败: %w", err)
+				return nil, newBrowseError(ErrorBrowserContentNotFound, "summary", "提取页面摘要失败", err, false)
 			}
 			resp.Summary = summary
 		default:
@@ -167,12 +178,12 @@ func BrowserBrowse(ctx context.Context, req *BrowserBrowseRequest) (*BrowserBrow
 			}
 
 			if err != nil {
-				return nil, err
+				return nil, newBrowseError(ErrorBrowserContentNotFound, "extract_content", "提取页面正文失败", err, false)
 			}
 			converter := htmlmd.NewConverter("", true, nil)
 			md, err := converter.ConvertString(htmlContent)
 			if err != nil {
-				return nil, fmt.Errorf("HTML 转 Markdown 失败: %w", err)
+				return nil, newBrowseError(ErrorBrowserContentConversion, "convert_markdown", "页面正文转换为 Markdown 失败", err, false)
 			}
 			resp.Text = strings.TrimSpace(textContent)
 			resp.Markdown = strings.TrimSpace(md)
@@ -181,7 +192,7 @@ func BrowserBrowse(ctx context.Context, req *BrowserBrowseRequest) (*BrowserBrow
 	if action == "screenshot" || req.CaptureScreenshot {
 		imgBytes, err := page.Screenshot(false, nil)
 		if err != nil {
-			return nil, fmt.Errorf("页面截图失败: %w", err)
+			return nil, newBrowseError(ErrorBrowserScreenshotFailed, "screenshot", "页面截图失败", err, true)
 		}
 		resp.ScreenshotBase = base64.StdEncoding.EncodeToString(imgBytes)
 	}
@@ -209,7 +220,7 @@ func BrowserBrowse(ctx context.Context, req *BrowserBrowseRequest) (*BrowserBrow
 	}
 
 	if err := saveDomainCookies(page, cookieDomain, cfg.CookieStoreDir, targetURL); err != nil {
-		return resp, fmt.Errorf("页面抓取成功，但保存 Cookie 失败: %w", err)
+		return resp, newBrowseError(ErrorBrowserCookieFailed, "save_cookies", "页面抓取成功，但保存 Cookie 失败", err, false)
 	}
 
 	return resp, nil
@@ -661,23 +672,42 @@ func pageTitle(page *rod.Page) (string, error) {
 func extractMainContent(page *rod.Page, waitSelectorTimeoutSec int) (string, string, error) {
 	selectors := []string{"#js_content", "article", "main", "[role='main']", "body"}
 	timeout := time.Duration(waitSelectorTimeoutSec) * time.Second
+	// A missing candidate selector is normal during fallback extraction. Only
+	// retain errors from reading an element that was actually found; otherwise a
+	// timeout for an earlier optional selector would mislabel an empty final body
+	// as a browser timeout.
+	var lastReadErr error
 	for _, selector := range selectors {
 		el, err := page.Timeout(timeout).Element(selector)
 		if err != nil {
+			// Selector misses are expected, but a closed page is terminal and
+			// should retain its diagnostic instead of becoming CONTENT_NOT_FOUND.
+			if isPageClosedCause(err) {
+				lastReadErr = err
+			}
 			continue
 		}
 		htmlContent, err := el.HTML()
 		if err != nil {
+			if isRetryableBrowserCause(err) {
+				lastReadErr = err
+			}
 			continue
 		}
 		textContent, err := el.Text()
 		if err != nil {
+			if isRetryableBrowserCause(err) {
+				lastReadErr = err
+			}
 			continue
 		}
 		if strings.TrimSpace(textContent) == "" {
 			continue
 		}
 		return htmlContent, textContent, nil
+	}
+	if lastReadErr != nil {
+		return "", "", fmt.Errorf("未能提取页面正文: %w", lastReadErr)
 	}
 	return "", "", fmt.Errorf("未能提取页面正文")
 }

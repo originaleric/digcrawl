@@ -95,6 +95,29 @@ func TestToolResultToMCPPreservesStructuredErrorOutput(t *testing.T) {
 	}
 }
 
+func TestToolResultToMCPIncludesErrorDetails(t *testing.T) {
+	result, err := toolResultToMCP(context.Background(), &protocol.ToolResult{
+		Status: "error",
+		Error: &protocol.ToolError{
+			Code:    "BROWSER_PAGE_CLOSED",
+			Message: "页面导航失败: target closed",
+			Details: map[string]any{"component": "local_browser", "stage": "navigate", "retryable": true},
+		},
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := result.StructuredContent.(map[string]any)
+	errorPayload, ok := payload["error"].(map[string]string)
+	if !ok || errorPayload["code"] != "BROWSER_PAGE_CLOSED" {
+		t.Fatalf("compatible error object was lost: %#v", payload)
+	}
+	details, ok := payload["error_details"].(map[string]any)
+	if !ok || details["stage"] != "navigate" || details["retryable"] != true {
+		t.Fatalf("error details were lost: %#v", payload)
+	}
+}
+
 func TestToolResultToMCPReturnsStructuredSuccessOutput(t *testing.T) {
 	result, err := toolResultToMCP(context.Background(), &protocol.ToolResult{
 		Status: "success",

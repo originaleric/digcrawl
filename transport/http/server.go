@@ -121,6 +121,10 @@ func (s *Server) handleToolCall(w http.ResponseWriter, r *http.Request) {
 	if call.Type == "" {
 		call.Type = protocol.TypeToolCall
 	}
+	// http.Server.WriteTimeout starts before the handler runs. Extend this
+	// request's deadline to Runtime's effective budget so explicit local ASR is
+	// not cut off by the generic HTTP write timeout while it is still working.
+	_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(s.rt.ExecutionTimeout(&call) + 5*time.Second))
 	result := s.rt.Execute(r.Context(), &call)
 	status := http.StatusOK
 	if result.Status == "error" && result.Error != nil {
