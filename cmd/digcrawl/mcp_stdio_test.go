@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -194,8 +195,9 @@ func writeMCPPhaseOneProfile(t *testing.T) string {
 		t.Fatal(err)
 	}
 	dir := t.TempDir()
-	profile := strings.ReplaceAll(string(data), "/absolute/path/to/digcrawl/browser_cookies", filepath.Join(dir, "cookies"))
-	profile = strings.ReplaceAll(profile, "/absolute/path/to/digcrawl/artifacts", filepath.Join(dir, "artifacts"))
+	profile := strings.ReplaceAll(string(data), `"/absolute/path/to/digcrawl/browser_cookies"`, strconv.Quote(filepath.Join(dir, "cookies")))
+	profile = strings.ReplaceAll(profile, `"/absolute/path/to/digcrawl/artifacts"`, strconv.Quote(filepath.Join(dir, "artifacts")))
+	profile = strings.ReplaceAll(profile, `"/absolute/path/to/digcrawl/skill-media"`, strconv.Quote(filepath.Join(dir, "skill-media")))
 	path := filepath.Join(dir, "digcrawl-skill.yaml")
 	if err := os.WriteFile(path, []byte(profile), 0o600); err != nil {
 		t.Fatal(err)

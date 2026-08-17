@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -318,7 +319,7 @@ func TestDigCrawlSkillExampleUsesReadOnlyToolProfile(t *testing.T) {
 	if cfg.Gateway.ArtifactDir == "" {
 		t.Fatal("skill profile should declare an artifact directory")
 	}
-	if !filepath.IsAbs(cfg.Gateway.ArtifactDir) {
+	if !examplePathIsPortableAbsolute(cfg.Gateway.ArtifactDir) {
 		t.Fatal("skill profile artifact directory should be absolute")
 	}
 	if cfg.Gateway.ArtifactMaxInlineBytes != 10*1024*1024 {
@@ -330,7 +331,7 @@ func TestDigCrawlSkillExampleUsesReadOnlyToolProfile(t *testing.T) {
 	if cfg.Skill.Media.DownloadMedia {
 		t.Fatal("skill profile media download should require explicit local opt-in")
 	}
-	if !filepath.IsAbs(cfg.Skill.Media.Dir) {
+	if !examplePathIsPortableAbsolute(cfg.Skill.Media.Dir) {
 		t.Fatal("skill profile media directory should be absolute")
 	}
 	if cfg.Skill.OCR.EnabledOrDefault() || cfg.Skill.ASR.EnabledOrDefault() || cfg.Skill.Summary.EnabledOrDefault() {
@@ -339,6 +340,13 @@ func TestDigCrawlSkillExampleUsesReadOnlyToolProfile(t *testing.T) {
 	if len(cfg.Gateway.AllowedDomains) != 0 {
 		t.Fatal("skill profile should leave public web access open by default")
 	}
+}
+
+// The distributed example deliberately uses Unix-looking placeholders because
+// users must replace them with their own local directories. Accept that
+// documented placeholder on Windows while still rejecting relative values.
+func examplePathIsPortableAbsolute(path string) bool {
+	return filepath.IsAbs(path) || strings.HasPrefix(path, "/absolute/path/to/")
 }
 
 func TestLoadRejectsRemovedSkillSummaryFields(t *testing.T) {
@@ -609,7 +617,7 @@ Notifications:
   Feishu:
     Enabled: true
     DefaultChannel: feishu-default
-    ConfigPath: "` + localPath + `"
+    ConfigPath: ` + strconv.Quote(localPath) + `
     Channels:
       - ID: feishu-default
         WebhookURL: "${FEISHU_WEBHOOK_URL}"
@@ -711,7 +719,7 @@ func TestValidateDoesNotReadExternalSecretConfigs(t *testing.T) {
 		t.Fatal(err)
 	}
 	profilePath := filepath.Join(dir, "profile.yaml")
-	data := []byte("RuntimeEnv:\n  ConfigPath: " + externalPath + "\nNotifications:\n  Feishu:\n    ConfigPath: " + externalPath + "\n")
+	data := []byte("RuntimeEnv:\n  ConfigPath: " + strconv.Quote(externalPath) + "\nNotifications:\n  Feishu:\n    ConfigPath: " + strconv.Quote(externalPath) + "\n")
 	if err := os.WriteFile(profilePath, data, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -746,7 +754,7 @@ func TestLoadMergesLocalRuntimeEnvConfig(t *testing.T) {
 	configPath := filepath.Join(dir, "config.yaml")
 	data := []byte(`
 RuntimeEnv:
-  ConfigPath: "` + localPath + `"
+  ConfigPath: ` + strconv.Quote(localPath) + `
   Variables:
     DIGCRAWL_LOCAL_RUNTIME_ENV_TEST: from-main
 `)

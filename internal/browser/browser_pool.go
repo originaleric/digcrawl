@@ -285,6 +285,14 @@ func isExecutableFile(path string) bool {
 	if err != nil || info.IsDir() {
 		return false
 	}
+	// Windows does not expose POSIX executable permission bits: regular .exe
+	// files commonly report mode 0666, so checking 0111 rejects every valid
+	// configured Chrome/Chromium binary. For browser launchers, accepting the
+	// native executable extension is the equivalent filesystem-level check; the
+	// actual launch remains responsible for validating the binary itself.
+	if runtime.GOOS == "windows" {
+		return strings.EqualFold(filepath.Ext(path), ".exe")
+	}
 	return info.Mode()&0o111 != 0
 }
 

@@ -2284,6 +2284,12 @@ func DefaultSkillProfilePath() string {
 
 // DefaultConfigDir returns the user-owned DigCrawl configuration directory.
 func DefaultConfigDir() string {
+	// XDG_CONFIG_HOME is an explicit user override. Honor it before choosing a
+	// platform default so tests, portable installations, and cross-platform
+	// automation can select one deterministic config root on every OS.
+	if xdgDir := strings.TrimSpace(os.Getenv("XDG_CONFIG_HOME")); xdgDir != "" {
+		return filepath.Join(xdgDir, "digcrawl")
+	}
 	if runtime.GOOS == "windows" {
 		if appData := strings.TrimSpace(os.Getenv("APPDATA")); appData != "" {
 			return filepath.Join(appData, "DigCrawl")
@@ -2293,9 +2299,6 @@ func DefaultConfigDir() string {
 			return "DigCrawl"
 		}
 		return filepath.Join(home, "AppData", "Roaming", "DigCrawl")
-	}
-	if xdgDir := strings.TrimSpace(os.Getenv("XDG_CONFIG_HOME")); xdgDir != "" {
-		return filepath.Join(xdgDir, "digcrawl")
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {

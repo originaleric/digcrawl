@@ -14,8 +14,8 @@ import (
 )
 
 func TestNormalizeLocalBrowserConfigKeepsExplicitChromePath(t *testing.T) {
-	explicit := filepath.Join(t.TempDir(), "explicit-chrome")
-	envPath := filepath.Join(t.TempDir(), "env-chrome")
+	explicit := browserTestExecutablePath(t.TempDir(), "explicit-chrome")
+	envPath := browserTestExecutablePath(t.TempDir(), "env-chrome")
 	writeExecutable(t, explicit)
 	writeExecutable(t, envPath)
 	t.Setenv("DIGCRAWL_CHROME_PATH", envPath)
@@ -28,7 +28,7 @@ func TestNormalizeLocalBrowserConfigKeepsExplicitChromePath(t *testing.T) {
 
 func TestNormalizeLocalBrowserConfigFallsBackWhenExplicitChromePathIsStale(t *testing.T) {
 	stale := filepath.Join(t.TempDir(), "removed-chrome")
-	fallback := filepath.Join(t.TempDir(), "env-chrome")
+	fallback := browserTestExecutablePath(t.TempDir(), "env-chrome")
 	writeExecutable(t, fallback)
 	t.Setenv("DIGCRAWL_CHROME_PATH", fallback)
 
@@ -39,7 +39,7 @@ func TestNormalizeLocalBrowserConfigFallsBackWhenExplicitChromePathIsStale(t *te
 }
 
 func TestNormalizeLocalBrowserConfigUsesEnvChromePath(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "chrome")
+	path := browserTestExecutablePath(t.TempDir(), "chrome")
 	writeExecutable(t, path)
 	t.Setenv("DIGCRAWL_CHROME_PATH", path)
 
@@ -52,7 +52,7 @@ func TestNormalizeLocalBrowserConfigUsesEnvChromePath(t *testing.T) {
 func TestFirstExecutablePathPrefersInstalledBrowserOverPlaywrightShell(t *testing.T) {
 	root := t.TempDir()
 	headlessShell := filepath.Join(root, playwrightHeadlessShellRelPath())
-	installed := filepath.Join(root, "Google Chrome")
+	installed := browserTestExecutablePath(root, "Google Chrome")
 	writeExecutable(t, headlessShell)
 	writeExecutable(t, installed)
 
@@ -158,20 +158,16 @@ func TestConnectCDPBrowserHonorsDeadlineDuringStalledHandshake(t *testing.T) {
 }
 
 func TestDiscoverInteractiveChromePathPrefersVisibleExecutable(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "Chrome")
-	if err := os.WriteFile(path, []byte("browser"), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	path := browserTestExecutablePath(t.TempDir(), "Chrome")
+	writeExecutable(t, path)
 	if got := discoverInteractiveChromePath(path); got != path {
 		t.Fatalf("interactive path=%q want %q", got, path)
 	}
 }
 
 func TestDiscoverInteractiveChromePathRejectsHeadlessShell(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "chrome-headless-shell")
-	if err := os.WriteFile(path, []byte("browser"), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	path := browserTestExecutablePath(t.TempDir(), "chrome-headless-shell")
+	writeExecutable(t, path)
 	for _, key := range []string{"DIGCRAWL_CHROME_PATH", "CHROME_PATH", "CHROME_BIN"} {
 		t.Setenv(key, path)
 	}
@@ -188,6 +184,13 @@ func writeExecutable(t *testing.T, path string) {
 	if err := os.WriteFile(path, []byte("browser"), 0o755); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func browserTestExecutablePath(dir, name string) string {
+	if runtime.GOOS == "windows" && filepath.Ext(name) == "" {
+		name += ".exe"
+	}
+	return filepath.Join(dir, name)
 }
 
 func playwrightHeadlessShellRelPath() string {
