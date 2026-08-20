@@ -1,10 +1,12 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/signal"
@@ -16,6 +18,8 @@ import (
 	"github.com/originaleric/digcrawl/collect"
 	"github.com/originaleric/digcrawl/collect/store"
 	"github.com/originaleric/digcrawl/config"
+	"github.com/originaleric/digcrawl/internal/platform"
+	"github.com/originaleric/digcrawl/internal/platform/wechatchannels"
 	"github.com/originaleric/digcrawl/runtime"
 	"github.com/originaleric/digcrawl/runtime/version"
 	"github.com/originaleric/digcrawl/transport/collector"
@@ -53,6 +57,8 @@ func run(argv []string) {
 		runStdio(argv[2:])
 	case "collect":
 		runCollectCommand(argv[2:])
+	case "wechat-channels":
+		runWechatChannels(argv[2:])
 	case "asr":
 		runASR(argv[2:])
 	case "watchlist":
@@ -98,6 +104,9 @@ func printUsage() {
   digcrawl collect list        列出 SQLite 采集记录（需 PersistMode=sqlite/both）
   digcrawl collect show <id>   查看单条采集详情（id 或 URL）
   digcrawl collect migrate-index  从 index.json 导入 SQLite
+  digcrawl wechat-channels bridge start  启动 macOS 微信视频号本地桥接并唤起微信
+  digcrawl wechat-channels bridge stop   停止桥接并恢复系统代理/移除本地证书
+  digcrawl wechat-channels import        导入桥接捕获的当前视频号卡片
   digcrawl asr transcribe <video>  ffmpeg 抽音频并转写
   digcrawl watchlist run [--once]  定时抓取 watchlist 并通知
   digcrawl <url>               等价于 digcrawl collect <url>
@@ -119,6 +128,212 @@ func printUsage() {
 宿主 SDK: github.com/originaleric/digcrawl/client
 
 `)
+}
+
+func runWechatChannels(args []string) {
+	if len(args) == 0 {
+		log.Fatal("wechat-channels: use `digcrawl wechat-channels bridge start`, `bridge stop`, or `import`")
+	}
+	switch args[0] {
+	case "import":
+		runWechatChannelsImport(args[1:])
+	case "bridge":
+		runWechatChannelsBridge(args[1:])
+	default:
+		log.Fatal("wechat-channels: use `digcrawl wechat-channels bridge start`, `bridge stop`, or `import`")
+	}
+}
+
+func runWechatChannelsBridge(args []string) {
+	if len(args) == 0 {
+		log.Fatal("wechat-channels bridge: use `start` or `stop`")
+	}
+	switch args[0] {
+	case "start":
+		runWechatChannelsBridgeStart(args[1:])
+	case "stop":
+		runWechatChannelsBridgeStop(args[1:])
+	default:
+		log.Fatal("wechat-channels bridge: use `start` or `stop`")
+	}
+}
+
+func wechatChannelsBridgeOptions(fs *flag.FlagSet) (*int, *string, *string, *string) {
+	port := fs.Int("port", wechatchannels.DefaultBridgePort, "loopback proxy and bridge port")
+	stateDir := fs.String("state-dir", "", "bridge certificate and recovery-state directory")
+	networkService := fs.String("network-service", "", "macOS network service to proxy (auto-detected by default)")
+	wechatApp := fs.String("wechat-app", "/Applications/WeChat.app", "path to the macOS WeChat app")
+	return port, stateDir, networkService, wechatApp
+}
+
+func runWechatChannelsBridgeStart(args []string) {
+	fs := flag.NewFlagSet("wechat-channels bridge start", flag.ExitOnError)
+	port, stateDir, networkService, wechatApp := wechatChannelsBridgeOptions(fs)
+	noOpenWechat := fs.Bool("no-open-wechat", false, "start the bridge without launching WeChat")
+	yes := fs.Bool("yes", false, "confirm certificate installation and temporary system proxy changes")
+	_ = fs.Parse(args)
+	if !*yes {
+		confirmed, err := confirmWechatChannelsBridge(os.Stdin, os.Stderr, *port)
+		if err != nil {
+			log.Fatalf("confirm bridge start: %v", err)
+		}
+		if !confirmed {
+			log.Printf("wechat channels bridge start cancelled")
+			return
+		}
+	}
+	bridge, err := wechatchannels.NewBridge(wechatchannels.BridgeOptions{Port: *port, StateDir: *stateDir, NetworkService: *networkService, WeChatAppPath: *wechatApp})
+	if err != nil {
+		log.Fatalf("configure WeChat Channels bridge: %v", err)
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	if err := bridge.Start(ctx, !*noOpenWechat); err != nil {
+		log.Fatalf("start WeChat Channels bridge: %v", err)
+	}
+	fmt.Fprintf(os.Stdout, "WeChat Channels bridge is running on 127.0.0.1:%d. Open and play the desired video card in WeChat, then run `digcrawl wechat-channels import`. Press Ctrl-C to restore the proxy and remove the certificate.\n", *port)
+	select {
+	case <-ctx.Done():
+	case <-bridge.StopRequested():
+	}
+	if err := bridge.Stop(context.Background()); err != nil {
+		log.Printf("stop WeChat Channels bridge: %v", err)
+	}
+}
+
+func runWechatChannelsBridgeStop(args []string) {
+	fs := flag.NewFlagSet("wechat-channels bridge stop", flag.ExitOnError)
+	port, stateDir, networkService, wechatApp := wechatChannelsBridgeOptions(fs)
+	_ = fs.Parse(args)
+	bridge, err := wechatchannels.NewBridge(wechatchannels.BridgeOptions{Port: *port, StateDir: *stateDir, NetworkService: *networkService, WeChatAppPath: *wechatApp})
+	if err != nil {
+		log.Fatalf("configure WeChat Channels bridge: %v", err)
+	}
+	if err := bridge.Stop(context.Background()); err != nil {
+		log.Fatalf("stop WeChat Channels bridge: %v", err)
+	}
+	fmt.Fprintln(os.Stdout, "WeChat Channels bridge stopped; this bridge's proxy settings and certificate were removed when still owned by DigCrawl.")
+}
+
+func confirmWechatChannelsBridge(in io.Reader, out io.Writer, port int) (bool, error) {
+	fmt.Fprintf(out, "This installs a per-user local CA and temporarily enables a PAC: only *.qq.com goes to 127.0.0.1:%d; all other traffic keeps the current manual proxy path. It MITMs only qq.com and retains only current-video metadata in memory. Continue? [y/N]: ", port)
+	line, err := bufio.NewReader(in).ReadString('\n')
+	if err != nil && err != io.EOF {
+		return false, err
+	}
+	switch strings.ToLower(strings.TrimSpace(line)) {
+	case "y", "yes":
+		return true, nil
+	default:
+		return false, nil
+	}
+}
+
+func runWechatChannelsImport(args []string) {
+	fs := flag.NewFlagSet("wechat-channels import", flag.ExitOnError)
+	configPath := fs.String("config", "config/config.yaml", "path to config.yaml")
+	outDir := fs.String("out", "", "output directory (overrides Collect.OutputDir)")
+	format := fs.String("format", "", "export formats: md,html,json (comma-separated)")
+	bridgeURL := fs.String("bridge-url", wechatchannels.DefaultBridgeURL, "user-authorized local WeChat bridge URL (loopback only)")
+	bridgeStateDir := fs.String("bridge-state-dir", "", "bridge recovery-state directory (must match bridge start)")
+	yes := fs.Bool("yes", false, "confirm import without an interactive prompt")
+	_ = fs.Parse(args)
+
+	cfg, err := loadConfig(*configPath)
+	if err != nil {
+		log.Fatalf("load config: %v", err)
+	}
+	if *outDir != "" {
+		cfg.Collect.OutputDir = *outDir
+	}
+
+	ctx := context.Background()
+	content, err := wechatchannels.ImportActiveFromState(ctx, *bridgeURL, *bridgeStateDir)
+	if err != nil {
+		log.Fatalf("read active WeChat Channels video: %v", err)
+	}
+	printWechatChannelsPreview(os.Stdout, content)
+	if !*yes {
+		confirmed, err := confirmWechatChannelsImport(os.Stdin, os.Stderr)
+		if err != nil {
+			log.Fatalf("confirm import: %v", err)
+		}
+		if !confirmed {
+			log.Printf("wechat channels import cancelled")
+			return
+		}
+	}
+
+	formats := parseFormats(*format, cfg.Collect.DefaultFormats)
+	out := content.ToMap()
+	result, err := collect.Export(ctx, out, collect.ExportOptions{
+		OutputDir: cfg.Collect.OutputDir,
+		Formats:   formats,
+		// Importing a card never downloads video, cover, or other media. Those
+		// require a separately approved capability and an explicit user action.
+		DownloadMedia: false,
+	})
+	if err != nil {
+		log.Fatalf("export WeChat Channels import: %v", err)
+	}
+	if err := persistWechatChannelsImport(ctx, cfg, content.SourceURL, out, &result); err != nil {
+		logCollectResults([]collect.ExportResult{result})
+		log.Fatalf("persist WeChat Channels import: %v", err)
+	}
+	logCollectResults([]collect.ExportResult{result})
+}
+
+func printWechatChannelsPreview(w io.Writer, content *platform.Content) {
+	if content == nil {
+		return
+	}
+	fmt.Fprintln(w, "WeChat Channels import preview")
+	fmt.Fprintf(w, "Title: %s\n", content.Title)
+	if content.Author != nil && content.Author.Name != "" {
+		fmt.Fprintf(w, "Author: %s\n", content.Author.Name)
+	}
+	if content.PublishedAt != "" {
+		fmt.Fprintf(w, "Published: %s\n", content.PublishedAt)
+	}
+	if content.Text != "" {
+		fmt.Fprintf(w, "Description: %s\n", content.Text)
+	}
+}
+
+func confirmWechatChannelsImport(in io.Reader, out io.Writer) (bool, error) {
+	fmt.Fprint(out, "Import this video metadata locally? [y/N]: ")
+	line, err := bufio.NewReader(in).ReadString('\n')
+	if err != nil && err != io.EOF {
+		return false, err
+	}
+	switch strings.ToLower(strings.TrimSpace(line)) {
+	case "y", "yes":
+		return true, nil
+	default:
+		return false, nil
+	}
+}
+
+func persistWechatChannelsImport(ctx context.Context, cfg *config.Config, sourceURL string, out map[string]any, result *collect.ExportResult) error {
+	match := collect.Match{Platform: wechatchannels.PlatformName, Tool: "wechat.channels.import"}
+	if cfg.Collect.UseIndexJSON() {
+		entry := collect.EntryFromExport(sourceURL, match.Platform, out, result.Paths, result.Written)
+		if err := collect.UpsertEntry(cfg.Collect.OutputDir, entry); err != nil {
+			return err
+		}
+		result.Written = append(result.Written, collect.IndexPath(cfg.Collect.OutputDir))
+	}
+	if !cfg.Collect.UseSQLite() {
+		return nil
+	}
+	db, err := collect.CollectDB(cfg)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	in := collect.UpsertInputFromExport(sourceURL, match, out, result.Paths, result.Downloaded, cfg.Collect.OutputDir)
+	_, err = db.Upsert(ctx, in)
+	return err
 }
 
 func printVersion() {
