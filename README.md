@@ -101,6 +101,7 @@ Developers who want to build from source need Go 1.26.1+; see the [development i
 | --- | --- | --- |
 | Archive a single page | Extract a page or post into portable Markdown, HTML, JSON, and optional media assets. | `digcrawl collect <url>` |
 | Collect a queue of URLs | Process a file or local inbox and retain an index or database record. | `digcrawl collect --file urls.txt` |
+| Import a WeChat Channels chat card | Start a user-authorized macOS local bridge, then import metadata for the currently open video. | `digcrawl wechat-channels bridge start --yes` |
 | Monitor new content | Discover new items from feeds, lists, profiles, or pages, then collect and notify on a schedule. | `digcrawl watchlist run --once` |
 | Give an AI agent reading tools | Run a local MCP server with the official Skill and platform-aware tool routing. | `digcrawl mcp --config <profile>` |
 | Integrate a host application | Use HTTP Gateway, Collector, stdio, or the Go SDK. | [transport docs](./transport/README.md) |
@@ -111,7 +112,7 @@ DigCrawl treats crawling as a stable pipeline—**crawl, collect, normalize, exp
 
 | Source group | Supported sources |
 | --- | --- |
-| Social content | WeChat Official Accounts, Xiaohongshu, Douyin, Toutiao, X, Reddit, Threads, Instagram, Bilibili, Weibo, Kuaishou, and Zhihu |
+| Social content | WeChat Official Accounts, WeChat Channels chat cards (with a local bridge), Xiaohongshu, Douyin, Toutiao, X, Reddit, Threads, Instagram, Bilibili, Weibo, Kuaishou, and Zhihu |
 | Syndication and discovery | RSS, Atom, sitemap, platform lists, profile pages, and supported content feeds |
 | The open web | Any `http` or `https` page through the generic browser reader |
 
@@ -128,6 +129,15 @@ Collect one URL or a batch:
 ./digcrawl collect --file urls.txt --format md,json --out ./collect-output
 ./digcrawl collect inbox --watch
 ```
+
+When a WeChat Channels card has no stable public URL, start the local bridge. It launches WeChat; open and play the forwarded card, then import the active card from a second terminal:
+
+```bash
+./digcrawl wechat-channels bridge start --yes
+./digcrawl wechat-channels import
+```
+
+On macOS, `bridge start` asks for explicit confirmation (or requires `--yes`), creates a per-user local CA, and temporarily enables a PAC: only `*.qq.com` is sent to the loopback bridge; the bridge then uses the original manual HTTP/HTTPS/SOCKS proxy for its outbound hop, while every other request keeps that same manual proxy path. It MITMs only `qq.com` and keeps only the current video's `object_id`, `object_nonce_id`, title, description, author, publication time, and cover URL in memory—never cookies, request headers, media URLs, or response payloads. An authenticated manual proxy is refused rather than reading or requesting credentials. Ctrl-C or `bridge stop` both make the owning bridge process clean up its PAC, local server, and exact certificate. The import endpoint requires a capability token from protected local bridge state; when using a custom `--state-dir`, pass the same directory to import as `--bridge-state-dir`. An already enabled PAC or proxy auto-discovery is never overwritten. Import still previews metadata before saving and never downloads media or starts ASR.
 
 Run a watchlist once, or keep its scheduler running locally:
 

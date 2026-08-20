@@ -101,6 +101,7 @@ macOS 与 Linux 默认将 profile 保存在 `$XDG_CONFIG_HOME/digcrawl/`；未�
 | --- | --- | --- |
 | 归档单个页面 | 将文章或帖子提取为可移植的 Markdown、HTML、JSON 和可选媒体 assets。 | `digcrawl collect <url>` |
 | 批量采集 URL | 处理 URL 文件或本地收件箱，并保留索引或数据库记录。 | `digcrawl collect --file urls.txt` |
+| 导入微信视频号聊天卡片 | 启动用户已授权的 macOS 本地桥接，再导入当前正在播放的单条视频元数据。 | `digcrawl wechat-channels bridge start --yes` |
 | 监控新增内容 | 从 feed、列表、主页或页面发现新增内容，再按计划采集和通知。 | `digcrawl watchlist run --once` |
 | 为 AI Agent 提供阅读能力 | 以官方 Skill 和平台感知路由运行本地 MCP 服务。 | `digcrawl mcp --config <profile>` |
 | 集成到宿主应用 | 使用 HTTP Gateway、Collector、stdio 或 Go SDK。 | [Transport 文档](./transport/README.md) |
@@ -111,7 +112,7 @@ DigCrawl 将采集视为稳定的 **crawl / collect / normalize / export** 管�
 
 | 来源类别 | 已支持来源 |
 | --- | --- |
-| 社交内容 | 微信公众号、小红书、抖音、今日头条、X、Reddit、Threads、Instagram、B站、微博、快手、知乎 |
+| 社交内容 | 微信公众号、微信视频号聊天卡片（需本机桥接）、小红书、抖音、今日头条、X、Reddit、Threads、Instagram、B站、微博、快手、知乎 |
 | 订阅与发现 | RSS、Atom、sitemap、平台列表、主页和已支持的内容 feed |
 | 通用网页 | 任意 `http` 或 `https` 页面，可由通用浏览器读取工具处理 |
 
@@ -128,6 +129,15 @@ URL 模式、登录行为与平台边界请查看[使用说明](./USAGE.md)。
 ./digcrawl collect --file urls.txt --format md,json --out ./collect-output
 ./digcrawl collect inbox --watch
 ```
+
+微信视频号没有稳定的单条公开 URL 时，启动本地桥接。它会唤起微信；在微信桌面端打开并播放转发来的卡片后，再从第二个终端导入当前卡片：
+
+```bash
+./digcrawl wechat-channels bridge start --yes
+./digcrawl wechat-channels import
+```
+
+在 macOS 上，`bridge start` 会要求显式确认（或需要 `--yes`），创建仅当前用户可见的本地 CA，并临时启用 PAC：只有 `*.qq.com` 会进入 loopback 桥接；桥接的出站流量继续使用原 HTTP/HTTPS/SOCKS 手动代理，其余请求也维持该原路径；仅对 `qq.com` 做 TLS 解密。它只在内存保存当前视频的 `object_id`、`object_nonce_id`、标题、描述、作者、发布时间和封面 URL，不保存 Cookie、请求头、媒体 URL 或响应正文。带认证的手动代理会被明确拒绝，不会读取或要求用户输入凭据。Ctrl-C 或 `bridge stop` 都会由运行中的桥接进程完成同一份 PAC、服务与证书清理；已启用的既有 PAC 或自动代理发现不会被覆盖。导入接口受本地状态中的能力令牌保护；若启动时传了 `--state-dir`，导入时传同一 `--bridge-state-dir`。导入仍会先预览再保存，且不会下载媒体或启动 ASR。
 
 执行一轮 Watchlist，或在本机常驻运行调度器：
 

@@ -207,6 +207,19 @@ LocalBrowser:
 
 微信公众号公开文章默认优先使用 HTTP HTML 静态解析，成功时会在 `platform_metadata` 中标记 `read_channel=http`、`extraction_source=html`。只有网络 transient 或解析状态不确定时才进入 Browser 兜底；验证码、频控、删除、私密、登录要求和最终 URL 跳出微信域名会直接返回结构化错误。
 
+### 微信视频号聊天卡片导入
+
+视频号聊天卡片没有稳定公开 URL 时，先启动 macOS 本地桥接；它会唤起微信。在微信桌面端打开并播放卡片后，从第二个终端执行导入：
+
+```bash
+digcrawl wechat-channels bridge start --yes
+digcrawl wechat-channels import
+```
+
+`bridge start` 默认监听 `127.0.0.1:20261`，自动识别当前 macOS 网络服务并在得到明确确认后创建仅当前用户可见的本地 CA、临时启用 PAC、唤起 `/Applications/WeChat.app`。PAC 只将 `*.qq.com` 指向 loopback 桥接；桥接的出站请求会继续使用启动前的 HTTP/HTTPS/SOCKS 手动代理，其余请求也维持原有路径，不要求用户重新填写代理密码。带认证的手动代理会被明确拒绝，不会读取或请求密码。它只对 `qq.com` 做 TLS 解密，并只将当前视频的 `object_id`、`object_nonce_id`、标题、描述、作者、发布时间和封面 URL 保存于进程内存。Cookie、请求头、视频直链和响应正文均不会保存。若当前网络服务已启用 PAC 或自动代理发现，命令会拒绝覆盖，以避免破坏既有分流规则。
+
+`bridge stop` 会经本地受保护控制通道通知运行中的桥接进程，由该进程先撤销 PAC、使 `*.qq.com` 立即回到启动前的原代理路径，再停止服务并按精确证书指纹删除本桥接安装的证书；运行终端中的 Ctrl-C 走同一清理路径。异常退出后，命令仅在确认原进程已不在运行时执行恢复。导入端通过受保护的 `GET /v1/wechat-channels/active-video` 读取桥接，默认地址为 `http://127.0.0.1:20261`，可用 `--bridge-url` 覆盖，但只接受 `localhost` 或 loopback IP 的 `http/https` 地址；若启动时传了 `--state-dir`，导入时也需传相同的 `--bridge-state-dir`。导入会先预览并要求确认；自动化调用必须显式传 `--yes`。本功能只归档最小元数据，不下载视频、封面或其他媒体，也不调用 ASR。
+
 X 单帖读取默认先尝试官方 Tweet lookup API；当 API 读权限或套餐不足时，会尝试公开 oEmbed 端点，成功时 `platform_metadata.read_channel=api`、`platform_metadata.extraction_source=oembed`。Browser 仅作为最后兜底，登录墙、删除、不可见和空壳页会返回结构化错误。
 
 Reddit 读取默认先走官方 OAuth API，支持 `reddit.post.read`、`reddit.subreddit.read`、`reddit.user.read`。单帖工具会读取 selftext、外链、score、upvote ratio、评论数、评论树和 `more` 评论占位；评论读取受 `comment_limit`、`comment_depth`、`comment_sort` 控制。API 不可用时会先尝试 Reddit `.rss` 公开 feed，RSS 不可用时才按配置进入浏览器兜底。浏览器兜底只用于公开页面，401/403/429、私有社区、登录墙和受限内容不会通过浏览器绕过。
@@ -702,6 +715,9 @@ digcrawl stdio [flags]         # 逐行 JSON 协议
 digcrawl dev-host [flags]      # 本地参考宿主（仅开发调试）
 digcrawl collect <url>         # 采集单个 URL
 digcrawl collect inbox         # 处理收件箱
+digcrawl wechat-channels bridge start --yes # 启动 macOS 桥接并唤起微信
+digcrawl wechat-channels bridge stop # 停止桥接并恢复其系统改动
+digcrawl wechat-channels import # 导入当前已播放的视频号聊天卡片元数据
 digcrawl browser login         # 平台扫码/交互登录并保存 Cookie
 digcrawl browser check         # 检查平台会话，可选试读
 digcrawl asr transcribe        # ffmpeg 抽音频并转写
