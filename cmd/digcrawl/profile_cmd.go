@@ -128,10 +128,11 @@ func defaultSkillProfile(baseDir string) map[string]any {
 		},
 		"Skill": map[string]any{
 			"Media": map[string]any{
-				"DownloadMedia": false,
-				"Dir":           filepath.Join(baseDir, "media"),
-				"MaxBytes":      10 * 1024 * 1024,
-				"TimeoutSec":    30,
+				"DownloadMedia":    false,
+				"Dir":              filepath.Join(baseDir, "media"),
+				"MaxBytes":         128 * 1024 * 1024,
+				"TimeoutSec":       config.DefaultSkillMediaTimeoutSec,
+				"MaxASRCandidates": config.DefaultSkillMaxASRCandidates,
 			},
 			"ASR": map[string]any{
 				"Enabled":       false,

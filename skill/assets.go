@@ -16,16 +16,28 @@ import (
 
 	"golang.org/x/net/html"
 
+	"github.com/originaleric/digcrawl/config"
 	"github.com/originaleric/digcrawl/runtime/artifact"
 )
 
 var markdownImageRe = regexp.MustCompile(`!\[[^\]]*\]\((https?://[^\s\)]+)\)`)
+
+// DefaultSkillMediaMaxBytes keeps explicit Skill video transcription useful for
+// ordinary social-video payloads while still bounding local disk usage.
+const DefaultSkillMediaMaxBytes int64 = 128 * 1024 * 1024
 
 // AssetDownloadOptions configures media file downloads into a Skill-owned directory.
 type AssetDownloadOptions struct {
 	MaxBytes      int64
 	TimeoutSec    int
 	ArtifactStore artifact.Store
+	// ASRInputOnly downloads exactly one audio/video candidate selected by
+	// ASRCandidateIndex, skipping page decoration. Skill tries candidates one at
+	// a time and only stops after ASR itself succeeds.
+	ASRInputOnly      bool
+	ASRCandidateIndex int
+	// ImagesOnly keeps OCR acquisition from downloading audio/video payloads.
+	ImagesOnly bool
 }
 
 // DownloadAssets mirrors the collect media acquisition rules without depending on collect.
@@ -52,26 +64,48 @@ func DownloadAssets(ctx context.Context, assetsDir string, out map[string]any, o
 	}
 	if len(items) > 0 || len(manifest) > 0 {
 		if opts.MaxBytes <= 0 {
-			opts.MaxBytes = 10 * 1024 * 1024
+			opts.MaxBytes = DefaultSkillMediaMaxBytes
 		}
 		if opts.TimeoutSec <= 0 {
-			opts.TimeoutSec = 30
+			opts.TimeoutSec = config.SkillMediaConfig{}.TimeoutSecOrDefault()
 		}
 		client := &http.Client{Timeout: time.Duration(opts.TimeoutSec) * time.Second}
 		referer := refererForDownload(out)
+		asrCandidateIndex := 0
 		for i, item := range items {
+			mediaType, _ := item["type"].(string)
+			mediaType = strings.ToLower(strings.TrimSpace(mediaType))
+			if opts.ImagesOnly && !isOCRMediaType(mediaType) {
+				continue
+			}
+			if opts.ASRInputOnly {
+				if !isASRMediaType(mediaType) {
+					continue
+				}
+				if asrCandidateIndex != opts.ASRCandidateIndex {
+					asrCandidateIndex++
+					continue
+				}
+				asrCandidateIndex++
+			}
 			rawURL, _ := item["url"].(string)
 			rawURL = strings.TrimSpace(rawURL)
 			if rawURL == "" || !strings.HasPrefix(rawURL, "http") {
+				if opts.ASRInputOnly {
+					manifest = append(manifest, map[string]any{"type": mediaType, "error": "media URL missing"})
+					break
+				}
 				continue
 			}
 			if err := validateRemoteAssetURL(rawURL); err != nil {
 				manifest = append(manifest, map[string]any{
 					"type": item["type"], "url": rawURL, "error": err.Error(),
 				})
+				if opts.ASRInputOnly {
+					break
+				}
 				continue
 			}
-			mediaType, _ := item["type"].(string)
 			name := assetFilename(rawURL, mediaType, i)
 			dest := filepath.Join(assetsDir, name)
 			contentType, err := downloadFile(ctx, client, rawURL, dest, opts.MaxBytes, referer)
@@ -79,6 +113,9 @@ func DownloadAssets(ctx context.Context, assetsDir string, out map[string]any, o
 				manifest = append(manifest, map[string]any{
 					"type": item["type"], "url": rawURL, "error": err.Error(),
 				})
+				if opts.ASRInputOnly {
+					break
+				}
 				continue
 			}
 			finalName, finalDest, err := normalizeDownloadedAssetName(name, dest, rawURL, mediaType, contentType)
@@ -86,6 +123,9 @@ func DownloadAssets(ctx context.Context, assetsDir string, out map[string]any, o
 				manifest = append(manifest, map[string]any{
 					"type": item["type"], "url": rawURL, "error": err.Error(),
 				})
+				if opts.ASRInputOnly {
+					break
+				}
 				continue
 			}
 			name = finalName
@@ -94,11 +134,24 @@ func DownloadAssets(ctx context.Context, assetsDir string, out map[string]any, o
 			manifest = append(manifest, map[string]any{
 				"type": mediaType, "url": rawURL, "local": name,
 			})
+			if opts.ASRInputOnly {
+				break
+			}
 		}
 	}
 
 	manifestFiles, err := writeAssetsManifest(assetsDir, out, manifest)
 	return append(saved, manifestFiles...), err
+}
+
+func isASRMediaType(mediaType string) bool {
+	mediaType = strings.ToLower(strings.TrimSpace(mediaType))
+	return mediaType == "video" || mediaType == "audio"
+}
+
+func isOCRMediaType(mediaType string) bool {
+	mediaType = strings.ToLower(strings.TrimSpace(mediaType))
+	return mediaType == "image" || mediaType == "photo" || mediaType == "screenshot"
 }
 
 func validateRemoteAssetURL(rawURL string) error {

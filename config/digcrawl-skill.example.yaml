@@ -56,8 +56,10 @@ Skill:
     # Required only for explicit ASR when DownloadMedia is true.
     # Replace with a user-owned absolute directory.
     Dir: "/absolute/path/to/digcrawl/skill-media"
-    MaxBytes: 10485760
-    TimeoutSec: 30
+    MaxBytes: 134217728
+    TimeoutSec: 120
+    # Number of video/audio candidates tried for ASR: primary plus one fallback.
+    MaxASRCandidates: 2
   ASR:
     # Operational settings mirror the root OCR/ASR settings used by Collect.
     # Enabled remains false so the Skill stays explicit opt-in.

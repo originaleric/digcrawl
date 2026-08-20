@@ -27,6 +27,15 @@ func TestWriteAndValidateSkillProfile(t *testing.T) {
 	if cfg.Skill.Media.DownloadMedia || cfg.Skill.ASR.EnabledOrDefault() {
 		t.Fatal("new Skill profile must not opt into local media or ASR")
 	}
+	if got, want := cfg.Skill.Media.MaxBytes, int64(128*1024*1024); got != want {
+		t.Fatalf("new Skill profile media limit=%d want %d", got, want)
+	}
+	if got, want := cfg.Skill.Media.TimeoutSec, config.DefaultSkillMediaTimeoutSec; got != want {
+		t.Fatalf("new Skill profile media timeout=%d want %d", got, want)
+	}
+	if got, want := cfg.Skill.Media.MaxASRCandidates, config.DefaultSkillMaxASRCandidates; got != want {
+		t.Fatalf("new Skill profile ASR candidates=%d want %d", got, want)
+	}
 	if !containsTool(cfg.Gateway.AllowedTools, "skill.asr.enable") {
 		t.Fatal("new Skill profile must expose the confirmation-protected ASR enable tool")
 	}

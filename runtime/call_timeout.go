@@ -18,16 +18,16 @@ import (
 // deliberately supplies its own deadline.
 func RecommendedCallTimeout(cfg *config.Config, call *protocol.ToolCall) time.Duration {
 	browserSeconds := 90
-	mediaSeconds := 30
+	mediaSeconds := config.SkillMediaConfig{}.TimeoutSecOrDefault()
+	maxASRCandidates := config.SkillMediaConfig{}.MaxASRCandidatesOrDefault()
 	asrSeconds := 300
 	summarySeconds := 60
 	if cfg != nil {
 		if cfg.LocalBrowser.TotalTimeoutSec > 0 {
 			browserSeconds = cfg.LocalBrowser.TotalTimeoutSec
 		}
-		if cfg.Skill.Media.TimeoutSec > 0 {
-			mediaSeconds = cfg.Skill.Media.TimeoutSec
-		}
+		mediaSeconds = cfg.Skill.Media.TimeoutSecOrDefault()
+		maxASRCandidates = cfg.Skill.Media.MaxASRCandidatesOrDefault()
 		asrSeconds = cfg.Skill.ASR.TimeoutSecOrDefault()
 		summarySeconds = cfg.Skill.Summary.TimeoutSecOrDefault()
 	}
@@ -40,11 +40,12 @@ func RecommendedCallTimeout(cfg *config.Config, call *protocol.ToolCall) time.Du
 	if call != nil && len(call.Input) > 0 {
 		_ = json.Unmarshal(call.Input, &input)
 	}
-	// Download and ASR are an explicit sequential phase. A text-only summary
-	// must not inherit the local-model budget merely because it is another
-	// optional enhancement.
-	if input.IncludeASR {
-		seconds += mediaSeconds + asrSeconds
+	// Runtime sets this deadline before page extraction tells us whether a
+	// summary request is for video. IncludeSummary therefore reserves the same
+	// finite ASR candidate budget as IncludeASR; text-only summaries return
+	// sooner because they never enter that phase.
+	if input.IncludeASR || input.IncludeSummary {
+		seconds += maxASRCandidates * (mediaSeconds + asrSeconds)
 	}
 	if input.IncludeSummary {
 		seconds += summarySeconds

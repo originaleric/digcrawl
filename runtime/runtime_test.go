@@ -14,6 +14,7 @@ import (
 	browserprov "github.com/originaleric/digcrawl/provider/browser"
 	platformprov "github.com/originaleric/digcrawl/provider/platform"
 	"github.com/originaleric/digcrawl/runtime/registry"
+	"github.com/originaleric/digcrawl/skill"
 )
 
 func TestExecuteUnknownTool(t *testing.T) {
@@ -45,12 +46,34 @@ func TestRecommendedCallTimeoutIncludesExplicitASRBudgets(t *testing.T) {
 		t.Fatalf("plain timeout=%s want 2m", got)
 	}
 	asr := &protocol.ToolCall{Input: json.RawMessage(`{"include_asr":true}`)}
-	if got := RecommendedCallTimeout(cfg, asr); got != 450*time.Second {
-		t.Fatalf("ASR timeout=%s want 7m30s", got)
+	if got := RecommendedCallTimeout(cfg, asr); got != 780*time.Second {
+		t.Fatalf("ASR timeout=%s want 13m", got)
 	}
 	summary := &protocol.ToolCall{Input: json.RawMessage(`{"include_summary":true}`)}
-	if got := RecommendedCallTimeout(cfg, summary); got != 180*time.Second {
-		t.Fatalf("summary timeout=%s want 3m", got)
+	if got := RecommendedCallTimeout(cfg, summary); got != 840*time.Second {
+		t.Fatalf("summary timeout=%s want 14m", got)
+	}
+}
+
+func TestRecommendedCallTimeoutUsesSkillMediaDefault(t *testing.T) {
+	cfg := &config.Config{
+		LocalBrowser: config.LocalBrowserConfig{TotalTimeoutSec: 90},
+		Skill:        config.SkillConfig{ASR: config.ASRConfig{TimeoutSec: 300}},
+	}
+	call := &protocol.ToolCall{Input: json.RawMessage(`{"include_asr":true}`)}
+	if got, want := RecommendedCallTimeout(cfg, call), 960*time.Second; got != want {
+		t.Fatalf("ASR timeout=%s want %s", got, want)
+	}
+}
+
+func TestRecommendedCallTimeoutRespectsASRCandidateLimit(t *testing.T) {
+	cfg := &config.Config{Skill: config.SkillConfig{
+		Media: config.SkillMediaConfig{TimeoutSec: 30, MaxASRCandidates: 1},
+		ASR:   config.ASRConfig{TimeoutSec: 300},
+	}}
+	call := &protocol.ToolCall{Input: json.RawMessage(`{"include_asr":true}`)}
+	if got, want := RecommendedCallTimeout(cfg, call), 450*time.Second; got != want {
+		t.Fatalf("ASR timeout=%s want %s", got, want)
 	}
 }
 
@@ -228,6 +251,32 @@ func TestExecuteExposesStructuredErrorDetails(t *testing.T) {
 	res := New(reg, Options{}).Execute(context.Background(), &protocol.ToolCall{Type: protocol.TypeToolCall, ID: "c1", Tool: "detailed.error"})
 	if res.Error == nil || res.Error.Code != "BROWSER_PAGE_CLOSED" || res.Error.Details["stage"] != "extract_content" {
 		t.Fatalf("expected detailed browser error, got %+v", res.Error)
+	}
+}
+
+func TestExecutePreservesTypedMediaDownloadFailureFromSkill(t *testing.T) {
+	enabled := true
+	reg := registry.New()
+	reg.Register(registry.Entry{
+		Descriptor: protocol.ToolDescriptor{Name: "media.failure"},
+		Handler: func(ctx context.Context, call *protocol.ToolCall) (map[string]any, []protocol.Artifact, error) {
+			out := map[string]any{
+				"content_type": "video",
+				"media":        []any{map[string]any{"type": "video", "url": "http://127.0.0.1/video.mp4"}},
+			}
+			err := skill.Enhance(ctx, out, config.SkillConfig{
+				Media: config.SkillMediaConfig{DownloadMedia: true, Dir: t.TempDir()},
+				ASR:   config.ASRConfig{Enabled: &enabled, Provider: "stub"},
+			}, skill.EnhanceOptions{CallID: call.ID, IncludeASR: true})
+			return out, nil, err
+		},
+	})
+	res := New(reg, Options{}).Execute(context.Background(), &protocol.ToolCall{Type: protocol.TypeToolCall, ID: "media-download-failure", Tool: "media.failure"})
+	if res.Status != "error" || res.Error == nil || res.Error.Code != "MEDIA_DOWNLOAD_FAILED" {
+		t.Fatalf("result=%+v", res)
+	}
+	if res.Error.Details["component"] != "media_download" || res.Error.Details["reason"] != "invalid_media_url" || res.Error.Details["retryable"] != false {
+		t.Fatalf("details=%+v", res.Error.Details)
 	}
 }
 

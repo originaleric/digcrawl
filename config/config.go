@@ -44,10 +44,32 @@ type SkillConfig struct {
 
 // SkillMediaConfig controls media acquisition for explicit Skill OCR/ASR requests.
 type SkillMediaConfig struct {
-	DownloadMedia bool   `yaml:"DownloadMedia" json:"DownloadMedia,omitempty"`
-	Dir           string `yaml:"Dir" json:"Dir,omitempty"`
-	MaxBytes      int64  `yaml:"MaxBytes" json:"MaxBytes,omitempty"`
-	TimeoutSec    int    `yaml:"TimeoutSec" json:"TimeoutSec,omitempty"`
+	DownloadMedia    bool   `yaml:"DownloadMedia" json:"DownloadMedia,omitempty"`
+	Dir              string `yaml:"Dir" json:"Dir,omitempty"`
+	MaxBytes         int64  `yaml:"MaxBytes" json:"MaxBytes,omitempty"`
+	TimeoutSec       int    `yaml:"TimeoutSec" json:"TimeoutSec,omitempty"`
+	MaxASRCandidates int    `yaml:"MaxASRCandidates" json:"MaxASRCandidates,omitempty"`
+}
+
+const (
+	DefaultSkillMediaTimeoutSec  = 120
+	DefaultSkillMaxASRCandidates = 2
+)
+
+// TimeoutSecOrDefault returns the download budget for explicit Skill media.
+func (c SkillMediaConfig) TimeoutSecOrDefault() int {
+	if c.TimeoutSec > 0 {
+		return c.TimeoutSec
+	}
+	return DefaultSkillMediaTimeoutSec
+}
+
+// MaxASRCandidatesOrDefault bounds the primary media input plus ASR fallbacks.
+func (c SkillMediaConfig) MaxASRCandidatesOrDefault() int {
+	if c.MaxASRCandidates > 0 {
+		return c.MaxASRCandidates
+	}
+	return DefaultSkillMaxASRCandidates
 }
 
 // SkillSummaryConfig is the optional local OpenAI-compatible fallback for a

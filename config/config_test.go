@@ -47,6 +47,24 @@ func TestCollectPersistModeHelpers(t *testing.T) {
 	}
 }
 
+func TestSkillMediaTimeoutSecOrDefault(t *testing.T) {
+	if got := (SkillMediaConfig{}).TimeoutSecOrDefault(); got != DefaultSkillMediaTimeoutSec {
+		t.Fatalf("default timeout=%d want %d", got, DefaultSkillMediaTimeoutSec)
+	}
+	if got := (SkillMediaConfig{TimeoutSec: 45}).TimeoutSecOrDefault(); got != 45 {
+		t.Fatalf("configured timeout=%d want 45", got)
+	}
+}
+
+func TestSkillMediaMaxASRCandidatesOrDefault(t *testing.T) {
+	if got := (SkillMediaConfig{}).MaxASRCandidatesOrDefault(); got != DefaultSkillMaxASRCandidates {
+		t.Fatalf("default ASR candidates=%d want %d", got, DefaultSkillMaxASRCandidates)
+	}
+	if got := (SkillMediaConfig{MaxASRCandidates: 3}).MaxASRCandidatesOrDefault(); got != 3 {
+		t.Fatalf("configured ASR candidates=%d want 3", got)
+	}
+}
+
 func TestDefaultConfigPathsUseXDGDirectory(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", "/tmp/digcrawl-xdg")
 	if got, want := DefaultConfigPath(), filepath.Join("/tmp/digcrawl-xdg", "digcrawl", "config.yaml"); got != want {

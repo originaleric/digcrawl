@@ -22,8 +22,8 @@ func TestMCPTimeoutMatchesCollectForReadAndExtendsExplicitASR(t *testing.T) {
 	if got := mcpTimeoutMs(browserCfg, skillCfg, map[string]any{}); got != 120000 {
 		t.Fatalf("normal read timeout=%d want 120000", got)
 	}
-	if got := mcpTimeoutMs(browserCfg, skillCfg, map[string]any{"include_asr": true}); got != 450000 {
-		t.Fatalf("ASR read timeout=%d want 450000", got)
+	if got := mcpTimeoutMs(browserCfg, skillCfg, map[string]any{"include_asr": true}); got != 780000 {
+		t.Fatalf("ASR read timeout=%d want 780000", got)
 	}
 }
 
@@ -115,6 +115,29 @@ func TestToolResultToMCPIncludesErrorDetails(t *testing.T) {
 	details, ok := payload["error_details"].(map[string]any)
 	if !ok || details["stage"] != "navigate" || details["retryable"] != true {
 		t.Fatalf("error details were lost: %#v", payload)
+	}
+}
+
+func TestToolResultToMCPPreservesMediaDownloadFailure(t *testing.T) {
+	result, err := toolResultToMCP(context.Background(), &protocol.ToolResult{
+		Status: "error",
+		Error: &protocol.ToolError{
+			Code:    "MEDIA_DOWNLOAD_FAILED",
+			Message: "media download failed: video size 35865567 bytes exceeds configured limit 10485760 bytes",
+			Details: map[string]any{"component": "media_download", "media_type": "video", "reason": "size_limit_exceeded", "retryable": false, "actual_bytes": int64(35865567), "max_bytes": int64(10485760)},
+		},
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := result.StructuredContent.(map[string]any)
+	errorPayload, ok := payload["error"].(map[string]string)
+	if !ok || errorPayload["code"] != "MEDIA_DOWNLOAD_FAILED" {
+		t.Fatalf("structured error=%#v", payload)
+	}
+	details, ok := payload["error_details"].(map[string]any)
+	if !ok || details["reason"] != "size_limit_exceeded" || details["retryable"] != false {
+		t.Fatalf("structured details=%#v", payload)
 	}
 }
 

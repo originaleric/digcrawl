@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -42,15 +43,26 @@ func Enhance(ctx context.Context, out map[string]any, cfg config.SkillConfig, op
 	}
 
 	var downloaded []map[string]any
-	if assetsDir != "" {
+	var ocrDownloaded []map[string]any
+	asrAttempted := false
+	if assetsDir != "" && opts.IncludeOCR {
 		if _, err := DownloadAssets(ctx, assetsDir, out, AssetDownloadOptions{
 			MaxBytes:      cfg.Media.MaxBytes,
 			TimeoutSec:    cfg.Media.TimeoutSec,
 			ArtifactStore: opts.ArtifactStore,
+			ImagesOnly:    true,
 		}); err != nil {
 			return err
 		}
-		downloaded = readDownloadedAssets(assetsDir)
+		ocrDownloaded = readDownloadedAssets(assetsDir)
+	}
+	if assetsDir != "" && requiresASR {
+		downloaded, asrAttempted, err = downloadAndTranscribeASRCandidates(ctx, out, cfg.ASR, cfg.Media, assetsDir, ocrDownloaded)
+		if err != nil {
+			return err
+		}
+	} else {
+		downloaded = ocrDownloaded
 	}
 
 	if opts.IncludeOCR {
@@ -64,11 +76,11 @@ func Enhance(ctx context.Context, out map[string]any, cfg config.SkillConfig, op
 		ocr.EnrichMap(ctx, out, cfg.OCR, ocrOpts)
 	}
 
-	if requiresASR {
+	if requiresASR && !asrAttempted {
 		enrichASRFromDownloadedMedia(ctx, out, cfg.ASR, downloaded, assetsDir)
-		if opts.IncludeASR && strings.TrimSpace(stringValue(out["asr_text"])) == "" {
-			return fmt.Errorf("ASR unavailable: %s", firstNonEmpty(metadataText(out, "asr_error"), "no downloaded video/audio asset was available for ASR"))
-		}
+	}
+	if opts.IncludeASR && strings.TrimSpace(stringValue(out["asr_text"])) == "" {
+		return fmt.Errorf("ASR unavailable: %s", firstNonEmpty(metadataText(out, "asr_error"), "no downloaded video/audio asset was available for ASR"))
 	}
 	if opts.IncludeSummary {
 		if err := summarizeVideo(ctx, out, cfg.Summary, opts.SourceText); err != nil {
@@ -76,6 +88,65 @@ func Enhance(ctx context.Context, out map[string]any, cfg config.SkillConfig, op
 		}
 	}
 	return nil
+}
+
+// downloadAndTranscribeASRCandidates keeps download and transcription coupled
+// for every ASR call. OCR assets are passed through unchanged, while only
+// audio/video candidates consume the ASR attempt budget.
+func downloadAndTranscribeASRCandidates(ctx context.Context, out map[string]any, asrCfg config.ASRConfig, mediaCfg config.SkillMediaConfig, assetsDir string, initialDownloaded []map[string]any) ([]map[string]any, bool, error) {
+	downloaded := append([]map[string]any(nil), initialDownloaded...)
+	hasLocalASRInput := false
+	for candidate := 0; candidate < mediaCfg.MaxASRCandidatesOrDefault(); candidate++ {
+		if _, err := DownloadAssets(ctx, assetsDir, out, AssetDownloadOptions{
+			MaxBytes:          mediaCfg.MaxBytes,
+			TimeoutSec:        mediaCfg.TimeoutSec,
+			ASRInputOnly:      true,
+			ASRCandidateIndex: candidate,
+		}); err != nil {
+			return downloaded, hasLocalASRInput, err
+		}
+		attempt := asrMediaEntries(readDownloadedAssets(assetsDir))
+		if len(attempt) == 0 {
+			break
+		}
+		downloaded = append(downloaded, attempt...)
+		if !hasLocalASRMedia(attempt) {
+			continue
+		}
+		hasLocalASRInput = true
+		enrichASRFromDownloadedMedia(ctx, out, asrCfg, attempt, assetsDir)
+		if strings.TrimSpace(stringValue(out["asr_text"])) != "" {
+			break
+		}
+	}
+	if _, err := writeAssetsManifest(assetsDir, out, downloaded); err != nil {
+		return downloaded, hasLocalASRInput, err
+	}
+	if !hasLocalASRInput {
+		if err := asrMediaDownloadError(downloaded); err != nil {
+			return downloaded, false, err
+		}
+	}
+	return downloaded, hasLocalASRInput, nil
+}
+
+func asrMediaEntries(items []map[string]any) []map[string]any {
+	out := make([]map[string]any, 0, len(items))
+	for _, item := range items {
+		if isASRMediaType(stringValue(item["type"])) {
+			out = append(out, item)
+		}
+	}
+	return out
+}
+
+func hasLocalASRMedia(items []map[string]any) bool {
+	for _, item := range items {
+		if isASRMediaType(stringValue(item["type"])) && strings.TrimSpace(stringValue(item["local"])) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // validateEnhancementRequest enforces explicit Skill configuration before any
@@ -141,6 +212,109 @@ func readDownloadedAssets(assetsDir string) []map[string]any {
 		return nil
 	}
 	return manifest.Downloaded
+}
+
+const mediaDownloadFailedCode = "MEDIA_DOWNLOAD_FAILED"
+
+// mediaDownloadError makes a failed ASR input acquisition visible at the tool
+// boundary without exposing raw HTTP errors, which may contain signed URLs.
+type mediaDownloadError struct {
+	mediaType string
+	reason    string
+	retryable bool
+	actual    int64
+	limit     int64
+}
+
+func (e *mediaDownloadError) Error() string {
+	if e == nil {
+		return ""
+	}
+	if e.reason == "size_limit_exceeded" && e.actual > 0 && e.limit > 0 {
+		return fmt.Sprintf("media download failed: %s size %d bytes exceeds configured limit %d bytes", e.mediaType, e.actual, e.limit)
+	}
+	return fmt.Sprintf("media download failed: %s download %s", e.mediaType, strings.ReplaceAll(e.reason, "_", " "))
+}
+
+func (e *mediaDownloadError) ToolErrorCode() string { return mediaDownloadFailedCode }
+
+func (e *mediaDownloadError) ToolErrorMessage() string { return e.Error() }
+
+func (e *mediaDownloadError) ToolErrorDetails() map[string]any {
+	if e == nil {
+		return nil
+	}
+	details := map[string]any{
+		"component":  "media_download",
+		"media_type": e.mediaType,
+		"reason":     e.reason,
+		"retryable":  e.retryable,
+	}
+	if e.actual > 0 {
+		details["actual_bytes"] = e.actual
+	}
+	if e.limit > 0 {
+		details["max_bytes"] = e.limit
+	}
+	return details
+}
+
+// asrMediaDownloadError exposes an acquisition failure before ASR starts.
+// DownloadAssets records each attempted item in media.json so image downloads
+// can remain best-effort; ASR, however, requires at least one local audio or
+// video file and must not hide a failed media download behind an ASR fallback
+// error.
+func asrMediaDownloadError(items []map[string]any) error {
+	for _, item := range items {
+		mediaType := strings.ToLower(strings.TrimSpace(stringValue(item["type"])))
+		if (mediaType == "video" || mediaType == "audio") && strings.TrimSpace(stringValue(item["local"])) != "" {
+			return nil
+		}
+	}
+	for _, item := range items {
+		mediaType := strings.ToLower(strings.TrimSpace(stringValue(item["type"])))
+		if mediaType != "video" && mediaType != "audio" {
+			continue
+		}
+		if reason := strings.TrimSpace(stringValue(item["error"])); reason != "" {
+			return newMediaDownloadError(mediaType, reason)
+		}
+	}
+	return nil
+}
+
+func newMediaDownloadError(mediaType, rawReason string) *mediaDownloadError {
+	reason := strings.ToLower(strings.TrimSpace(rawReason))
+	err := &mediaDownloadError{mediaType: mediaType, reason: "unclassified", retryable: true}
+	switch {
+	case strings.Contains(reason, "exceeds max"):
+		err.reason = "size_limit_exceeded"
+		err.retryable = false
+		sizeSource := reason
+		if offset := strings.Index(sizeSource, "content length "); offset >= 0 {
+			sizeSource = sizeSource[offset+len("content length "):]
+		}
+		values := strings.FieldsFunc(sizeSource, func(r rune) bool { return r < '0' || r > '9' })
+		if len(values) >= 2 {
+			err.actual, _ = strconv.ParseInt(values[0], 10, 64)
+			err.limit, _ = strconv.ParseInt(values[1], 10, 64)
+		}
+	case strings.Contains(reason, "deadline exceeded"), strings.Contains(reason, "client.timeout"):
+		err.reason = "timeout"
+	case strings.Contains(reason, "http 429"):
+		err.reason = "rate_limited"
+	case strings.Contains(reason, "http 408"):
+		err.reason = "timeout"
+	case strings.Contains(reason, "media url missing"), strings.Contains(reason, "private/local"), strings.Contains(reason, "unsupported asset scheme"), strings.Contains(reason, "asset url missing host"):
+		err.reason = "invalid_media_url"
+		err.retryable = false
+	case strings.Contains(reason, "http 4"):
+		err.reason = "http_client_error"
+		err.retryable = false
+	case strings.Contains(reason, "http 5"):
+		err.reason = "http_server_error"
+	}
+	return err
 }
 
 func enrichASRFromDownloadedMedia(ctx context.Context, out map[string]any, cfg config.ASRConfig, downloaded []map[string]any, assetsDir string) bool {

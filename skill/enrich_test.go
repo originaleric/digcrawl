@@ -3,6 +3,7 @@ package skill
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -90,6 +91,210 @@ func TestEnhanceFailsExplicitASRWithoutDownloadedAudioOrVideo(t *testing.T) {
 	}, EnhanceOptions{CallID: "asr-no-media", IncludeASR: true})
 	if err == nil || !strings.Contains(err.Error(), "ASR unavailable: no downloaded video/audio asset was available for ASR") {
 		t.Fatalf("error=%v", err)
+	}
+}
+
+func TestEnhanceReturnsTypedMediaDownloadErrorBeforeASR(t *testing.T) {
+	enabled := true
+	err := Enhance(context.Background(), map[string]any{
+		"content_type": "video",
+		"media": []any{map[string]any{
+			"type": "video",
+			"url":  "http://127.0.0.1/video.mp4",
+		}},
+	}, config.SkillConfig{
+		Media: config.SkillMediaConfig{DownloadMedia: true, Dir: t.TempDir()},
+		ASR:   config.ASRConfig{Enabled: &enabled, Provider: "stub"},
+	}, EnhanceOptions{CallID: "asr-invalid-media-url", IncludeASR: true})
+	if err == nil || !strings.Contains(err.Error(), "media download failed") {
+		t.Fatalf("error=%v", err)
+	}
+	var typed interface {
+		ToolErrorCode() string
+		ToolErrorDetails() map[string]any
+	}
+	if !errors.As(err, &typed) || typed.ToolErrorCode() != mediaDownloadFailedCode {
+		t.Fatalf("typed error=%v", err)
+	}
+	details := typed.ToolErrorDetails()
+	if details["media_type"] != "video" || details["reason"] != "invalid_media_url" || details["retryable"] != false {
+		t.Fatalf("details=%+v", details)
+	}
+}
+
+func TestEnhanceASROnlySkipsPageImagesBeforeMediaFailure(t *testing.T) {
+	enabled := true
+	assetsDir := t.TempDir()
+	err := Enhance(context.Background(), map[string]any{
+		"content_type": "video",
+		"media": []any{
+			map[string]any{"type": "image", "url": "http://127.0.0.1/cover.jpg"},
+			map[string]any{"type": "video", "url": "http://127.0.0.1/video.mp4"},
+		},
+	}, config.SkillConfig{
+		Media: config.SkillMediaConfig{DownloadMedia: true, Dir: assetsDir},
+		ASR:   config.ASRConfig{Enabled: &enabled, Provider: "stub"},
+	}, EnhanceOptions{CallID: "asr-input-only", IncludeASR: true})
+	if err == nil || !strings.Contains(err.Error(), "media download failed") {
+		t.Fatalf("error=%v", err)
+	}
+	data, readErr := os.ReadFile(filepath.Join(assetsDir, "asr-input-only", "media.json"))
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	var manifest struct {
+		Downloaded []map[string]any `json:"downloaded"`
+	}
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	if len(manifest.Downloaded) != 1 || manifest.Downloaded[0]["type"] != "video" {
+		t.Fatalf("ASR-only download should skip image assets: %+v", manifest.Downloaded)
+	}
+}
+
+func TestEnhanceASRCandidateLimitBoundsFailedDownloads(t *testing.T) {
+	enabled := true
+	assetsDir := t.TempDir()
+	err := Enhance(context.Background(), map[string]any{
+		"content_type": "video",
+		"media": []any{
+			map[string]any{"type": "video", "url": "http://127.0.0.1/first.mp4"},
+			map[string]any{"type": "video", "url": "http://127.0.0.1/second.mp4"},
+			map[string]any{"type": "video", "url": "http://127.0.0.1/third.mp4"},
+		},
+	}, config.SkillConfig{
+		Media: config.SkillMediaConfig{DownloadMedia: true, Dir: assetsDir, MaxASRCandidates: 2},
+		ASR:   config.ASRConfig{Enabled: &enabled, Provider: "stub"},
+	}, EnhanceOptions{CallID: "asr-candidate-limit", IncludeASR: true})
+	if err == nil || !strings.Contains(err.Error(), "media download failed") {
+		t.Fatalf("error=%v", err)
+	}
+	data, readErr := os.ReadFile(filepath.Join(assetsDir, "asr-candidate-limit", "media.json"))
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	var manifest struct {
+		Downloaded []map[string]any `json:"downloaded"`
+	}
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	if len(manifest.Downloaded) != 2 {
+		t.Fatalf("candidate limit must bound attempts, manifest=%+v", manifest.Downloaded)
+	}
+}
+
+func TestEnhanceOCRAndASRShareCandidateLimit(t *testing.T) {
+	enabled := true
+	assetsDir := t.TempDir()
+	err := Enhance(context.Background(), map[string]any{
+		"content_type": "video",
+		"media": []any{
+			map[string]any{"type": "image", "url": "http://127.0.0.1/cover.jpg"},
+			map[string]any{"type": "video", "url": "http://127.0.0.1/first.mp4"},
+			map[string]any{"type": "video", "url": "http://127.0.0.1/second.mp4"},
+			map[string]any{"type": "video", "url": "http://127.0.0.1/third.mp4"},
+		},
+	}, config.SkillConfig{
+		Media: config.SkillMediaConfig{DownloadMedia: true, Dir: assetsDir, MaxASRCandidates: 2},
+		OCR:   config.OCRConfig{Enabled: &enabled, Provider: "stub"},
+		ASR:   config.ASRConfig{Enabled: &enabled, Provider: "stub"},
+	}, EnhanceOptions{CallID: "ocr-asr-candidate-limit", IncludeOCR: true, IncludeASR: true})
+	if err == nil || !strings.Contains(err.Error(), "media download failed") {
+		t.Fatalf("error=%v", err)
+	}
+	data, readErr := os.ReadFile(filepath.Join(assetsDir, "ocr-asr-candidate-limit", "media.json"))
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	var manifest struct {
+		Downloaded []map[string]any `json:"downloaded"`
+	}
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	var videoAttempts int
+	for _, item := range manifest.Downloaded {
+		if item["type"] == "video" {
+			videoAttempts++
+		}
+	}
+	if videoAttempts != 2 {
+		t.Fatalf("OCR must not bypass ASR candidate limit, manifest=%+v", manifest.Downloaded)
+	}
+}
+
+func TestDownloadAssetsASROnlySelectsOneCandidateAtATime(t *testing.T) {
+	out := map[string]any{
+		"media": []any{
+			map[string]any{"type": "image", "url": "http://127.0.0.1/cover.jpg"},
+			map[string]any{"type": "video", "url": "http://127.0.0.1/first.mp4"},
+			map[string]any{"type": "audio", "url": "http://127.0.0.1/second.mp3"},
+		},
+	}
+	for candidate, wantType := range []string{"video", "audio"} {
+		dir := t.TempDir()
+		if _, err := DownloadAssets(context.Background(), dir, out, AssetDownloadOptions{ASRInputOnly: true, ASRCandidateIndex: candidate}); err != nil {
+			t.Fatal(err)
+		}
+		data, err := os.ReadFile(filepath.Join(dir, "media.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var manifest struct {
+			Downloaded []map[string]any `json:"downloaded"`
+		}
+		if err := json.Unmarshal(data, &manifest); err != nil {
+			t.Fatal(err)
+		}
+		if len(manifest.Downloaded) != 1 || manifest.Downloaded[0]["type"] != wantType {
+			t.Fatalf("candidate=%d manifest=%+v", candidate, manifest.Downloaded)
+		}
+	}
+}
+
+func TestMediaDownloadErrorReportsSizeLimitWithoutRawURL(t *testing.T) {
+	err := asrMediaDownloadError([]map[string]any{
+		{"type": "image", "local": "001.jpg"},
+		{"type": "video", "error": "Get https://cdn.example/video.mp4?signature=secret: content length 35865567 exceeds max 10485760"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "size 35865567 bytes exceeds configured limit 10485760 bytes") || strings.Contains(err.Error(), "signature=secret") {
+		t.Fatalf("error=%v", err)
+	}
+	var typed *mediaDownloadError
+	if !errors.As(err, &typed) {
+		t.Fatalf("typed error=%v", err)
+	}
+	details := typed.ToolErrorDetails()
+	if details["reason"] != "size_limit_exceeded" || details["actual_bytes"] != int64(35865567) || details["max_bytes"] != int64(10485760) || details["retryable"] != false {
+		t.Fatalf("details=%+v", details)
+	}
+}
+
+func TestMediaDownloadErrorClassifiesRetryableHTTPStatuses(t *testing.T) {
+	for _, tc := range []struct {
+		raw    string
+		reason string
+	}{
+		{raw: "http 429", reason: "rate_limited"},
+		{raw: "http 408", reason: "timeout"},
+	} {
+		t.Run(tc.raw, func(t *testing.T) {
+			err := newMediaDownloadError("video", tc.raw)
+			details := err.ToolErrorDetails()
+			if details["reason"] != tc.reason || details["retryable"] != true {
+				t.Fatalf("details=%+v", details)
+			}
+		})
+	}
+}
+
+func TestMediaDownloadErrorClassifiesMissingURLAsInvalid(t *testing.T) {
+	err := newMediaDownloadError("video", "media URL missing")
+	details := err.ToolErrorDetails()
+	if details["reason"] != "invalid_media_url" || details["retryable"] != false {
+		t.Fatalf("details=%+v", details)
 	}
 }
 
