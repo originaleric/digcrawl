@@ -18,6 +18,7 @@ __pycache__/
 # Local planning notes
 /plans/
 /updates/
+/GITHUB_ACTIONS_LOCAL_RUNBOOK.md
 
 # IDE / OS
 .idea/
