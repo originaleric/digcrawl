@@ -242,6 +242,8 @@ ASR:
   Prompt: ""
   ResponseFormat: "verbose_json"
   TimeoutSec: 300
+  # Hard cap for a single local ASR operation. Increase for videos over about 15 minutes.
+  MaxTimeoutSec: 1800
   FFmpegPath: "${DIGCRAWL_FFMPEG_PATH}"
   # 本地 faster-whisper 模型缓存；生产环境应使用持久目录，doctor 会离线验证模型可加载。
   ModelCacheDir: "storage/digcrawl/asr_models"

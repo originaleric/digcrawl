@@ -1,13 +1,17 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 
 	"github.com/originaleric/digcrawl/internal/asr"
 )
@@ -18,6 +22,8 @@ func runASR(args []string) {
 		os.Exit(1)
 	}
 	switch args[0] {
+	case "setup":
+		runASRSetup(args[1:])
 	case "transcribe":
 		runASRTranscribe(args[1:])
 	case "help", "-h", "--help":
@@ -31,18 +37,71 @@ func runASR(args []string) {
 
 func printASRUsage() {
 	fmt.Fprintf(os.Stderr, `用法:
+  digcrawl asr setup [flags]
   digcrawl asr transcribe <video-or-audio-path> [flags]
 
 示例:
+  digcrawl asr setup --yes
   digcrawl asr transcribe ./video.mp4 --provider local --model small
   digcrawl asr transcribe ./video.mp4 --provider api --api-key "$OPENAI_API_KEY"
 
 `)
 }
 
+func runASRSetup(args []string) {
+	fs := flag.NewFlagSet("asr setup", flag.ExitOnError)
+	configPath := fs.String("config", "config/config.yaml", "path to config.yaml")
+	python := fs.String("python", "", "supported Python 3.9-3.13 interpreter used to create the isolated local runtime")
+	yes := fs.Bool("yes", false, "confirm downloading local ASR runtime dependencies")
+	_ = fs.Parse(args)
+	cfg, err := loadConfig(*configPath)
+	if err != nil {
+		log.Fatalf("load config: %v", err)
+	}
+	if !*yes {
+		confirmed, err := confirmASRSetup(os.Stdin, os.Stderr)
+		if err != nil {
+			log.Fatalf("confirm local ASR setup: %v", err)
+		}
+		if !confirmed {
+			log.Printf("local ASR setup cancelled")
+			return
+		}
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	// `asr setup` explicitly prepares the local provider. Keep the configured
+	// cache/ffmpeg paths, but do not make installation depend on whether the
+	// caller currently defaults to the API provider; a later transcribe command
+	// still chooses its provider through config or --provider.
+	asrCfg := cfg.ASR
+	asrCfg.Provider = "local"
+	runtimePython, err := asr.PrepareLocalRuntime(ctx, asrCfg, *python)
+	if err != nil {
+		log.Fatalf("prepare local ASR runtime: %v", err)
+	}
+	fmt.Fprintf(os.Stdout, "Local ASR runtime is ready: %s\n", runtimePython)
+	fmt.Fprintln(os.Stdout, "The first transcription may download the selected model into ASR.ModelCacheDir.")
+}
+
+func confirmASRSetup(in io.Reader, out io.Writer) (bool, error) {
+	fmt.Fprint(out, "Install faster-whisper into DigCrawl's isolated local ASR runtime? This may download Python packages but does not modify system Python. Continue? [y/N]: ")
+	line, err := bufio.NewReader(in).ReadString('\n')
+	if err != nil && err != io.EOF {
+		return false, err
+	}
+	switch strings.ToLower(strings.TrimSpace(line)) {
+	case "y", "yes":
+		return true, nil
+	default:
+		return false, nil
+	}
+}
+
 func runASRTranscribe(args []string) {
 	fs := flag.NewFlagSet("asr transcribe", flag.ExitOnError)
 	configPath := fs.String("config", "config/config.yaml", "path to config.yaml")
+	timeoutSec := fs.Int("timeout", 0, "operation timeout floor in seconds; 0 uses ASR.TimeoutSec, always bounded by ASR.MaxTimeoutSec")
 	provider := fs.String("provider", "", "ASR provider: api | local | stub")
 	apiKey := fs.String("api-key", "", "ASR API key override")
 	baseURL := fs.String("base-url", "", "ASR API base URL override")
@@ -62,6 +121,9 @@ func runASRTranscribe(args []string) {
 		log.Fatalf("load config: %v", err)
 	}
 	asrCfg := cfg.ASR
+	if *timeoutSec > 0 {
+		asrCfg.TimeoutSec = *timeoutSec
+	}
 	if *provider != "" {
 		asrCfg.Provider = *provider
 	}
@@ -108,6 +170,8 @@ func normalizeASRTranscribeArgs(args []string) []string {
 	flagNamesWithValue := map[string]struct{}{
 		"-config":           {},
 		"--config":          {},
+		"-timeout":          {},
+		"--timeout":         {},
 		"-provider":         {},
 		"--provider":        {},
 		"-api-key":          {},

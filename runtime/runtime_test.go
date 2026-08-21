@@ -38,20 +38,25 @@ func TestRecommendedCallTimeoutIncludesExplicitASRBudgets(t *testing.T) {
 		LocalBrowser: config.LocalBrowserConfig{TotalTimeoutSec: 90},
 		Skill: config.SkillConfig{
 			Media: config.SkillMediaConfig{TimeoutSec: 30},
-			ASR:   config.ASRConfig{TimeoutSec: 300},
+			ASR:   config.ASRConfig{TimeoutSec: 300, MaxTimeoutSec: 600},
 		},
+		ASR: config.ASRConfig{MaxTimeoutSec: 900},
 	}
 	plain := &protocol.ToolCall{Input: json.RawMessage(`{"url":"https://example.com"}`)}
 	if got := RecommendedCallTimeout(cfg, plain); got != 120*time.Second {
 		t.Fatalf("plain timeout=%s want 2m", got)
 	}
 	asr := &protocol.ToolCall{Input: json.RawMessage(`{"include_asr":true}`)}
-	if got := RecommendedCallTimeout(cfg, asr); got != 780*time.Second {
-		t.Fatalf("ASR timeout=%s want 13m", got)
+	if got := RecommendedCallTimeout(cfg, asr); got != 1380*time.Second {
+		t.Fatalf("ASR timeout=%s want 23m", got)
 	}
 	summary := &protocol.ToolCall{Input: json.RawMessage(`{"include_summary":true}`)}
-	if got := RecommendedCallTimeout(cfg, summary); got != 840*time.Second {
-		t.Fatalf("summary timeout=%s want 14m", got)
+	if got := RecommendedCallTimeout(cfg, summary); got != 1440*time.Second {
+		t.Fatalf("summary timeout=%s want 24m", got)
+	}
+	direct := &protocol.ToolCall{Tool: "asr.transcribe"}
+	if got := RecommendedCallTimeout(cfg, direct); got != 930*time.Second {
+		t.Fatalf("direct ASR timeout=%s want 15m30s", got)
 	}
 }
 
@@ -61,7 +66,7 @@ func TestRecommendedCallTimeoutUsesSkillMediaDefault(t *testing.T) {
 		Skill:        config.SkillConfig{ASR: config.ASRConfig{TimeoutSec: 300}},
 	}
 	call := &protocol.ToolCall{Input: json.RawMessage(`{"include_asr":true}`)}
-	if got, want := RecommendedCallTimeout(cfg, call), 960*time.Second; got != want {
+	if got, want := RecommendedCallTimeout(cfg, call), 3960*time.Second; got != want {
 		t.Fatalf("ASR timeout=%s want %s", got, want)
 	}
 }
@@ -69,10 +74,10 @@ func TestRecommendedCallTimeoutUsesSkillMediaDefault(t *testing.T) {
 func TestRecommendedCallTimeoutRespectsASRCandidateLimit(t *testing.T) {
 	cfg := &config.Config{Skill: config.SkillConfig{
 		Media: config.SkillMediaConfig{TimeoutSec: 30, MaxASRCandidates: 1},
-		ASR:   config.ASRConfig{TimeoutSec: 300},
+		ASR:   config.ASRConfig{TimeoutSec: 300, MaxTimeoutSec: 600},
 	}}
 	call := &protocol.ToolCall{Input: json.RawMessage(`{"include_asr":true}`)}
-	if got, want := RecommendedCallTimeout(cfg, call), 450*time.Second; got != want {
+	if got, want := RecommendedCallTimeout(cfg, call), 750*time.Second; got != want {
 		t.Fatalf("ASR timeout=%s want %s", got, want)
 	}
 }

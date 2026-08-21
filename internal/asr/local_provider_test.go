@@ -323,7 +323,7 @@ func TestLocalCommandFallbackUsesEmbeddedRunnerOutsideWorkingDirectory(t *testin
 	t.Setenv("PATH", binDir)
 	cacheDir := filepath.Join(t.TempDir(), "models")
 
-	command, args, err := localCommandFallback("faster-whisper", nil, cacheDir, nil, "")
+	command, args, err := localCommandFallback(context.Background(), "faster-whisper", nil, cacheDir, nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -338,6 +338,55 @@ func TestLocalCommandFallbackUsesEmbeddedRunnerOutsideWorkingDirectory(t *testin
 	}
 	if _, err := os.Stat(args[0]); err != nil {
 		t.Fatalf("embedded runner was not materialized: %v", err)
+	}
+}
+
+func TestLocalCommandFallbackPrefersPreparedRuntime(t *testing.T) {
+	cacheDir := filepath.Join(t.TempDir(), "models")
+	runtimePython := filepath.Join(localASRRuntimeDir(cacheDir), "bin", "python")
+	if err := os.MkdirAll(filepath.Dir(runtimePython), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	copyLocalASRTestCommand(t, runtimePython)
+
+	command, _, err := localCommandFallback(context.Background(), "faster-whisper", nil, cacheDir, nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if command != runtimePython {
+		t.Fatalf("fallback command=%q want prepared runtime %q", command, runtimePython)
+	}
+}
+
+func TestLocalCommandFallbackExplainsHowToInstallRuntime(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	_, _, err := localCommandFallback(context.Background(), "faster-whisper", nil, filepath.Join(t.TempDir(), "models"), nil, "")
+	if err == nil || !strings.Contains(err.Error(), "digcrawl asr setup") {
+		t.Fatalf("fallback error=%v, want setup guidance", err)
+	}
+}
+
+func TestFindPythonInterpreterPrefersPreparedRuntime(t *testing.T) {
+	cache := filepath.Join(t.TempDir(), "asr_models")
+	runtime := localASRRuntimeDir(cache)
+	python := filepath.Join(runtime, "bin", "python")
+	if err := os.MkdirAll(filepath.Dir(python), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	copyLocalASRTestCommand(t, python)
+	got, err := findPythonInterpreter(context.Background(), cache)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != python {
+		t.Fatalf("interpreter=%q want prepared runtime %q", got, python)
+	}
+}
+
+func TestLocalASRRuntimeDirIsSiblingOfModelCache(t *testing.T) {
+	cache := filepath.Join("storage", "digcrawl", "asr_models")
+	if got, want := localASRRuntimeDir(cache), filepath.Join("storage", "digcrawl", "asr_venv"); got != want {
+		t.Fatalf("runtime dir=%q want=%q", got, want)
 	}
 }
 

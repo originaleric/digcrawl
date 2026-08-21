@@ -137,6 +137,7 @@ func defaultSkillProfile(baseDir string) map[string]any {
 			"ASR": map[string]any{
 				"Enabled":       false,
 				"Provider":      "local",
+				"MaxTimeoutSec": 1800,
 				"ModelCacheDir": filepath.Join(baseDir, "asr_models"),
 			},
 		},

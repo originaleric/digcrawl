@@ -74,6 +74,8 @@ Skill:
     Prompt: ""
     ResponseFormat: "verbose_json"
     TimeoutSec: 300
+    # Hard cap for one local ASR operation; raise it for longer videos.
+    MaxTimeoutSec: 1800
     FFmpegPath: "${DIGCRAWL_FFMPEG_PATH}"
     # Persistent directory containing locally prepared Whisper model files.
     # Relative paths are resolved from this profile's directory, never cwd.

@@ -8,6 +8,8 @@ import (
 	"github.com/originaleric/digcrawl/protocol"
 )
 
+const runtimeCallOverheadSeconds = 30
+
 // RecommendedCallTimeout returns the operational budget for a browser-backed
 // tool call. Explicit video enrichment needs more than Runtime's generic
 // request budget: page readiness, media download, and local ASR are sequential
@@ -20,7 +22,8 @@ func RecommendedCallTimeout(cfg *config.Config, call *protocol.ToolCall) time.Du
 	browserSeconds := 90
 	mediaSeconds := config.SkillMediaConfig{}.TimeoutSecOrDefault()
 	maxASRCandidates := config.SkillMediaConfig{}.MaxASRCandidatesOrDefault()
-	asrSeconds := 300
+	skillASRSeconds := 1800
+	directASRSeconds := 1800
 	summarySeconds := 60
 	if cfg != nil {
 		if cfg.LocalBrowser.TotalTimeoutSec > 0 {
@@ -28,11 +31,21 @@ func RecommendedCallTimeout(cfg *config.Config, call *protocol.ToolCall) time.Du
 		}
 		mediaSeconds = cfg.Skill.Media.TimeoutSecOrDefault()
 		maxASRCandidates = cfg.Skill.Media.MaxASRCandidatesOrDefault()
-		asrSeconds = cfg.Skill.ASR.TimeoutSecOrDefault()
+		skillASRSeconds = cfg.Skill.ASR.MaxTimeoutSecOrDefault()
+		directASRSeconds = cfg.ASR.MaxTimeoutSecOrDefault()
 		summarySeconds = cfg.Skill.Summary.TimeoutSecOrDefault()
 	}
 
-	seconds := browserSeconds + 30
+	if call != nil && call.Tool == "asr.transcribe" {
+		// Runtime's context begins before the ASR handler establishes its own
+		// operation deadline. Reserve the same dispatch margin used by browser
+		// calls so an operation that legitimately consumes its full ASR cap is
+		// not rejected merely because the two clocks start a few milliseconds
+		// apart.
+		return time.Duration(directASRSeconds+runtimeCallOverheadSeconds) * time.Second
+	}
+
+	seconds := browserSeconds + runtimeCallOverheadSeconds
 	var input struct {
 		IncludeASR     bool `json:"include_asr"`
 		IncludeSummary bool `json:"include_summary"`
@@ -45,7 +58,7 @@ func RecommendedCallTimeout(cfg *config.Config, call *protocol.ToolCall) time.Du
 	// finite ASR candidate budget as IncludeASR; text-only summaries return
 	// sooner because they never enter that phase.
 	if input.IncludeASR || input.IncludeSummary {
-		seconds += maxASRCandidates * (mediaSeconds + asrSeconds)
+		seconds += maxASRCandidates * (mediaSeconds + skillASRSeconds)
 	}
 	if input.IncludeSummary {
 		seconds += summarySeconds
