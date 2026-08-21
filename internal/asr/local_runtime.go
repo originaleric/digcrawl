@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -86,7 +87,12 @@ func PrepareLocalRuntime(ctx context.Context, cfg config.ASRConfig, bootstrapPyt
 }
 
 func isExistingRuntimePublishConflict(renameErr error, runtimeDir string) bool {
-	if !errors.Is(renameErr, fs.ErrExist) {
+	// Unix reports a destination directory as already existing. Windows reports
+	// the same directory-to-directory publish conflict as access denied. Limit
+	// the latter exception to Windows and still require an existing directory,
+	// so unrelated permission or I/O failures can never authorize replacement.
+	isKnownConflict := errors.Is(renameErr, fs.ErrExist) || (runtime.GOOS == "windows" && errors.Is(renameErr, fs.ErrPermission))
+	if !isKnownConflict {
 		return false
 	}
 	info, err := os.Lstat(runtimeDir)

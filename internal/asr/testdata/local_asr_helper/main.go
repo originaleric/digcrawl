@@ -38,7 +38,7 @@ func main() {
 	case "ffprobe":
 		fmt.Print("426.926500\n")
 	case "slow-transcript-with-probe":
-		if filepath.Base(os.Args[0]) == "ffprobe" {
+		if strings.EqualFold(strings.TrimSuffix(filepath.Base(os.Args[0]), ".exe"), "ffprobe") {
 			fmt.Print("426.926500\n")
 			return
 		}
