@@ -11,7 +11,7 @@ import (
 
 func TestLocalASRRuntimeReadyHonorsCallerDeadline(t *testing.T) {
 	runtimeDir := filepath.Join(t.TempDir(), "asr_venv")
-	python := filepath.Join(runtimeDir, "bin", "python")
+	python := localASRTestRuntimePythonPath(runtimeDir)
 	if err := os.MkdirAll(filepath.Dir(python), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -45,7 +45,7 @@ func TestLocalASRRuntimeHealthCheckContextBoundsBackgroundCaller(t *testing.T) {
 func TestLocalProviderRuntimeHealthCheckHonorsTranscriptionDeadline(t *testing.T) {
 	dir := t.TempDir()
 	runtimeDir := localASRRuntimeDir(filepath.Join(dir, "models"))
-	python := filepath.Join(runtimeDir, "bin", "python")
+	python := localASRTestRuntimePythonPath(runtimeDir)
 	if err := os.MkdirAll(filepath.Dir(python), 0o755); err != nil {
 		t.Fatal(err)
 	}

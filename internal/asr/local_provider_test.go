@@ -67,6 +67,24 @@ func copyLocalASRTestCommand(t *testing.T, path string) {
 	}
 }
 
+// localASRTestExecutablePath keeps external-command fixtures executable on
+// every CI target. Windows does not execute the extension-less helper names
+// used by Unix tests, whereas production resolves the corresponding .exe
+// names inside a virtual environment.
+func localASRTestExecutablePath(dir, name string) string {
+	if runtime.GOOS == "windows" && filepath.Ext(name) == "" {
+		name += ".exe"
+	}
+	return filepath.Join(dir, name)
+}
+
+func localASRTestRuntimePythonPath(runtimeDir string) string {
+	if runtime.GOOS == "windows" {
+		return filepath.Join(runtimeDir, "Scripts", "python.exe")
+	}
+	return filepath.Join(runtimeDir, "bin", "python")
+}
+
 func TestLocalProviderParsesStdoutJSON(t *testing.T) {
 	dir := t.TempDir()
 	audio := filepath.Join(dir, "audio.wav")
@@ -280,11 +298,7 @@ func TestCheckAvailableRejectsMissingLocalDependencies(t *testing.T) {
 
 func TestCheckAvailableRunsBundledFasterWhisperPreflight(t *testing.T) {
 	dir := t.TempDir()
-	pythonName := "python"
-	if runtime.GOOS == "windows" {
-		pythonName = "python.exe"
-	}
-	copyLocalASRTestCommand(t, filepath.Join(dir, pythonName))
+	copyLocalASRTestCommand(t, localASRTestExecutablePath(dir, "python"))
 	t.Setenv("DIGCRAWL_TEST_LOCAL_ASR_MODE", "preflight-ok")
 	t.Setenv("PATH", dir)
 	if err := CheckAvailable(config.ASRConfig{
@@ -314,11 +328,7 @@ func TestCheckAvailableReportsBundledFasterWhisperPreflightFailure(t *testing.T)
 func TestLocalCommandFallbackUsesEmbeddedRunnerOutsideWorkingDirectory(t *testing.T) {
 	t.Chdir(t.TempDir())
 	binDir := t.TempDir()
-	pythonName := "python"
-	if runtime.GOOS == "windows" {
-		pythonName = "python.exe"
-	}
-	python := filepath.Join(binDir, pythonName)
+	python := localASRTestExecutablePath(binDir, "python")
 	copyLocalASRTestCommand(t, python)
 	t.Setenv("PATH", binDir)
 	cacheDir := filepath.Join(t.TempDir(), "models")
@@ -343,7 +353,7 @@ func TestLocalCommandFallbackUsesEmbeddedRunnerOutsideWorkingDirectory(t *testin
 
 func TestLocalCommandFallbackPrefersPreparedRuntime(t *testing.T) {
 	cacheDir := filepath.Join(t.TempDir(), "models")
-	runtimePython := filepath.Join(localASRRuntimeDir(cacheDir), "bin", "python")
+	runtimePython := localASRTestRuntimePythonPath(localASRRuntimeDir(cacheDir))
 	if err := os.MkdirAll(filepath.Dir(runtimePython), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -369,7 +379,7 @@ func TestLocalCommandFallbackExplainsHowToInstallRuntime(t *testing.T) {
 func TestFindPythonInterpreterPrefersPreparedRuntime(t *testing.T) {
 	cache := filepath.Join(t.TempDir(), "asr_models")
 	runtime := localASRRuntimeDir(cache)
-	python := filepath.Join(runtime, "bin", "python")
+	python := localASRTestRuntimePythonPath(runtime)
 	if err := os.MkdirAll(filepath.Dir(python), 0o755); err != nil {
 		t.Fatal(err)
 	}
