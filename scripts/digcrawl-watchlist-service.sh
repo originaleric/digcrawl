@@ -167,13 +167,27 @@ build_binary() {
     return
   fi
   mkdir -p "$(dirname "${BIN_PATH}")"
+  mkdir -p "${DIGCRAWL_BUILD_GOCACHE}" "${DIGCRAWL_BUILD_GOMODCACHE}"
   local go_bin
+  local build_log
   go_bin="${GO:-go}"
   local build_args=()
   if [[ -n "${DIGCRAWL_BUILD_TAGS}" ]]; then
     build_args+=("-tags" "${DIGCRAWL_BUILD_TAGS}")
   fi
-  GOCACHE="${DIGCRAWL_BUILD_GOCACHE}" GOMODCACHE="${DIGCRAWL_BUILD_GOMODCACHE}" "${go_bin}" build "${build_args[@]}" -o "${BIN_PATH}" ./cmd/digcrawl
+  build_log="$(mktemp "${DIGCRAWL_BUILD_GOCACHE%/}/digcrawl-build.XXXXXX")" || fail "failed to create Go build log"
+  if ! GOCACHE="${DIGCRAWL_BUILD_GOCACHE}" GOMODCACHE="${DIGCRAWL_BUILD_GOMODCACHE}" "${go_bin}" build "${build_args[@]}" -o "${BIN_PATH}" ./cmd/digcrawl >"${build_log}" 2>&1; then
+    cat "${build_log}" >&2
+    rm -f "${build_log}"
+    fail "failed to build digcrawl binary: ${BIN_PATH}"
+  fi
+
+  # Apple's compiler wrappers can emit this diagnostic when their optional
+  # xcrun lookup cache cannot be persisted. A successful `go build` has
+  # produced a valid binary, so retain every other diagnostic but omit this
+  # misleading non-fatal line from normal installation output.
+  awk '!/^(cc|clang|ar): error: couldn\x27t create cache file .+\/xcrun_db-[^\x27]+\x27 \(errno=Operation not permitted\)$/' "${build_log}" >&2
+  rm -f "${build_log}"
   [[ -x "${BIN_PATH}" ]] || fail "failed to build digcrawl binary: ${BIN_PATH}"
 }
 

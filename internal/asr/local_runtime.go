@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/originaleric/digcrawl/config"
@@ -51,8 +52,8 @@ func PrepareLocalRuntime(ctx context.Context, cfg config.ASRConfig, bootstrapPyt
 	if output, err := exec.CommandContext(ctx, python, "-m", "pip", "install", "--upgrade", "pip", "faster-whisper").CombinedOutput(); err != nil {
 		return "", fmt.Errorf("install local ASR runtime dependencies: %w", commandOutputError(output, err))
 	}
-	if _, ok := localASRRuntimeReady(ctx, candidate); !ok {
-		return "", fmt.Errorf("install local ASR runtime dependencies: faster-whisper import check failed")
+	if err := localASRImportCheck(ctx, python); err != nil {
+		return "", fmt.Errorf("install local ASR runtime dependencies: %w", err)
 	}
 	if err := os.Rename(candidate, runtimeDir); err == nil {
 		return localASRRuntimePython(runtimeDir), nil
@@ -61,14 +62,21 @@ func PrepareLocalRuntime(ctx context.Context, cfg config.ASRConfig, bootstrapPyt
 		// I/O) as evidence that the target is safe to remove.
 		return "", fmt.Errorf("publish local ASR runtime: %w", err)
 	}
-	if python, ok := localASRRuntimeReady(ctx, runtimeDir); ok {
-		return python, nil
-	}
-	if localASRRuntimePython(runtimeDir) != "" {
-		// A runtime with an interpreter but a failed import may be temporarily
-		// unavailable (or may contain state a user needs to inspect). Preserve it
-		// rather than turning a failed health check into data deletion.
-		return "", fmt.Errorf("existing local ASR runtime is not ready; preserve %s, verify no setup is running, then remove that runtime directory and rerun `digcrawl asr setup`", runtimeDir)
+	if existingPython := localASRRuntimePython(runtimeDir); existingPython != "" {
+		if err := localASRImportCheck(ctx, existingPython); err == nil {
+			// Another setup invocation finished while this one prepared its
+			// candidate. Its published runtime is now the source of truth.
+			return existingPython, nil
+		}
+		// The runtime may have been replaced or removed while its health check
+		// was running. Re-read it before deciding whether preservation is safe.
+		if currentPython := localASRRuntimePython(runtimeDir); currentPython != "" {
+			if err := localASRImportCheck(ctx, currentPython); err == nil {
+				return currentPython, nil
+			} else {
+				return "", fmt.Errorf("existing local ASR runtime is not ready; preserve %s, verify no setup is running, then remove that runtime directory and rerun `digcrawl asr setup`: %w", runtimeDir, err)
+			}
+		}
 	}
 	// Older DigCrawl versions built directly in runtimeDir. If such an install
 	// was interrupted before its interpreter was created, replace that known
@@ -87,16 +95,23 @@ func PrepareLocalRuntime(ctx context.Context, cfg config.ASRConfig, bootstrapPyt
 }
 
 func isExistingRuntimePublishConflict(renameErr error, runtimeDir string) bool {
-	// Unix reports a destination directory as already existing. Windows reports
-	// the same directory-to-directory publish conflict as access denied. Limit
-	// the latter exception to Windows and still require an existing directory,
-	// so unrelated permission or I/O failures can never authorize replacement.
-	isKnownConflict := errors.Is(renameErr, fs.ErrExist) || (runtime.GOOS == "windows" && errors.Is(renameErr, fs.ErrPermission))
-	if !isKnownConflict {
+	// Follow a compatibility symlink here. It must be preserved just like a
+	// directory: the caller will health-check its target and never remove it
+	// automatically.
+	info, err := os.Stat(runtimeDir)
+	if err != nil || !info.IsDir() {
 		return false
 	}
-	info, err := os.Lstat(runtimeDir)
-	return err == nil && info.IsDir()
+	// Unix reports a destination directory as already existing. Windows reports
+	// the same directory-to-directory publish conflict as access denied. macOS
+	// reports ENOTDIR when that destination is a symlink to a directory. Limit
+	// every exception to an existing directory target, so unrelated permission
+	// or I/O failures can never authorize replacement.
+	if errors.Is(renameErr, fs.ErrExist) || (runtime.GOOS == "windows" && errors.Is(renameErr, fs.ErrPermission)) {
+		return true
+	}
+	linkInfo, lstatErr := os.Lstat(runtimeDir)
+	return lstatErr == nil && linkInfo.Mode()&os.ModeSymlink != 0 && errors.Is(renameErr, syscall.ENOTDIR)
 }
 
 func localASRRuntimeDir(modelCacheDir string) string {
@@ -128,9 +143,22 @@ func localASRRuntimeReady(ctx context.Context, runtimeDir string) (string, bool)
 }
 
 func localASRImportReady(ctx context.Context, python string) bool {
+	return localASRImportCheck(ctx, python) == nil
+}
+
+// localASRImportCheck preserves the interpreter's diagnostics for setup while
+// keeping readiness checks cheap for callers that only need a boolean answer.
+func localASRImportCheck(ctx context.Context, python string) error {
 	checkCtx, cancel := localASRRuntimeHealthCheckContext(ctx)
 	defer cancel()
-	return exec.CommandContext(checkCtx, python, "-c", "import faster_whisper").Run() == nil
+	output, err := exec.CommandContext(checkCtx, python, "-c", "import faster_whisper").CombinedOutput()
+	if err == nil {
+		return nil
+	}
+	if errors.Is(checkCtx.Err(), context.DeadlineExceeded) {
+		return fmt.Errorf("faster-whisper import check timed out after %s", localASRRuntimeHealthCheckTimeout)
+	}
+	return fmt.Errorf("faster-whisper import check failed: %w", commandOutputError(output, err))
 }
 
 func localASRRuntimeHealthCheckContext(parent context.Context) (context.Context, context.CancelFunc) {

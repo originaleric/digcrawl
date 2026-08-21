@@ -76,6 +76,7 @@ func runASRSetup(args []string) {
 	// still chooses its provider through config or --provider.
 	asrCfg := cfg.ASR
 	asrCfg.Provider = "local"
+	fmt.Fprintln(os.Stderr, "Checking or preparing the isolated local ASR runtime. Dependency installation may take several minutes when needed...")
 	runtimePython, err := asr.PrepareLocalRuntime(ctx, asrCfg, *python)
 	if err != nil {
 		log.Fatalf("prepare local ASR runtime: %v", err)

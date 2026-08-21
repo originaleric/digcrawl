@@ -393,6 +393,28 @@ func TestFindPythonInterpreterPrefersPreparedRuntime(t *testing.T) {
 	}
 }
 
+func TestFindPythonInterpreterReportsPreparedRuntimeImportFailure(t *testing.T) {
+	cache := filepath.Join(t.TempDir(), "asr_models")
+	runtime := localASRRuntimeDir(cache)
+	python := localASRTestRuntimePythonPath(runtime)
+	if err := os.MkdirAll(filepath.Dir(python), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	copyLocalASRTestCommand(t, python)
+	t.Setenv("DIGCRAWL_TEST_LOCAL_ASR_MODE", "runtime-health-fail")
+
+	_, err := findPythonInterpreter(context.Background(), cache)
+	if err == nil {
+		t.Fatal("expected prepared runtime health check failure")
+	}
+	if got := err.Error(); !strings.Contains(got, "faster_whisper import failed: missing dependency") {
+		t.Fatalf("prepared runtime diagnostics were discarded: %v", err)
+	}
+	if got := err.Error(); !strings.Contains(got, "digcrawl asr setup") {
+		t.Fatalf("prepared runtime failure omitted recovery guidance: %v", err)
+	}
+}
+
 func TestLocalASRRuntimeDirIsSiblingOfModelCache(t *testing.T) {
 	cache := filepath.Join("storage", "digcrawl", "asr_models")
 	if got, want := localASRRuntimeDir(cache), filepath.Join("storage", "digcrawl", "asr_venv"); got != want {

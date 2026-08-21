@@ -4,14 +4,32 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 )
 
 func main() {
+	args := os.Args[1:]
+	if len(args) == 3 && args[0] == "-m" && args[1] == "venv" {
+		createVenv(args[2])
+		return
+	}
+	if os.Getenv("DIGCRAWL_TEST_LOCAL_ASR_MODE") == "runtime-existing-health-fail" && len(args) >= 2 && args[0] == "-m" && args[1] == "pip" {
+		return
+	}
 	if len(os.Args) > 1 && os.Args[1] == "-c" {
-		if os.Getenv("DIGCRAWL_TEST_LOCAL_ASR_MODE") == "runtime-health-hang" {
+		switch os.Getenv("DIGCRAWL_TEST_LOCAL_ASR_MODE") {
+		case "runtime-health-hang":
 			select {}
+		case "runtime-health-fail":
+			fmt.Fprintln(os.Stderr, "faster_whisper import failed: missing dependency")
+			os.Exit(2)
+		case "runtime-existing-health-fail":
+			if strings.Contains(args[1], "import faster_whisper") && strings.Contains(filepath.Clean(os.Args[0]), string(filepath.Separator)+"asr_venv"+string(filepath.Separator)) {
+				fmt.Fprintln(os.Stderr, "faster_whisper import failed: existing runtime is broken")
+				os.Exit(2)
+			}
 		}
 		return
 	}
@@ -50,5 +68,33 @@ func main() {
 	default:
 		fmt.Fprintf(os.Stderr, "unexpected local ASR test helper mode %q\n", os.Getenv("DIGCRAWL_TEST_LOCAL_ASR_MODE"))
 		os.Exit(64)
+	}
+}
+
+func createVenv(dir string) {
+	pythonDir := "bin"
+	pythonName := "python"
+	if runtime.GOOS == "windows" {
+		pythonDir = "Scripts"
+		pythonName = "python.exe"
+	}
+	python := filepath.Join(dir, pythonDir, pythonName)
+	if err := os.MkdirAll(filepath.Dir(python), 0o755); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
+	}
+	self, err := os.Executable()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
+	}
+	data, err := os.ReadFile(self)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
+	}
+	if err := os.WriteFile(python, data, 0o700); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
 	}
 }
