@@ -6,7 +6,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"time"
 )
 
 // AudioExtractOptions controls ffmpeg audio extraction.
@@ -83,4 +85,59 @@ func ExtractAudio(ctx context.Context, inputPath string, opts AudioExtractOption
 		return ExtractedAudio{}, fmt.Errorf("ffmpeg extract audio: %s", msg)
 	}
 	return ExtractedAudio{Path: outputPath, SampleRate: sampleRate, Format: "wav"}, nil
+}
+
+// ProbeDuration returns the container duration reported by ffprobe. Callers
+// can safely fall back to their static budget when probing is unavailable.
+func ProbeDuration(ctx context.Context, inputPath, ffmpegPath string) (time.Duration, error) {
+	inputPath = strings.TrimSpace(inputPath)
+	if inputPath == "" {
+		return 0, fmt.Errorf("input media path is required")
+	}
+	if _, err := os.Stat(inputPath); err != nil {
+		return 0, fmt.Errorf("stat media file: %w", err)
+	}
+	probe := ffprobePath(ffmpegPath)
+	output, err := exec.CommandContext(ctx, probe,
+		"-v", "error",
+		"-show_entries", "format=duration",
+		"-of", "default=nokey=1:noprint_wrappers=1",
+		inputPath,
+	).CombinedOutput()
+	if err != nil {
+		message := strings.TrimSpace(string(output))
+		if message == "" {
+			message = err.Error()
+		}
+		return 0, fmt.Errorf("ffprobe media duration: %s", message)
+	}
+	return parseProbeDuration(string(output))
+}
+
+func ffprobePath(ffmpegPath string) string {
+	ffmpegPath = strings.TrimSpace(ffmpegPath)
+	if ffmpegPath == "" || ffmpegPath == "ffmpeg" || ffmpegPath == "ffmpeg.exe" {
+		return "ffprobe"
+	}
+	base := strings.ToLower(filepath.Base(ffmpegPath))
+	if base == "ffmpeg" || base == "ffmpeg.exe" {
+		name := "ffprobe"
+		if strings.HasSuffix(base, ".exe") {
+			name += ".exe"
+		}
+		return filepath.Join(filepath.Dir(ffmpegPath), name)
+	}
+	return "ffprobe"
+}
+
+func parseProbeDuration(output string) (time.Duration, error) {
+	seconds, err := strconv.ParseFloat(strings.TrimSpace(output), 64)
+	if err != nil || seconds <= 0 {
+		return 0, fmt.Errorf("invalid ffprobe duration %q", strings.TrimSpace(output))
+	}
+	duration := time.Duration(seconds * float64(time.Second))
+	if duration <= 0 {
+		return 0, fmt.Errorf("invalid ffprobe duration %q", strings.TrimSpace(output))
+	}
+	return duration, nil
 }

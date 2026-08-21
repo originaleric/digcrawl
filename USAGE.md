@@ -279,7 +279,8 @@ OCR 启用后会在平台工具、通用浏览器读取和 Collect 导出中统�
 | `Language` | 可选语言代码 |
 | `Prompt` | 可选转写提示词，API provider 会透传 |
 | `ResponseFormat` | API provider response format，支持 `verbose_json`、`json`、`text`、`srt`、`vtt`，默认 `verbose_json` |
-| `TimeoutSec` | ffmpeg + ASR 总超时 |
+| `TimeoutSec` | ffprobe、ffmpeg 与 ASR 共享的总超时下限；本地 ASR 会取 `max(该值, 媒体时长×2+20 秒)`，长视频可用命令的 `--timeout` 仅覆盖本次运行 |
+| `MaxTimeoutSec` | 单次 ASR 的硬上限，默认 `1800` 秒；Runtime/MCP 会据此预留任务时间。若时长公式超过该值，会明确失败而非被外层 deadline 静默取消。 |
 | `FFmpegPath` | ffmpeg 可执行文件路径，默认 `ffmpeg` |
 | `TempDir` | 抽取音频的临时目录，空则使用系统临时目录 |
 | `ModelCacheDir` | 本地 ASR 模型的唯一持久缓存目录；`doctor` 会以离线模式验证所选模型已可加载。旧版未配置该字段的 Skill 会在首次启动时原地复用旧 `HF_HOME`（或旧 cwd 下的 `.cache/huggingface`），并在新目录记录兼容状态，不移动模型、不依赖后续 cwd，也无需重新下载。显式配置该字段时该目录完全由用户负责。 |
@@ -298,6 +299,7 @@ ASR:
   Model: ""
   ResponseFormat: "verbose_json"
   TimeoutSec: 300
+  MaxTimeoutSec: 1800
   FFmpegPath: "ffmpeg"
 ```
 
@@ -704,7 +706,8 @@ digcrawl collect <url>         # 采集单个 URL
 digcrawl collect inbox         # 处理收件箱
 digcrawl browser login         # 平台扫码/交互登录并保存 Cookie
 digcrawl browser check         # 检查平台会话，可选试读
-digcrawl asr transcribe        # ffmpeg 抽音频并转写
+digcrawl asr setup --yes        # 安装隔离的本地 faster-whisper 运行时（不修改系统 Python）
+digcrawl asr transcribe <file> --timeout 1200 # ffmpeg 抽音频并转写任意本地视频/音频
 digcrawl watchlist run         # 执行 watchlist 监控、摘要和通知
 digcrawl watchlist serve       # 常驻调度，到期执行不同周期的 Tasks / Watchlist items
 scripts/digcrawl-watchlist-service.sh install|rebuild|rebuild-restart|start|stop|restart|status|logs|uninstall

@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/originaleric/digcrawl/internal/testutil"
 )
@@ -35,6 +36,24 @@ func TestExtractAudioUsesFFmpegCommand(t *testing.T) {
 	}
 	if string(data) != "wav" {
 		t.Fatalf("unexpected audio payload %q", data)
+	}
+}
+
+func TestParseProbeDuration(t *testing.T) {
+	got, err := parseProbeDuration("426.926500\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := 426*time.Second + 926500*time.Microsecond; got != want {
+		t.Fatalf("duration=%s want %s", got, want)
+	}
+}
+
+func TestParseProbeDurationRejectsInvalidValues(t *testing.T) {
+	for _, raw := range []string{"", "N/A", "0", "-1"} {
+		if _, err := parseProbeDuration(raw); err == nil {
+			t.Fatalf("parseProbeDuration(%q) unexpectedly succeeded", raw)
+		}
 	}
 }
 

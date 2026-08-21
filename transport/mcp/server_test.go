@@ -22,8 +22,8 @@ func TestMCPTimeoutMatchesCollectForReadAndExtendsExplicitASR(t *testing.T) {
 	if got := mcpTimeoutMs(browserCfg, skillCfg, map[string]any{}); got != 120000 {
 		t.Fatalf("normal read timeout=%d want 120000", got)
 	}
-	if got := mcpTimeoutMs(browserCfg, skillCfg, map[string]any{"include_asr": true}); got != 780000 {
-		t.Fatalf("ASR read timeout=%d want 780000", got)
+	if got := mcpTimeoutMs(browserCfg, skillCfg, map[string]any{"include_asr": true}); got != 3780000 {
+		t.Fatalf("ASR read timeout=%d want 3780000", got)
 	}
 }
 

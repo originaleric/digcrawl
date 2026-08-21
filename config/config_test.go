@@ -544,6 +544,12 @@ func TestASRConfigProviderAwareModelDefault(t *testing.T) {
 	if SupportedASRResponseFormat("xml") {
 		t.Fatal("unexpected xml response format support")
 	}
+	if got := (ASRConfig{}).MaxTimeoutSecOrDefault(); got != 1800 {
+		t.Fatalf("default MaxTimeoutSec=%d want 1800", got)
+	}
+	if got := (ASRConfig{MaxTimeoutSec: 2400}).MaxTimeoutSecOrDefault(); got != 2400 {
+		t.Fatalf("configured MaxTimeoutSec=%d want 2400", got)
+	}
 
 	cfg := Config{
 		ASR: ASRConfig{
@@ -556,6 +562,9 @@ func TestASRConfigProviderAwareModelDefault(t *testing.T) {
 	}
 	if got := cfg.ASR.ModelOrDefault(); got != "small" {
 		t.Fatalf("merged local ModelOrDefault=%q", got)
+	}
+	if got := cfg.ASR.MaxTimeoutSecOrDefault(); got != 1800 {
+		t.Fatalf("merged MaxTimeoutSec=%d want 1800", got)
 	}
 }
 

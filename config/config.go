@@ -369,9 +369,12 @@ type ASRConfig struct {
 	Prompt         string `yaml:"Prompt" json:"Prompt,omitempty"`
 	ResponseFormat string `yaml:"ResponseFormat" json:"ResponseFormat,omitempty"`
 	TimeoutSec     int    `yaml:"TimeoutSec" json:"TimeoutSec,omitempty"`
-	FFmpegPath     string `yaml:"FFmpegPath" json:"FFmpegPath,omitempty"`
-	TempDir        string `yaml:"TempDir" json:"TempDir,omitempty"`
-	ModelCacheDir  string `yaml:"ModelCacheDir" json:"ModelCacheDir,omitempty"`
+	// MaxTimeoutSec is the hard upper bound for one ASR operation. It gives
+	// Runtime a finite envelope while TimeoutSec remains the local ASR floor.
+	MaxTimeoutSec int    `yaml:"MaxTimeoutSec" json:"MaxTimeoutSec,omitempty"`
+	FFmpegPath    string `yaml:"FFmpegPath" json:"FFmpegPath,omitempty"`
+	TempDir       string `yaml:"TempDir" json:"TempDir,omitempty"`
+	ModelCacheDir string `yaml:"ModelCacheDir" json:"ModelCacheDir,omitempty"`
 	// LegacyModelCacheDirs is runtime-only compatibility metadata populated for
 	// old Skill profiles that predate ModelCacheDir. It is deliberately not
 	// persisted: users retain one canonical ModelCacheDir while the ASR runtime
@@ -451,6 +454,16 @@ func (c ASRConfig) TimeoutSecOrDefault() int {
 		return c.TimeoutSec
 	}
 	return 300
+}
+
+// MaxTimeoutSecOrDefault returns the hard upper bound for one ASR operation.
+// It deliberately has a larger default than TimeoutSec so local media can use
+// its duration-derived budget without being silently cut off by Runtime.
+func (c ASRConfig) MaxTimeoutSecOrDefault() int {
+	if c.MaxTimeoutSec > 0 {
+		return c.MaxTimeoutSec
+	}
+	return 1800
 }
 
 // FFmpegPathOrDefault returns ffmpeg executable path.
@@ -1313,6 +1326,7 @@ func init() {
 				BaseURL:         "https://api.openai.com/v1",
 				ResponseFormat:  "verbose_json",
 				TimeoutSec:      300,
+				MaxTimeoutSec:   1800,
 				FFmpegPath:      "ffmpeg",
 				ModelCacheDir:   filepath.Join("storage", "digcrawl", "asr_models"),
 				AudioSampleRate: 16000,
@@ -2000,6 +2014,9 @@ func mergeDefaults(cfg *Config) {
 	}
 	if cfg.ASR.TimeoutSec == 0 {
 		cfg.ASR.TimeoutSec = defaultCfg.ASR.TimeoutSec
+	}
+	if cfg.ASR.MaxTimeoutSec == 0 {
+		cfg.ASR.MaxTimeoutSec = defaultCfg.ASR.MaxTimeoutSec
 	}
 	if cfg.ASR.FFmpegPath == "" {
 		cfg.ASR.FFmpegPath = defaultCfg.ASR.FFmpegPath

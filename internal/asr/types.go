@@ -2,6 +2,7 @@ package asr
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -55,6 +56,12 @@ type provider interface {
 	Model() string
 }
 
+const (
+	localASRDurationMultiplier = 2
+	localASRDurationSafety     = 20 * time.Second
+	localASRDurationProbeLimit = 10 * time.Second
+)
+
 // CheckAvailable verifies the local prerequisites that Transcribe will need
 // before a caller persists an ASR opt-in. The bundled faster-whisper runner is
 // checked against the configured cache in offline mode, so this never downloads
@@ -72,8 +79,19 @@ func CheckAvailable(cfg config.ASRConfig) error {
 	if !ok {
 		return nil
 	}
+	// Keep readiness behavior aligned with Transcribe: an explicitly prepared
+	// DigCrawl runtime is authoritative over an ambient PATH executable.
+	if localASRRuntimePython(localASRRuntimeDir(local.modelCacheDir)) != "" {
+		fallbackCommand, fallbackArgs, fallbackErr := localCommandFallback(context.Background(), local.command, local.args, local.modelCacheDir, local.legacyModelCacheDirs, local.legacyHubCacheDir)
+		if fallbackErr != nil {
+			return fallbackErr
+		}
+		if fallbackCommand != "" {
+			local.command, local.args = fallbackCommand, fallbackArgs
+		}
+	}
 	if _, err := exec.LookPath(local.command); err != nil {
-		fallbackCommand, fallbackArgs, fallbackErr := localCommandFallback(local.command, local.args, local.modelCacheDir, local.legacyModelCacheDirs, local.legacyHubCacheDir)
+		fallbackCommand, fallbackArgs, fallbackErr := localCommandFallback(context.Background(), local.command, local.args, local.modelCacheDir, local.legacyModelCacheDirs, local.legacyHubCacheDir)
 		if fallbackErr != nil {
 			return fallbackErr
 		}
@@ -90,7 +108,9 @@ func CheckAvailable(cfg config.ASRConfig) error {
 	// use the already-resolved config value rather than passing those placeholders
 	// through to argparse.
 	checkArgs := []string{local.args[0], "--check", "--check-model", "--model", local.model}
-	cmd := exec.Command(local.command, checkArgs...)
+	checkCtx, cancel := localASRRuntimeHealthCheckContext(context.Background())
+	defer cancel()
+	cmd := exec.CommandContext(checkCtx, local.command, checkArgs...)
 	env, envErr := localASREnv(os.Environ(), local.modelCacheDir, local.legacyModelCacheDirs, local.legacyHubCacheDir)
 	if envErr != nil {
 		return envErr
@@ -98,6 +118,9 @@ func CheckAvailable(cfg config.ASRConfig) error {
 	cmd.Env = env
 	output, err := cmd.CombinedOutput()
 	if err != nil {
+		if errors.Is(checkCtx.Err(), context.DeadlineExceeded) {
+			return fmt.Errorf("local faster-whisper runtime check timed out after %s", localASRRuntimeHealthCheckTimeout)
+		}
 		message := strings.TrimSpace(string(output))
 		if message == "" {
 			message = err.Error()
@@ -137,12 +160,35 @@ func Transcribe(ctx context.Context, mediaPath string, cfg config.ASRConfig, opt
 		cfg.ResponseFormat = opts.ResponseFormat
 	}
 
-	timeout := time.Duration(cfg.TimeoutSecOrDefault()) * time.Second
-	if timeout > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, timeout)
-		defer cancel()
+	operationStarted := time.Now()
+	configuredTimeout := time.Duration(cfg.TimeoutSecOrDefault()) * time.Second
+	maxTimeout := time.Duration(cfg.MaxTimeoutSecOrDefault()) * time.Second
+	if configuredTimeout > maxTimeout {
+		return nil, fmt.Errorf("ASR.TimeoutSec (%s) exceeds ASR.MaxTimeoutSec (%s)", configuredTimeout, maxTimeout)
 	}
+	maxCtx, cancelMax := context.WithDeadline(ctx, operationStarted.Add(maxTimeout))
+	defer cancelMax()
+
+	// Duration is not known yet, so probing may use only the configured floor.
+	// A fast successful probe can raise the operation deadline afterwards; a
+	// slow or unavailable probe must fall back without already exceeding that
+	// floor.
+	probeBudgetCtx, cancelProbeBudget := context.WithDeadline(maxCtx, operationStarted.Add(configuredTimeout))
+	timeout := effectiveASRTimeout(probeBudgetCtx, mediaPath, cfg)
+	cancelProbeBudget()
+	if timeout > maxTimeout {
+		return nil, fmt.Errorf("local ASR requires %s for this media, exceeding ASR.MaxTimeoutSec (%s); increase ASR.MaxTimeoutSec", timeout, maxTimeout)
+	}
+	deadline := operationStarted.Add(timeout)
+	if callerDeadline, ok := ctx.Deadline(); ok && callerDeadline.Before(deadline) {
+		return nil, fmt.Errorf("caller deadline (%s) is shorter than the required ASR budget (%s)", time.Until(callerDeadline).Round(time.Second), timeout)
+	}
+	// Probe, extraction, and inference consume one operation budget. The
+	// provider receives the same timeout snapshot, while this deadline remains
+	// the source of truth after either earlier phase has consumed time.
+	cfg.TimeoutSec = int((timeout + time.Second - 1) / time.Second)
+	ctx, cancel := context.WithDeadline(maxCtx, deadline)
+	defer cancel()
 
 	audio, err := media.ExtractAudio(ctx, mediaPath, media.AudioExtractOptions{
 		FFmpegPath: cfg.FFmpegPathOrDefault(),
@@ -172,6 +218,28 @@ func Transcribe(ctx context.Context, mediaPath string, cfg config.ASRConfig, opt
 	result.Audio.Format = audio.Format
 	result.Audio.SampleRate = audio.SampleRate
 	return result, nil
+}
+
+func effectiveASRTimeout(ctx context.Context, mediaPath string, cfg config.ASRConfig) time.Duration {
+	configured := time.Duration(cfg.TimeoutSecOrDefault()) * time.Second
+	if cfg.ProviderOrDefault() != "local" {
+		return configured
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, localASRDurationProbeLimit)
+	defer cancel()
+	duration, err := media.ProbeDuration(probeCtx, mediaPath, cfg.FFmpegPathOrDefault())
+	if err != nil {
+		return configured
+	}
+	return localASRTimeoutForDuration(configured, duration)
+}
+
+func localASRTimeoutForDuration(configured, duration time.Duration) time.Duration {
+	dynamic := time.Duration(localASRDurationMultiplier)*duration + localASRDurationSafety
+	if dynamic > configured {
+		return dynamic
+	}
+	return configured
 }
 
 func newProvider(cfg config.ASRConfig) (provider, error) {

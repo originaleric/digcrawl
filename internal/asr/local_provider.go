@@ -6,6 +6,7 @@ import (
 	_ "embed"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -42,8 +43,22 @@ func (p *localProvider) Transcribe(ctx context.Context, audioPath string) (*Resu
 	if err != nil {
 		return nil, fmt.Errorf("stat audio: %w", err)
 	}
+	// A successful `asr setup` establishes one isolated dependency runtime for
+	// every local media file. Prefer that runtime even when an unrelated
+	// faster-whisper executable happens to be present on PATH; otherwise the
+	// selected model/cache and dependency versions would depend on shell state.
+	if localASRRuntimePython(localASRRuntimeDir(p.modelCacheDir)) != "" {
+		fallbackCommand, fallbackArgs, fallbackErr := localCommandFallback(ctx, p.command, p.args, p.modelCacheDir, p.legacyModelCacheDirs, p.legacyHubCacheDir)
+		if fallbackErr != nil {
+			return nil, fallbackErr
+		}
+		if fallbackCommand != "" {
+			p.command = fallbackCommand
+			p.args = fallbackArgs
+		}
+	}
 	if _, err := exec.LookPath(p.command); err != nil {
-		fallbackCommand, fallbackArgs, fallbackErr := localCommandFallback(p.command, p.args, p.modelCacheDir, p.legacyModelCacheDirs, p.legacyHubCacheDir)
+		fallbackCommand, fallbackArgs, fallbackErr := localCommandFallback(ctx, p.command, p.args, p.modelCacheDir, p.legacyModelCacheDirs, p.legacyHubCacheDir)
 		if fallbackErr != nil {
 			return nil, fallbackErr
 		}
@@ -87,6 +102,12 @@ func (p *localProvider) Transcribe(ctx context.Context, audioPath string) (*Resu
 	cmd.Env = env
 	stdout, err := cmd.Output()
 	if err != nil {
+		if errors.Is(cmdCtx.Err(), context.DeadlineExceeded) {
+			return nil, fmt.Errorf("local ASR timed out after its operation budget; adjust ASR.TimeoutSec, ASR.MaxTimeoutSec, or --timeout for this transcription")
+		}
+		if errors.Is(cmdCtx.Err(), context.Canceled) {
+			return nil, fmt.Errorf("local ASR cancelled: %w", cmdCtx.Err())
+		}
 		if ee, ok := err.(*exec.ExitError); ok {
 			return nil, fmt.Errorf("local ASR failed: %s", strings.TrimSpace(string(ee.Stderr)))
 		}
@@ -339,7 +360,7 @@ func envHasValue(env []string, key string) bool {
 	return false
 }
 
-func localCommandFallback(command string, args []string, modelCacheDir string, legacyModelCacheDirs []string, legacyHubCacheDir string) (string, []string, error) {
+func localCommandFallback(ctx context.Context, command string, args []string, modelCacheDir string, legacyModelCacheDirs []string, legacyHubCacheDir string) (string, []string, error) {
 	if len(args) > 0 {
 		return "", nil, nil
 	}
@@ -351,9 +372,9 @@ func localCommandFallback(command string, args []string, modelCacheDir string, l
 	if err != nil {
 		return "", nil, fmt.Errorf("prepare bundled faster-whisper runner: %w", err)
 	}
-	python, err := findPythonInterpreter()
+	python, err := findPythonInterpreter(ctx, modelCacheDir)
 	if err != nil {
-		return "", nil, nil
+		return "", nil, fmt.Errorf("local ASR runtime unavailable; run `digcrawl asr setup`: %w", err)
 	}
 	return python, []string{
 		runner,
@@ -364,16 +385,21 @@ func localCommandFallback(command string, args []string, modelCacheDir string, l
 	}, nil
 }
 
-func findPythonInterpreter() (string, error) {
-	// python3 is conventional on macOS/Linux; Windows installations normally
-	// expose python.exe or the py launcher. Try all stable names without making
-	// the configured LocalCommand platform-specific.
-	for _, name := range []string{"python3", "python", "py"} {
-		if path, err := exec.LookPath(name); err == nil {
-			return path, nil
-		}
+func findPythonInterpreter(ctx context.Context, modelCacheDir string) (string, error) {
+	if runtime, ok := localASRRuntimeReady(ctx, localASRRuntimeDir(modelCacheDir)); ok {
+		return runtime, nil
 	}
-	return "", fmt.Errorf("python interpreter is not available on PATH")
+	// Match setup's supported-version selection rather than choosing an arbitrary
+	// python3 first. This keeps the fallback from selecting an interpreter that
+	// cannot install CTranslate2 wheels when a supported one is also available.
+	python, err := findBootstrapPython(ctx, "")
+	if err != nil {
+		return "", err
+	}
+	if !localASRImportReady(ctx, python) {
+		return "", fmt.Errorf("local ASR runtime is not installed or did not pass its health check; run `digcrawl asr setup`")
+	}
+	return python, nil
 }
 
 func ensureBundledFasterWhisperRunner(modelCacheDir string, legacyModelCacheDirs []string, legacyHubCacheDir string) (string, error) {

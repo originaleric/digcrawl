@@ -30,17 +30,19 @@ func TestNormalizeASRTranscribeArgsAllowsFlagsAfterPath(t *testing.T) {
 func TestNormalizeASRTranscribeArgsKeepsFlagsBeforePath(t *testing.T) {
 	args := normalizeASRTranscribeArgs([]string{
 		"--provider", "local",
+		"--timeout", "1200",
 		"--model", "small",
 		"video.mp4",
 	})
 	fs := flag.NewFlagSet("test", flag.ContinueOnError)
 	provider := fs.String("provider", "", "")
+	timeout := fs.Int("timeout", 0, "")
 	model := fs.String("model", "", "")
 	if err := fs.Parse(args); err != nil {
 		t.Fatal(err)
 	}
-	if *provider != "local" || *model != "small" {
-		t.Fatalf("provider=%q model=%q args=%+v", *provider, *model, args)
+	if *provider != "local" || *timeout != 1200 || *model != "small" {
+		t.Fatalf("provider=%q timeout=%d model=%q args=%+v", *provider, *timeout, *model, args)
 	}
 	if got := fs.Arg(0); got != "video.mp4" {
 		t.Fatalf("positional=%q args=%+v", got, args)
