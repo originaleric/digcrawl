@@ -265,22 +265,29 @@ Platform:
 | `AppendToMarkdown` | 是否把 OCR 文本追加到 Markdown，默认 `true` |
 | `AppendToText` | 是否把 OCR 文本追加到纯文本，默认 `false` |
 
-OCR 启用后会在平台工具、通用浏览器读取和 Collect 导出中统一生效。结果写入 `platform_metadata.ocr_results`，并记录 `ocr_count`、provider、model、图片来源和错误诊断。直接平台/浏览器调用会把截图作为显式 OCR 候选；Collect 下载媒体时会优先对本地 `.assets/` 图片做 OCR，未下载媒体时会使用远程图片 URL。OpenAI-compatible Provider 对本地图片和截图会转换为 data URL，再调用 `/chat/completions`。
+OCR 启用后会在平台工具、通用浏览器读取和 Collect 导出中统一生效。结果写入 `platform_metadata.ocr_results`，并记录 `ocr_count`、provider、model、图片来源和错误诊断。直接平台/浏览器调用会把截图作为显式 OCR 候选；Collect 下载媒体时会优先对本地 `.assets/` 图片做 OCR，未下载媒体时会使用远程图片 URL。OpenAI-compatible Provider 对本地图片和截图会转换为 data URL，再调用 `/chat/completions`。合法响应但没有可读文字的图片或视频帧会保留为正常空结果：不计入 `ocr_count`、不追加空的 `## OCR` 段；HTTP 失败、响应无法解析或响应缺少 `choices` 仍会记录为错误。
 
-对于只有 BGM 或没有可用语音的视频，可以显式开启本地视频抽帧 OCR：DigCrawl 以固定间隔调用本机 `ffmpeg` 抽取 JPEG，再交给已配置的 OCR provider；临时帧在识别后删除，不会写入 `.assets/` 或 OCR 结果。`MaxFrames` 是每个视频的抽帧上限，`OCR.MaxImages` 仍是单个内容最终送往 OCR 的总上限。若 provider 是远程服务，抽出的帧会发送给它，因此默认关闭。
+对于只有 BGM 或没有可用语音的视频，可以显式开启本地视频抽帧 OCR。当前只在 `Collect.DownloadMedia=true` 的已下载本地视频上触发：DigCrawl 以固定间隔调用本机 `ffmpeg` 抽取 JPEG，再交给已配置的 OCR provider；临时帧在识别后删除，不会写入 `.assets/` 或 OCR 结果。它不替代 ASR：`ASR.Enabled=true` 处理音频，`OCR.VideoFrames.Enabled=true` 处理内嵌文字；两者均开启时各自执行，任一失败不会阻止另一项。`MaxFrames` 与 `TimeoutSec` 分别是每个视频的抽帧数量和 ffmpeg 运行上限；`MaxTotalFrames` 则是单条内容的硬总量预留上限，按媒体出现顺序分配，失败或没有可抽帧的视频也会占用其预留份额，以防异常媒体绕过限制。`OCR.MaxImages` 只限制文章图片与截图，两类预算互不抢占。若 provider 是远程服务，抽出的帧会发送给它，因此默认关闭。
 
 ```yaml
 OCR:
   Enabled: true
   Provider: openai_compatible
   APIKey: "<vision-api-key>"
+  # 示例：智谱 OpenAI-compatible 视觉模型；也可替换为其他兼容端点和模型。
+  BaseURL: "https://open.bigmodel.cn/api/paas/v4"
+  Model: "glm-5v-turbo"
   VideoFrames:
     Enabled: true
     IntervalSec: 5
     MaxFrames: 8
+    MaxTotalFrames: 16
+    TimeoutSec: 120
     # 可选；为空时从 PATH 使用 ffmpeg。
     FFmpegPath: "ffmpeg"
 ```
+
+请将 `APIKey` 仅写入本地私有配置，不要提交到仓库。`zhipu_ocr` 不是 DigCrawl 的 provider 名称；如使用智谱，请保持 `Provider: openai_compatible`，并选择支持 Chat Completions 图像输入的视觉模型。
 
 ### ASR（视频语音转写）
 

@@ -42,6 +42,7 @@ type Result struct {
 	SourceURL string `json:"source_url,omitempty"`
 	LocalPath string `json:"local_path,omitempty"`
 	Source    string `json:"source,omitempty"`
+	Type      string `json:"type,omitempty"`
 	Text      string `json:"text,omitempty"`
 	Provider  string `json:"provider,omitempty"`
 	Model     string `json:"model,omitempty"`
@@ -96,27 +97,42 @@ func EnrichMap(ctx context.Context, out map[string]any, cfg config.OCRConfig, op
 	}
 	meta := ensureMeta(out)
 	if !opts.Force && hasOCRResults(meta) {
-		return nil
+		if !cfg.VideoFrames.EnabledOrDefault() {
+			return nil
+		}
+		refs := pendingVideoFrameRefs(opts.ExtraImages, meta)
+		if len(refs) == 0 {
+			return nil
+		}
+		results, err := recognizeRefs(ctx, cfg, refs)
+		if err != nil {
+			meta["ocr_enabled"] = true
+			meta["ocr_error"] = err.Error()
+			return nil
+		}
+		writeResults(out, meta, cfg, results, true)
+		return results
 	}
 
-	refs := collectImageRefs(out, opts)
+	refs := collectImageRefs(out, opts, cfg)
 	if len(refs) == 0 {
 		meta["ocr_enabled"] = true
 		meta["ocr_count"] = 0
 		return nil
 	}
 
+	refs, truncated := limitOCRRefs(refs, cfg)
 	results, err := recognizeRefs(ctx, cfg, refs)
 	if err != nil {
 		meta["ocr_enabled"] = true
 		meta["ocr_error"] = err.Error()
 		return nil
 	}
-	if len(refs) > cfg.MaxImagesOrDefault() {
+	if truncated {
 		meta["ocr_truncated"] = true
 	}
 
-	writeResults(out, meta, cfg, results)
+	writeResults(out, meta, cfg, results, false)
 	return results
 }
 
@@ -124,10 +140,6 @@ func recognizeRefs(ctx context.Context, cfg config.OCRConfig, refs []ImageRef) (
 	p, err := newProvider(cfg)
 	if err != nil {
 		return nil, err
-	}
-	maxImages := cfg.MaxImagesOrDefault()
-	if len(refs) > maxImages {
-		refs = refs[:maxImages]
 	}
 	results := make([]Result, 0, len(refs))
 	for _, ref := range refs {
@@ -141,6 +153,8 @@ func recognizeRefs(ctx context.Context, cfg config.OCRConfig, refs []ImageRef) (
 		// that path in an exported OCR result.
 		if ref.Type != "video_frame" {
 			result.LocalPath = ref.LocalPath
+		} else {
+			result.Type = ref.Type
 		}
 		text, err := p.Recognize(ctx, ref)
 		if err != nil {
@@ -151,6 +165,61 @@ func recognizeRefs(ctx context.Context, cfg config.OCRConfig, refs []ImageRef) (
 		results = append(results, result)
 	}
 	return results, nil
+}
+
+// limitOCRRefs keeps OCR.MaxImages for article images and screenshots.
+// Extracted video frames have their own per-video and per-content budgets, so
+// subtitle OCR cannot silently displace regular image OCR results.
+func limitOCRRefs(refs []ImageRef, cfg config.OCRConfig) ([]ImageRef, bool) {
+	maxImages := cfg.MaxImagesOrDefault()
+	selected := make([]ImageRef, 0, len(refs))
+	imageCount := 0
+	truncated := false
+	for _, ref := range refs {
+		if ref.Type == "video_frame" {
+			selected = append(selected, ref)
+			continue
+		}
+		if imageCount >= maxImages {
+			truncated = true
+			continue
+		}
+		selected = append(selected, ref)
+		imageCount++
+	}
+	return selected, truncated
+}
+
+// pendingVideoFrameRefs returns only video frames that have not already been
+// recorded in OCR metadata. Existing OCR results intentionally remain an
+// idempotency barrier for regular images and screenshots.
+func pendingVideoFrameRefs(extra []ImageRef, meta map[string]any) []ImageRef {
+	seenSources := make(map[string]struct{})
+	for _, result := range ocrResultMaps(meta) {
+		kind, _ := result["type"].(string)
+		if !strings.EqualFold(strings.TrimSpace(kind), "video_frame") {
+			continue
+		}
+		source, _ := result["source"].(string)
+		if source = strings.TrimSpace(source); source != "" {
+			seenSources[source] = struct{}{}
+		}
+	}
+	pending := make([]ImageRef, 0, len(extra))
+	for _, ref := range extra {
+		if !strings.EqualFold(strings.TrimSpace(ref.Type), "video_frame") {
+			continue
+		}
+		source := strings.TrimSpace(ref.Source)
+		if source != "" {
+			if _, ok := seenSources[source]; ok {
+				continue
+			}
+			seenSources[source] = struct{}{}
+		}
+		pending = append(pending, ref)
+	}
+	return pending
 }
 
 func newProvider(cfg config.OCRConfig) (provider, error) {
@@ -176,7 +245,7 @@ func newProvider(cfg config.OCRConfig) (provider, error) {
 	}
 }
 
-func collectImageRefs(out map[string]any, opts EnrichOptions) []ImageRef {
+func collectImageRefs(out map[string]any, opts EnrichOptions, cfg config.OCRConfig) []ImageRef {
 	seen := map[string]struct{}{}
 	var refs []ImageRef
 	add := func(ref ImageRef) {
@@ -186,6 +255,9 @@ func collectImageRefs(out map[string]any, opts EnrichOptions) []ImageRef {
 		ref.Source = strings.TrimSpace(ref.Source)
 		ref.Type = strings.ToLower(strings.TrimSpace(ref.Type))
 		if ref.Type != "" && ref.Type != "image" && ref.Type != "photo" && ref.Type != "screenshot" && ref.Type != "video_frame" {
+			return
+		}
+		if ref.Type == "video_frame" && !cfg.VideoFrames.EnabledOrDefault() {
 			return
 		}
 		key := imageRefKey(ref)
@@ -331,7 +403,7 @@ func imageURLsFromTextMap(out map[string]any) []string {
 	return urls
 }
 
-func writeResults(out map[string]any, meta map[string]any, cfg config.OCRConfig, results []Result) {
+func writeResults(out map[string]any, meta map[string]any, cfg config.OCRConfig, results []Result, appendExisting bool) {
 	encoded := make([]map[string]any, 0, len(results))
 	successCount := 0
 	for _, r := range results {
@@ -348,6 +420,9 @@ func writeResults(out map[string]any, meta map[string]any, cfg config.OCRConfig,
 		if r.Source != "" {
 			m["source"] = r.Source
 		}
+		if r.Type != "" {
+			m["type"] = r.Type
+		}
 		if r.Text != "" {
 			m["text"] = r.Text
 			successCount++
@@ -356,6 +431,15 @@ func writeResults(out map[string]any, meta map[string]any, cfg config.OCRConfig,
 			m["error"] = r.Error
 		}
 		encoded = append(encoded, m)
+	}
+	if appendExisting {
+		existing := ocrResultMaps(meta)
+		encoded = append(existing, encoded...)
+		for _, result := range existing {
+			if text, _ := result["text"].(string); strings.TrimSpace(text) != "" {
+				successCount++
+			}
+		}
 	}
 	meta["ocr_enabled"] = true
 	meta["ocr_count"] = successCount
@@ -368,6 +452,26 @@ func writeResults(out map[string]any, meta map[string]any, cfg config.OCRConfig,
 	}
 	if cfg.AppendToTextOrDefault() {
 		out["text"] = appendOCRSection(stringValue(out, "text"), results)
+	}
+}
+
+func ocrResultMaps(meta map[string]any) []map[string]any {
+	if meta == nil {
+		return nil
+	}
+	switch results := meta["ocr_results"].(type) {
+	case []map[string]any:
+		return results
+	case []any:
+		maps := make([]map[string]any, 0, len(results))
+		for _, raw := range results {
+			if result, ok := raw.(map[string]any); ok {
+				maps = append(maps, result)
+			}
+		}
+		return maps
+	default:
+		return nil
 	}
 }
 
@@ -385,7 +489,7 @@ func appendOCRSection(body string, results []Result) string {
 			continue
 		}
 		label := "Image"
-		if r.Source == "video_frame" {
+		if r.Type == "video_frame" {
 			label = "Video frame"
 		}
 		b.WriteString(fmt.Sprintf("### %s %d\n\n", label, index))

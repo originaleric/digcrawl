@@ -5,9 +5,18 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 func main() {
+	if delay := os.Getenv("DIGCRAWL_TEST_FAKE_FFMPEG_SLEEP"); delay != "" {
+		d, err := time.ParseDuration(delay)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(64)
+		}
+		time.Sleep(d)
+	}
 	args := os.Args[1:]
 	if len(args) == 0 {
 		fmt.Fprintln(os.Stderr, "fake ffmpeg requires an output path")

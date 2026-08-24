@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/originaleric/digcrawl/config"
 	"github.com/originaleric/digcrawl/internal/media"
@@ -18,7 +19,7 @@ func ExtractLocalVideoFrameRefs(ctx context.Context, cfg config.OCRConfig, video
 	if !cfg.EnabledOrDefault() || !cfg.VideoFrames.EnabledOrDefault() || len(videoPaths) == 0 {
 		return nil, func() {}, nil
 	}
-	remaining := cfg.VideoFrames.MaxFramesOrDefault()
+	remaining := cfg.VideoFrames.MaxTotalFramesOrDefault()
 	var refs []ImageRef
 	var extracted []media.ExtractedVideoFrames
 	var extractionErrs []error
@@ -35,24 +36,40 @@ func ExtractLocalVideoFrameRefs(ctx context.Context, cfg config.OCRConfig, video
 			continue
 		}
 		seen[path] = struct{}{}
-		frames, err := media.ExtractVideoFrames(ctx, path, media.VideoFrameExtractOptions{
+		// Reserve this video's share before invoking ffmpeg. A corrupt or
+		// timed-out video must not leave the total resource budget untouched
+		// and thereby allow an unbounded sequence of extraction attempts.
+		allocation := min(cfg.VideoFrames.MaxFramesOrDefault(), remaining)
+		remaining -= allocation
+		frameCtx, cancel := context.WithTimeout(ctx, time.Duration(cfg.VideoFrames.TimeoutSecOrDefault())*time.Second)
+		frames, err := media.ExtractVideoFrames(frameCtx, path, media.VideoFrameExtractOptions{
 			FFmpegPath:  cfg.VideoFrames.FFmpegPathOrDefault(),
 			TempDir:     cfg.VideoFrames.TempDir,
 			IntervalSec: cfg.VideoFrames.IntervalSecOrDefault(),
-			MaxFrames:   remaining,
+			MaxFrames:   allocation,
 		})
+		timedOut := errors.Is(frameCtx.Err(), context.DeadlineExceeded)
+		cancel()
 		if err != nil {
+			if timedOut {
+				extractionErrs = append(extractionErrs, fmt.Errorf("%s: video frame extraction timed out after %ds", filepath.Base(path), cfg.VideoFrames.TimeoutSecOrDefault()))
+				continue
+			}
 			extractionErrs = append(extractionErrs, fmt.Errorf("%s: %w", filepath.Base(path), err))
 			continue
 		}
 		extracted = append(extracted, frames)
-		for _, framePath := range frames.Paths {
+		// ffmpeg is instructed to stop at allocation, but retain the boundary
+		// here as well because its file output is external to this process.
+		if len(frames.Paths) > allocation {
+			frames.Paths = frames.Paths[:allocation]
+		}
+		for index, framePath := range frames.Paths {
 			refs = append(refs, ImageRef{
 				LocalPath: framePath,
-				Source:    "video_frame",
+				Source:    fmt.Sprintf("video_frame:%s:%d", filepath.Base(path), index+1),
 				Type:      "video_frame",
 			})
-			remaining--
 		}
 	}
 	cleanup := func() {

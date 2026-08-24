@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -337,11 +338,152 @@ func TestRecognizeLocalVideoFramesUsesBoundedOptInAndHidesTemporaryPaths(t *test
 	if len(results) != 1 {
 		t.Fatalf("results=%+v", results)
 	}
-	if results[0].Source != "video_frame" || results[0].LocalPath != "" {
+	if !strings.HasPrefix(results[0].Source, "video_frame:video.mp4:") || results[0].Type != "video_frame" || results[0].LocalPath != "" {
 		t.Fatalf("video frame result leaked temporary path: %+v", results[0])
 	}
 	if results[0].Text != "stub OCR text from video frame" {
 		t.Fatalf("text=%q", results[0].Text)
+	}
+}
+
+func TestExtractLocalVideoFrameRefsAppliesMaxFramesToEachVideo(t *testing.T) {
+	enabled := true
+	dir := t.TempDir()
+	first := filepath.Join(dir, "first.mp4")
+	second := filepath.Join(dir, "second.mp4")
+	for _, path := range []string{first, second} {
+		if err := os.WriteFile(path, []byte("fake video"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	refs, cleanup, err := ExtractLocalVideoFrameRefs(context.Background(), config.OCRConfig{
+		Enabled:  &enabled,
+		Provider: "stub",
+		VideoFrames: config.VideoFrameOCRConfig{
+			Enabled:        &enabled,
+			MaxFrames:      1,
+			MaxTotalFrames: 2,
+			FFmpegPath:     testutil.FakeFFmpeg(t, dir),
+			TempDir:        dir,
+		},
+	}, []string{first, second})
+	defer cleanup()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(refs) != 2 || !strings.Contains(refs[0].Source, "first.mp4") || !strings.Contains(refs[1].Source, "second.mp4") {
+		t.Fatalf("refs=%+v", refs)
+	}
+}
+
+func TestExtractLocalVideoFrameRefsReservesTotalBudgetForFailedVideo(t *testing.T) {
+	enabled := true
+	dir := t.TempDir()
+	missing := filepath.Join(dir, "missing.mp4")
+	second := filepath.Join(dir, "second.mp4")
+	if err := os.WriteFile(second, []byte("fake video"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	refs, cleanup, err := ExtractLocalVideoFrameRefs(context.Background(), config.OCRConfig{
+		Enabled:  &enabled,
+		Provider: "stub",
+		VideoFrames: config.VideoFrameOCRConfig{
+			Enabled:        &enabled,
+			MaxFrames:      1,
+			MaxTotalFrames: 1,
+			FFmpegPath:     testutil.FakeFFmpeg(t, dir),
+			TempDir:        dir,
+		},
+	}, []string{missing, second})
+	defer cleanup()
+	if err == nil || !strings.Contains(err.Error(), "missing.mp4") {
+		t.Fatalf("expected failed first video error, got %v", err)
+	}
+	if len(refs) != 0 {
+		t.Fatalf("a failed first video must consume the only allocation, refs=%+v", refs)
+	}
+}
+
+func TestEnrichMapAddsOnlyNewVideoFramesWhenOCRResultsAlreadyExist(t *testing.T) {
+	enabled := true
+	dir := t.TempDir()
+	frame := filepath.Join(dir, "frame.jpg")
+	if err := os.WriteFile(frame, []byte("fake frame"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out := map[string]any{
+		"markdown": "body",
+		"media":    []any{map[string]any{"type": "image", "url": "https://example.com/cover.jpg"}},
+	}
+	cfg := config.OCRConfig{
+		Enabled:  &enabled,
+		Provider: "stub",
+		VideoFrames: config.VideoFrameOCRConfig{
+			Enabled: &enabled,
+		},
+	}
+	if results := EnrichMap(context.Background(), out, cfg, EnrichOptions{}); len(results) != 1 {
+		t.Fatalf("initial results=%+v", results)
+	}
+	results := EnrichMap(context.Background(), out, cfg, EnrichOptions{
+		ExtraImages: []ImageRef{{LocalPath: frame, Source: "video_frame:video.mp4:1", Type: "video_frame"}},
+	})
+	if len(results) != 1 || results[0].Type != "video_frame" {
+		t.Fatalf("video frame results=%+v", results)
+	}
+	meta := out["platform_metadata"].(map[string]any)
+	encoded := ocrResultMaps(meta)
+	if len(encoded) != 2 || meta["ocr_count"] != 2 {
+		t.Fatalf("existing and new OCR results must both remain: %+v", meta)
+	}
+	if !strings.Contains(out["markdown"].(string), "### Video frame 1") {
+		t.Fatalf("markdown missing video OCR: %q", out["markdown"])
+	}
+	if duplicate := EnrichMap(context.Background(), out, cfg, EnrichOptions{
+		ExtraImages: []ImageRef{{LocalPath: frame, Source: "video_frame:video.mp4:1", Type: "video_frame"}},
+	}); len(duplicate) != 0 {
+		t.Fatalf("recorded video frame was processed twice: %+v", duplicate)
+	}
+}
+
+func TestEnrichMapIgnoresVideoFramesUnlessExplicitlyEnabled(t *testing.T) {
+	enabled := true
+	dir := t.TempDir()
+	frame := filepath.Join(dir, "frame.jpg")
+	if err := os.WriteFile(frame, []byte("fake frame"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	results := EnrichMap(context.Background(), map[string]any{}, config.OCRConfig{
+		Enabled:  &enabled,
+		Provider: "stub",
+	}, EnrichOptions{
+		ExtraImages: []ImageRef{{LocalPath: frame, Source: "video_frame:video.mp4:1", Type: "video_frame"}},
+	})
+	if len(results) != 0 {
+		t.Fatalf("disabled video frame OCR returned results: %+v", results)
+	}
+}
+
+func TestRecognizeLocalVideoFramesHasIndependentExtractionTimeout(t *testing.T) {
+	enabled := true
+	dir := t.TempDir()
+	video := filepath.Join(dir, "slow.mp4")
+	if err := os.WriteFile(video, []byte("fake video"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("DIGCRAWL_TEST_FAKE_FFMPEG_SLEEP", "2s")
+	_, err := RecognizeLocalVideoFrames(context.Background(), config.OCRConfig{
+		Enabled:  &enabled,
+		Provider: "stub",
+		VideoFrames: config.VideoFrameOCRConfig{
+			Enabled:    &enabled,
+			TimeoutSec: 1,
+			FFmpegPath: testutil.FakeFFmpeg(t, dir),
+			TempDir:    dir,
+		},
+	}, video)
+	if err == nil || !strings.Contains(err.Error(), "timed out after 1s") {
+		t.Fatalf("timeout error=%v", err)
 	}
 }
 
@@ -366,6 +508,9 @@ func TestEnrichMapLabelsVideoFramesAndDoesNotExportTheirTemporaryPaths(t *testin
 	results := EnrichMap(context.Background(), out, config.OCRConfig{
 		Enabled:  &enabled,
 		Provider: "stub",
+		VideoFrames: config.VideoFrameOCRConfig{
+			Enabled: &enabled,
+		},
 	}, EnrichOptions{ExtraImages: []ImageRef{{LocalPath: frame, Source: "video_frame", Type: "video_frame"}}})
 	if len(results) != 1 || results[0].LocalPath != "" {
 		t.Fatalf("results=%+v", results)
@@ -377,5 +522,36 @@ func TestEnrichMapLabelsVideoFramesAndDoesNotExportTheirTemporaryPaths(t *testin
 	encoded := meta["ocr_results"].([]map[string]any)
 	if _, ok := encoded[0]["local_path"]; ok {
 		t.Fatalf("temporary frame path was exported: %+v", encoded[0])
+	}
+}
+
+func TestEnrichMapKeepsImageAndVideoFrameBudgetsIndependent(t *testing.T) {
+	enabled := true
+	dir := t.TempDir()
+	refs := make([]ImageRef, 0, 9)
+	for i := 0; i < 8; i++ {
+		image := filepath.Join(dir, fmt.Sprintf("image-%d.jpg", i))
+		if err := os.WriteFile(image, []byte("image"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		refs = append(refs, ImageRef{LocalPath: image, Type: "image"})
+	}
+	frame := filepath.Join(dir, "frame.jpg")
+	if err := os.WriteFile(frame, []byte("frame"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	refs = append(refs, ImageRef{LocalPath: frame, Source: "video_frame:video.mp4:1", Type: "video_frame"})
+	results := EnrichMap(context.Background(), map[string]any{}, config.OCRConfig{
+		Enabled:  &enabled,
+		Provider: "stub",
+		VideoFrames: config.VideoFrameOCRConfig{
+			Enabled: &enabled,
+		},
+	}, EnrichOptions{ExtraImages: refs})
+	if len(results) != 9 {
+		t.Fatalf("results=%d; video frame displaced regular images", len(results))
+	}
+	if results[8].Type != "video_frame" {
+		t.Fatalf("last result=%+v", results[8])
 	}
 }

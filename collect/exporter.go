@@ -110,32 +110,32 @@ func Export(ctx context.Context, out map[string]any, opts ExportOptions) (Export
 				}
 			}
 		}
-		var videoFrameRefs []ocr.ImageRef
-		var cleanupVideoFrames func()
-		if opts.OCR.EnabledOrDefault() && opts.OCR.VideoFrames.EnabledOrDefault() {
-			videoFrameRefs, cleanupVideoFrames, err = ocr.ExtractLocalVideoFrameRefs(ctx, opts.OCR, downloadedVideoPaths(downloaded, paths.Assets))
-			if cleanupVideoFrames != nil {
+		func() {
+			var videoFrameRefs []ocr.ImageRef
+			if opts.OCR.EnabledOrDefault() && opts.OCR.VideoFrames.EnabledOrDefault() {
+				cleanupVideoFrames := func() {}
+				videoFrameRefs, cleanupVideoFrames, err = ocr.ExtractLocalVideoFrameRefs(ctx, opts.OCR, downloadedVideoPaths(downloaded, paths.Assets))
 				defer cleanupVideoFrames()
-			}
-			meta := platformMetadata(out)
-			meta["ocr_video_frame_count"] = len(videoFrameRefs)
-			if err != nil {
-				meta["ocr_video_frames_error"] = err.Error()
-			} else {
-				delete(meta, "ocr_video_frames_error")
-			}
-			out["platform_metadata"] = meta
-			ocrAppliedAfterWrite = true
-		}
-		if opts.OCR.EnabledOrDefault() {
-			if results := ocr.EnrichMap(ctx, out, opts.OCR, ocr.EnrichOptions{
-				AssetsDir:   paths.Assets,
-				Downloaded:  downloaded,
-				ExtraImages: videoFrameRefs,
-			}); len(results) > 0 {
+				meta := platformMetadata(out)
+				meta["ocr_video_frame_count"] = len(videoFrameRefs)
+				if err != nil {
+					meta["ocr_video_frames_error"] = err.Error()
+				} else {
+					delete(meta, "ocr_video_frames_error")
+				}
+				out["platform_metadata"] = meta
 				ocrAppliedAfterWrite = true
 			}
-		}
+			if opts.OCR.EnabledOrDefault() {
+				if results := ocr.EnrichMap(ctx, out, opts.OCR, ocr.EnrichOptions{
+					AssetsDir:   paths.Assets,
+					Downloaded:  downloaded,
+					ExtraImages: videoFrameRefs,
+				}); len(results) > 0 {
+					ocrAppliedAfterWrite = true
+				}
+			}
+		}()
 		if opts.ASR.EnabledOrDefault() {
 			if enrichASRFromDownloadedMedia(ctx, out, opts.ASR, downloaded, paths.Assets) {
 				ocrAppliedAfterWrite = true

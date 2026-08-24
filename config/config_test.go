@@ -527,11 +527,32 @@ func TestOCRConfigHelpers(t *testing.T) {
 	if got := (VideoFrameOCRConfig{}).MaxFramesOrDefault(); got != 8 {
 		t.Fatalf("video frame max=%d", got)
 	}
+	if got := (VideoFrameOCRConfig{}).MaxTotalFramesOrDefault(); got != 16 {
+		t.Fatalf("video frame total max=%d", got)
+	}
+	if got := (VideoFrameOCRConfig{}).TimeoutSecOrDefault(); got != 120 {
+		t.Fatalf("video frame timeout=%d", got)
+	}
 	if got := (VideoFrameOCRConfig{}).FFmpegPathOrDefault(); got != "ffmpeg" {
 		t.Fatalf("video frame ffmpeg=%q", got)
 	}
 	if !(VideoFrameOCRConfig{Enabled: &enabled}).EnabledOrDefault() {
 		t.Fatal("explicit video frame OCR should be enabled")
+	}
+}
+
+func TestValidateAppliesVideoFrameOCRDefaults(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(path, []byte("OCR:\n  Enabled: true\n  VideoFrames:\n    Enabled: true\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Validate(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.OCR.VideoFrames.EnabledOrDefault() || cfg.OCR.VideoFrames.IntervalSec != 5 || cfg.OCR.VideoFrames.MaxFrames != 8 || cfg.OCR.VideoFrames.MaxTotalFrames != 16 || cfg.OCR.VideoFrames.TimeoutSec != 120 {
+		t.Fatalf("video frame defaults=%+v", cfg.OCR.VideoFrames)
 	}
 }
 

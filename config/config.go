@@ -274,11 +274,13 @@ type OCRConfig struct {
 // frames for OCR. It is disabled by default because a remote OCR provider may
 // receive the extracted frames.
 type VideoFrameOCRConfig struct {
-	Enabled     *bool  `yaml:"Enabled" json:"Enabled,omitempty"`
-	IntervalSec int    `yaml:"IntervalSec" json:"IntervalSec,omitempty"`
-	MaxFrames   int    `yaml:"MaxFrames" json:"MaxFrames,omitempty"`
-	FFmpegPath  string `yaml:"FFmpegPath" json:"FFmpegPath,omitempty"`
-	TempDir     string `yaml:"TempDir" json:"TempDir,omitempty"`
+	Enabled        *bool  `yaml:"Enabled" json:"Enabled,omitempty"`
+	IntervalSec    int    `yaml:"IntervalSec" json:"IntervalSec,omitempty"`
+	MaxFrames      int    `yaml:"MaxFrames" json:"MaxFrames,omitempty"`
+	MaxTotalFrames int    `yaml:"MaxTotalFrames" json:"MaxTotalFrames,omitempty"`
+	TimeoutSec     int    `yaml:"TimeoutSec" json:"TimeoutSec,omitempty"`
+	FFmpegPath     string `yaml:"FFmpegPath" json:"FFmpegPath,omitempty"`
+	TempDir        string `yaml:"TempDir" json:"TempDir,omitempty"`
 }
 
 // EnabledOrDefault reports whether local video frame OCR is explicitly enabled.
@@ -295,12 +297,30 @@ func (c VideoFrameOCRConfig) IntervalSecOrDefault() int {
 }
 
 // MaxFramesOrDefault bounds the number of frames sent to the OCR provider for
-// one video. OCR.MaxImages remains the final per-content OCR ceiling.
+// one video.
 func (c VideoFrameOCRConfig) MaxFramesOrDefault() int {
 	if c.MaxFrames > 0 {
 		return c.MaxFrames
 	}
 	return 8
+}
+
+// MaxTotalFramesOrDefault bounds all video frames from one collected content
+// item, preventing a media-heavy page from multiplying local and remote work.
+func (c VideoFrameOCRConfig) MaxTotalFramesOrDefault() int {
+	if c.MaxTotalFrames > 0 {
+		return c.MaxTotalFrames
+	}
+	return 16
+}
+
+// TimeoutSecOrDefault returns the per-video time budget for local frame
+// extraction. OCR provider requests retain their own OCR.TimeoutSec budget.
+func (c VideoFrameOCRConfig) TimeoutSecOrDefault() int {
+	if c.TimeoutSec > 0 {
+		return c.TimeoutSec
+	}
+	return 120
 }
 
 // FFmpegPathOrDefault returns the executable used to extract video frames.
@@ -1363,8 +1383,10 @@ func init() {
 				MaxTokens:        1200,
 				AppendToMarkdown: &enabled,
 				VideoFrames: VideoFrameOCRConfig{
-					IntervalSec: 5,
-					MaxFrames:   8,
+					IntervalSec:    5,
+					MaxFrames:      8,
+					MaxTotalFrames: 16,
+					TimeoutSec:     120,
 				},
 			},
 			ASR: ASRConfig{
@@ -2049,6 +2071,12 @@ func mergeDefaults(cfg *Config) {
 	}
 	if cfg.OCR.VideoFrames.MaxFrames == 0 {
 		cfg.OCR.VideoFrames.MaxFrames = defaultCfg.OCR.VideoFrames.MaxFrames
+	}
+	if cfg.OCR.VideoFrames.MaxTotalFrames == 0 {
+		cfg.OCR.VideoFrames.MaxTotalFrames = defaultCfg.OCR.VideoFrames.MaxTotalFrames
+	}
+	if cfg.OCR.VideoFrames.TimeoutSec == 0 {
+		cfg.OCR.VideoFrames.TimeoutSec = defaultCfg.OCR.VideoFrames.TimeoutSec
 	}
 	if cfg.ASR.Enabled == nil {
 		cfg.ASR.Enabled = defaultCfg.ASR.Enabled

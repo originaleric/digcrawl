@@ -235,6 +235,10 @@ OCR:
     # Sample one frame every N seconds, then stop at MaxFrames.
     IntervalSec: 5
     MaxFrames: 8
+    # Total frame limit across all videos in one collected item.
+    MaxTotalFrames: 16
+    # Maximum local ffmpeg runtime for one downloaded video.
+    TimeoutSec: 120
     # Leave empty to use ffmpeg from PATH.
     FFmpegPath: ""
     # Leave empty to use a private system temporary directory.
