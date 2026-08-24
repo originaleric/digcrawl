@@ -110,10 +110,28 @@ func Export(ctx context.Context, out map[string]any, opts ExportOptions) (Export
 				}
 			}
 		}
+		var videoFrameRefs []ocr.ImageRef
+		var cleanupVideoFrames func()
+		if opts.OCR.EnabledOrDefault() && opts.OCR.VideoFrames.EnabledOrDefault() {
+			videoFrameRefs, cleanupVideoFrames, err = ocr.ExtractLocalVideoFrameRefs(ctx, opts.OCR, downloadedVideoPaths(downloaded, paths.Assets))
+			if cleanupVideoFrames != nil {
+				defer cleanupVideoFrames()
+			}
+			meta := platformMetadata(out)
+			meta["ocr_video_frame_count"] = len(videoFrameRefs)
+			if err != nil {
+				meta["ocr_video_frames_error"] = err.Error()
+			} else {
+				delete(meta, "ocr_video_frames_error")
+			}
+			out["platform_metadata"] = meta
+			ocrAppliedAfterWrite = true
+		}
 		if opts.OCR.EnabledOrDefault() {
 			if results := ocr.EnrichMap(ctx, out, opts.OCR, ocr.EnrichOptions{
-				AssetsDir:  paths.Assets,
-				Downloaded: downloaded,
+				AssetsDir:   paths.Assets,
+				Downloaded:  downloaded,
+				ExtraImages: videoFrameRefs,
 			}); len(results) > 0 {
 				ocrAppliedAfterWrite = true
 			}
@@ -281,6 +299,22 @@ func enrichASRFromDownloadedMedia(ctx context.Context, out map[string]any, cfg c
 	}
 	out["platform_metadata"] = meta
 	return changed
+}
+
+func downloadedVideoPaths(downloaded []map[string]any, assetsDir string) []string {
+	paths := make([]string, 0, len(downloaded))
+	for _, item := range downloaded {
+		mediaType, _ := item["type"].(string)
+		if strings.ToLower(strings.TrimSpace(mediaType)) != "video" {
+			continue
+		}
+		local, _ := item["local"].(string)
+		if strings.TrimSpace(local) == "" {
+			continue
+		}
+		paths = append(paths, filepath.Join(assetsDir, filepath.Base(local)))
+	}
+	return paths
 }
 
 func platformMetadata(out map[string]any) map[string]any {

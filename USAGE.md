@@ -267,6 +267,21 @@ Platform:
 
 OCR 启用后会在平台工具、通用浏览器读取和 Collect 导出中统一生效。结果写入 `platform_metadata.ocr_results`，并记录 `ocr_count`、provider、model、图片来源和错误诊断。直接平台/浏览器调用会把截图作为显式 OCR 候选；Collect 下载媒体时会优先对本地 `.assets/` 图片做 OCR，未下载媒体时会使用远程图片 URL。OpenAI-compatible Provider 对本地图片和截图会转换为 data URL，再调用 `/chat/completions`。
 
+对于只有 BGM 或没有可用语音的视频，可以显式开启本地视频抽帧 OCR：DigCrawl 以固定间隔调用本机 `ffmpeg` 抽取 JPEG，再交给已配置的 OCR provider；临时帧在识别后删除，不会写入 `.assets/` 或 OCR 结果。`MaxFrames` 是每个视频的抽帧上限，`OCR.MaxImages` 仍是单个内容最终送往 OCR 的总上限。若 provider 是远程服务，抽出的帧会发送给它，因此默认关闭。
+
+```yaml
+OCR:
+  Enabled: true
+  Provider: openai_compatible
+  APIKey: "<vision-api-key>"
+  VideoFrames:
+    Enabled: true
+    IntervalSec: 5
+    MaxFrames: 8
+    # 可选；为空时从 PATH 使用 ffmpeg。
+    FFmpegPath: "ffmpeg"
+```
+
 ### ASR（视频语音转写）
 
 | 字段 | 说明 |

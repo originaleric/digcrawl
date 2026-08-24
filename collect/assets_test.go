@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -125,6 +126,18 @@ func TestRefererForWechatDownload(t *testing.T) {
 	}
 	if got := refererForDownload(out); got != "https://mp.weixin.qq.com/" {
 		t.Fatalf("referer=%q", got)
+	}
+}
+
+func TestDownloadedVideoPathsStayInsideAssetsDirectory(t *testing.T) {
+	assetsDir := t.TempDir()
+	paths := downloadedVideoPaths([]map[string]any{
+		{"type": "video", "local": "001.mp4"},
+		{"type": "video", "local": "../../outside.mp4"},
+		{"type": "image", "local": "cover.jpg"},
+	}, assetsDir)
+	if got, want := paths, []string{filepath.Join(assetsDir, "001.mp4"), filepath.Join(assetsDir, "outside.mp4")}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("video paths=%q want=%q", got, want)
 	}
 }
 

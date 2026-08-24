@@ -253,20 +253,62 @@ func (c SocialPlatformConfig) AllowsLocalSession() bool {
 	return c.AuthModeOrDefault() == "local_session"
 }
 
-// OCRConfig controls optional image OCR enrichment.
+// OCRConfig controls optional image and local-video-frame OCR enrichment.
 type OCRConfig struct {
-	Enabled          *bool  `yaml:"Enabled" json:"Enabled,omitempty"`
-	Provider         string `yaml:"Provider" json:"Provider,omitempty"` // openai_compatible | stub
-	APIKey           string `yaml:"APIKey" json:"APIKey,omitempty"`
-	BaseURL          string `yaml:"BaseURL" json:"BaseURL,omitempty"`
-	Model            string `yaml:"Model" json:"Model,omitempty"`
-	Prompt           string `yaml:"Prompt" json:"Prompt,omitempty"`
-	TimeoutSec       int    `yaml:"TimeoutSec" json:"TimeoutSec,omitempty"`
-	MaxImages        int    `yaml:"MaxImages" json:"MaxImages,omitempty"`
-	MaxImageBytes    int64  `yaml:"MaxImageBytes" json:"MaxImageBytes,omitempty"`
-	MaxTokens        int    `yaml:"MaxTokens" json:"MaxTokens,omitempty"`
-	AppendToMarkdown *bool  `yaml:"AppendToMarkdown" json:"AppendToMarkdown,omitempty"`
-	AppendToText     *bool  `yaml:"AppendToText" json:"AppendToText,omitempty"`
+	Enabled          *bool               `yaml:"Enabled" json:"Enabled,omitempty"`
+	Provider         string              `yaml:"Provider" json:"Provider,omitempty"` // openai_compatible | stub
+	APIKey           string              `yaml:"APIKey" json:"APIKey,omitempty"`
+	BaseURL          string              `yaml:"BaseURL" json:"BaseURL,omitempty"`
+	Model            string              `yaml:"Model" json:"Model,omitempty"`
+	Prompt           string              `yaml:"Prompt" json:"Prompt,omitempty"`
+	TimeoutSec       int                 `yaml:"TimeoutSec" json:"TimeoutSec,omitempty"`
+	MaxImages        int                 `yaml:"MaxImages" json:"MaxImages,omitempty"`
+	MaxImageBytes    int64               `yaml:"MaxImageBytes" json:"MaxImageBytes,omitempty"`
+	MaxTokens        int                 `yaml:"MaxTokens" json:"MaxTokens,omitempty"`
+	AppendToMarkdown *bool               `yaml:"AppendToMarkdown" json:"AppendToMarkdown,omitempty"`
+	AppendToText     *bool               `yaml:"AppendToText" json:"AppendToText,omitempty"`
+	VideoFrames      VideoFrameOCRConfig `yaml:"VideoFrames" json:"VideoFrames,omitempty"`
+}
+
+// VideoFrameOCRConfig controls the explicit, bounded extraction of local video
+// frames for OCR. It is disabled by default because a remote OCR provider may
+// receive the extracted frames.
+type VideoFrameOCRConfig struct {
+	Enabled     *bool  `yaml:"Enabled" json:"Enabled,omitempty"`
+	IntervalSec int    `yaml:"IntervalSec" json:"IntervalSec,omitempty"`
+	MaxFrames   int    `yaml:"MaxFrames" json:"MaxFrames,omitempty"`
+	FFmpegPath  string `yaml:"FFmpegPath" json:"FFmpegPath,omitempty"`
+	TempDir     string `yaml:"TempDir" json:"TempDir,omitempty"`
+}
+
+// EnabledOrDefault reports whether local video frame OCR is explicitly enabled.
+func (c VideoFrameOCRConfig) EnabledOrDefault() bool {
+	return c.Enabled != nil && *c.Enabled
+}
+
+// IntervalSecOrDefault returns the spacing between extracted video frames.
+func (c VideoFrameOCRConfig) IntervalSecOrDefault() int {
+	if c.IntervalSec > 0 {
+		return c.IntervalSec
+	}
+	return 5
+}
+
+// MaxFramesOrDefault bounds the number of frames sent to the OCR provider for
+// one video. OCR.MaxImages remains the final per-content OCR ceiling.
+func (c VideoFrameOCRConfig) MaxFramesOrDefault() int {
+	if c.MaxFrames > 0 {
+		return c.MaxFrames
+	}
+	return 8
+}
+
+// FFmpegPathOrDefault returns the executable used to extract video frames.
+func (c VideoFrameOCRConfig) FFmpegPathOrDefault() string {
+	if strings.TrimSpace(c.FFmpegPath) != "" {
+		return strings.TrimSpace(c.FFmpegPath)
+	}
+	return "ffmpeg"
 }
 
 // EnabledOrDefault reports whether OCR enrichment is enabled.
@@ -1320,6 +1362,10 @@ func init() {
 				MaxImageBytes:    5 * 1024 * 1024,
 				MaxTokens:        1200,
 				AppendToMarkdown: &enabled,
+				VideoFrames: VideoFrameOCRConfig{
+					IntervalSec: 5,
+					MaxFrames:   8,
+				},
 			},
 			ASR: ASRConfig{
 				Provider:        "api",
@@ -1997,6 +2043,12 @@ func mergeDefaults(cfg *Config) {
 	}
 	if cfg.OCR.AppendToText == nil {
 		cfg.OCR.AppendToText = defaultCfg.OCR.AppendToText
+	}
+	if cfg.OCR.VideoFrames.IntervalSec == 0 {
+		cfg.OCR.VideoFrames.IntervalSec = defaultCfg.OCR.VideoFrames.IntervalSec
+	}
+	if cfg.OCR.VideoFrames.MaxFrames == 0 {
+		cfg.OCR.VideoFrames.MaxFrames = defaultCfg.OCR.VideoFrames.MaxFrames
 	}
 	if cfg.ASR.Enabled == nil {
 		cfg.ASR.Enabled = defaultCfg.ASR.Enabled

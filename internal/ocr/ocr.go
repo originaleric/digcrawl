@@ -106,27 +106,41 @@ func EnrichMap(ctx context.Context, out map[string]any, cfg config.OCRConfig, op
 		return nil
 	}
 
-	p, err := newProvider(cfg)
+	results, err := recognizeRefs(ctx, cfg, refs)
 	if err != nil {
 		meta["ocr_enabled"] = true
 		meta["ocr_error"] = err.Error()
 		return nil
 	}
-
-	maxImages := cfg.MaxImagesOrDefault()
-	if len(refs) > maxImages {
-		refs = refs[:maxImages]
+	if len(refs) > cfg.MaxImagesOrDefault() {
 		meta["ocr_truncated"] = true
 	}
 
+	writeResults(out, meta, cfg, results)
+	return results
+}
+
+func recognizeRefs(ctx context.Context, cfg config.OCRConfig, refs []ImageRef) ([]Result, error) {
+	p, err := newProvider(cfg)
+	if err != nil {
+		return nil, err
+	}
+	maxImages := cfg.MaxImagesOrDefault()
+	if len(refs) > maxImages {
+		refs = refs[:maxImages]
+	}
 	results := make([]Result, 0, len(refs))
 	for _, ref := range refs {
 		result := Result{
 			SourceURL: ref.URL,
-			LocalPath: ref.LocalPath,
 			Source:    ref.Source,
 			Provider:  p.Name(),
 			Model:     p.Model(),
+		}
+		// Video frames live only in a private temporary directory. Never expose
+		// that path in an exported OCR result.
+		if ref.Type != "video_frame" {
+			result.LocalPath = ref.LocalPath
 		}
 		text, err := p.Recognize(ctx, ref)
 		if err != nil {
@@ -136,9 +150,7 @@ func EnrichMap(ctx context.Context, out map[string]any, cfg config.OCRConfig, op
 		}
 		results = append(results, result)
 	}
-
-	writeResults(out, meta, cfg, results)
-	return results
+	return results, nil
 }
 
 func newProvider(cfg config.OCRConfig) (provider, error) {
@@ -173,7 +185,7 @@ func collectImageRefs(out map[string]any, opts EnrichOptions) []ImageRef {
 		ref.DataURL = strings.TrimSpace(ref.DataURL)
 		ref.Source = strings.TrimSpace(ref.Source)
 		ref.Type = strings.ToLower(strings.TrimSpace(ref.Type))
-		if ref.Type != "" && ref.Type != "image" && ref.Type != "photo" && ref.Type != "screenshot" {
+		if ref.Type != "" && ref.Type != "image" && ref.Type != "photo" && ref.Type != "screenshot" && ref.Type != "video_frame" {
 			return
 		}
 		key := imageRefKey(ref)
@@ -372,7 +384,11 @@ func appendOCRSection(body string, results []Result) string {
 		if strings.TrimSpace(r.Text) == "" {
 			continue
 		}
-		b.WriteString(fmt.Sprintf("### Image %d\n\n", index))
+		label := "Image"
+		if r.Source == "video_frame" {
+			label = "Video frame"
+		}
+		b.WriteString(fmt.Sprintf("### %s %d\n\n", label, index))
 		b.WriteString(strings.TrimSpace(r.Text))
 		b.WriteString("\n\n")
 		index++
@@ -416,6 +432,9 @@ type stubProvider struct {
 }
 
 func (p stubProvider) Recognize(_ context.Context, ref ImageRef) (string, error) {
+	if ref.Type == "video_frame" {
+		return "stub OCR text from video frame", nil
+	}
 	src := ref.LocalPath
 	if src == "" {
 		src = ref.URL

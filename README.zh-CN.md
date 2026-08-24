@@ -183,7 +183,7 @@ DigCrawl 在用户机器上运行，并将访问边界保持可见：
 | 时间 | 更新 | 对使用者的意义 |
 | --- | --- | --- |
 | 2026-08-17 | 重建浏览器恢复、CDP 服务管理与本地 ASR 启动的状态边界。 | 浏览器 profile 未释放前不会被重启；Playwright 缓存路径可动态发现；已有本地 ASR 模型和升级后的 runner 可跨重启继续使用。 |
-| 2026-08 | OCR 收敛为 DigCrawl 自己的 OpenAI-compatible 视觉客户端，并保持显式启用。 | 图片富化不依赖 DigFlow，也不要求仓库内置密钥。 |
+| 2026-08 | OCR 收敛为 DigCrawl 自己的 OpenAI-compatible 视觉客户端，并保持显式启用。 | 图片富化不依赖 DigFlow，也不要求仓库内置密钥；已下载的本地视频可额外显式开启有上限的抽帧 OCR，用于识别内嵌字幕。 |
 | 2026-07 | ASR 支持 API-compatible 与本地 `faster-whisper` provider。 | 视频和音频采集可按需包含本地可控的转写结果。 |
 | 2026-07 | Watchlist 增加持久化来源、任务调度、摘要和通知。 | 来源可持续监控，而非仅一次性采集。 |
 | 2026-07 | 扩展 Reddit、RSS/Atom、B站、微博、快手、知乎、Threads 和 Instagram 支持。 | 更多来源复用同一套规范化采集管线。 |

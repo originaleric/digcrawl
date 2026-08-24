@@ -13,6 +13,7 @@ import (
 
 	"github.com/originaleric/digcrawl/config"
 	"github.com/originaleric/digcrawl/internal/platform"
+	"github.com/originaleric/digcrawl/internal/testutil"
 )
 
 func TestEnrichMapStubAppendsMarkdownAndMetadata(t *testing.T) {
@@ -309,5 +310,72 @@ func TestDataURLSizeEstimateCountsInvalidWhitespace(t *testing.T) {
 	err := validateDataImageURL(raw, 4)
 	if err == nil || !strings.Contains(err.Error(), "exceeds max bytes 4") {
 		t.Fatalf("expected max bytes error before decode, got %v", err)
+	}
+}
+
+func TestRecognizeLocalVideoFramesUsesBoundedOptInAndHidesTemporaryPaths(t *testing.T) {
+	enabled := true
+	dir := t.TempDir()
+	video := filepath.Join(dir, "video.mp4")
+	if err := os.WriteFile(video, []byte("fake video"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	results, err := RecognizeLocalVideoFrames(context.Background(), config.OCRConfig{
+		Enabled:  &enabled,
+		Provider: "stub",
+		VideoFrames: config.VideoFrameOCRConfig{
+			Enabled:     &enabled,
+			IntervalSec: 5,
+			MaxFrames:   2,
+			FFmpegPath:  testutil.FakeFFmpeg(t, dir),
+			TempDir:     dir,
+		},
+	}, video)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("results=%+v", results)
+	}
+	if results[0].Source != "video_frame" || results[0].LocalPath != "" {
+		t.Fatalf("video frame result leaked temporary path: %+v", results[0])
+	}
+	if results[0].Text != "stub OCR text from video frame" {
+		t.Fatalf("text=%q", results[0].Text)
+	}
+}
+
+func TestRecognizeLocalVideoFramesIsDisabledUnlessExplicitlyOptedIn(t *testing.T) {
+	results, err := RecognizeLocalVideoFrames(context.Background(), config.OCRConfig{}, "/does/not/exist.mp4")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 0 {
+		t.Fatalf("disabled feature returned results: %+v", results)
+	}
+}
+
+func TestEnrichMapLabelsVideoFramesAndDoesNotExportTheirTemporaryPaths(t *testing.T) {
+	enabled := true
+	dir := t.TempDir()
+	frame := filepath.Join(dir, "frame.jpg")
+	if err := os.WriteFile(frame, []byte("fake frame"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out := map[string]any{"markdown": "body"}
+	results := EnrichMap(context.Background(), out, config.OCRConfig{
+		Enabled:  &enabled,
+		Provider: "stub",
+	}, EnrichOptions{ExtraImages: []ImageRef{{LocalPath: frame, Source: "video_frame", Type: "video_frame"}}})
+	if len(results) != 1 || results[0].LocalPath != "" {
+		t.Fatalf("results=%+v", results)
+	}
+	if !strings.Contains(out["markdown"].(string), "### Video frame 1") {
+		t.Fatalf("markdown=%q", out["markdown"])
+	}
+	meta := out["platform_metadata"].(map[string]any)
+	encoded := meta["ocr_results"].([]map[string]any)
+	if _, ok := encoded[0]["local_path"]; ok {
+		t.Fatalf("temporary frame path was exported: %+v", encoded[0])
 	}
 }

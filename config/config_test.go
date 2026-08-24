@@ -518,6 +518,21 @@ func TestOCRConfigHelpers(t *testing.T) {
 	if (OCRConfig{}).AppendToTextOrDefault() {
 		t.Fatal("AppendToText should default to false")
 	}
+	if (VideoFrameOCRConfig{}).EnabledOrDefault() {
+		t.Fatal("video frame OCR should default to disabled")
+	}
+	if got := (VideoFrameOCRConfig{}).IntervalSecOrDefault(); got != 5 {
+		t.Fatalf("video frame interval=%d", got)
+	}
+	if got := (VideoFrameOCRConfig{}).MaxFramesOrDefault(); got != 8 {
+		t.Fatalf("video frame max=%d", got)
+	}
+	if got := (VideoFrameOCRConfig{}).FFmpegPathOrDefault(); got != "ffmpeg" {
+		t.Fatalf("video frame ffmpeg=%q", got)
+	}
+	if !(VideoFrameOCRConfig{Enabled: &enabled}).EnabledOrDefault() {
+		t.Fatal("explicit video frame OCR should be enabled")
+	}
 }
 
 func TestASRConfigProviderAwareModelDefault(t *testing.T) {

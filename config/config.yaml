@@ -228,6 +228,17 @@ OCR:
   MaxTokens: 1200
   AppendToMarkdown: true
   AppendToText: false
+  # Optional local-video subtitle OCR. This is disabled by default. When OCR
+  # uses a remote provider, extracted frames are sent to that provider.
+  VideoFrames:
+    Enabled: false
+    # Sample one frame every N seconds, then stop at MaxFrames.
+    IntervalSec: 5
+    MaxFrames: 8
+    # Leave empty to use ffmpeg from PATH.
+    FFmpegPath: ""
+    # Leave empty to use a private system temporary directory.
+    TempDir: ""
 
 ASR:
   Enabled: true
