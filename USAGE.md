@@ -385,9 +385,9 @@ Watchlist 用于按配置定期检查指定来源的新增内容，复用 Collec
 
 `Tasks[].Schedule.Mode` 当前支持 `interval` 和 `daily`。`interval` 使用 `Every` 的 Go duration，例如 `6h`、`24h`、`30m`；`daily` 使用本机时区的 `At: "HH:MM"`，例如每天上午 9 点写 `At: "09:00"`。调度状态写入通用 `dc_tasks_runtime` / `dc_task_runs` / `dc_task_locks` / `dc_task_events`：任务完成后会按当前 schedule 更新 `next_run_at` 并判断是否到期。
 
-Watchlist 的来源发现由 `internal/source.Service` 统一承载，当前覆盖 RSS/Atom、sitemap、HTML 链接发现、今日头条固定文章/作者页/视频列表页、X/Twitter 单帖/用户页链接发现、抖音作品/用户页链接发现、小红书笔记/用户页链接发现、微信公众号文章/列表页链接发现、Reddit listing/comment 来源，以及 B站、微博、快手、知乎的主页/列表页链接发现。Watchlist 只负责调度、去重、详情采集、摘要和通知，因此后续新增渠道应优先接入 `internal/source`，再由 Watchlist、Tasks 或其他 domain 复用。
+Watchlist 的来源发现由 `internal/source.Service` 统一承载，当前覆盖 RSS/Atom、sitemap、HTML 链接发现、今日头条固定文章/作者页/视频列表页、X/Twitter 单帖/用户页链接发现、抖音作品/用户页链接发现、小红书笔记/用户页链接发现、微信公众号文章/列表页链接发现、Reddit listing/comment 来源，以及 B站、微博、快手、知乎、YouTube 的主页/列表页链接发现。Watchlist 只负责调度、去重、详情采集、摘要和通知，因此后续新增渠道应优先接入 `internal/source`，再由 Watchlist、Tasks 或其他 domain 复用。
 
-推荐维护来源页或列表页 source，例如 `rss`、`sitemap`、`reddit_subreddit`、`reddit_user`、`toutiao_author`、`x_user`、`douyin_user`、`xiaohongshu_user`、`wechat_list`、`bilibili_user`、`weibo_user`、`kuaishou_user`、`zhihu_user`、`web_list`。`toutiao_article`、`toutiao_video`、`x_post`、`douyin_video`、`xiaohongshu_note`、`wechat_article`、`reddit_post_comments`、`bilibili_video`、`weibo_post`、`kuaishou_video`、`zhihu_answer`、`zhihu_article`、`zhihu_zvideo` 属于详情页或评论变更监控，适合单次归档、评论更新或互动状态检查，不适合作为“新增 po 文”主来源。
+推荐维护来源页或列表页 source，例如 `rss`、`sitemap`、`reddit_subreddit`、`reddit_user`、`toutiao_author`、`x_user`、`douyin_user`、`xiaohongshu_user`、`wechat_list`、`bilibili_user`、`weibo_user`、`kuaishou_user`、`zhihu_user`、`youtube_channel`、`web_list`。`toutiao_article`、`toutiao_video`、`x_post`、`douyin_video`、`xiaohongshu_note`、`wechat_article`、`reddit_post_comments`、`bilibili_video`、`weibo_post`、`kuaishou_video`、`zhihu_answer`、`zhihu_article`、`zhihu_zvideo`、`youtube_video` 属于详情页或评论变更监控，适合单次归档、评论更新或互动状态检查，不适合作为“新增 po 文”主来源。
 
 上线前可以先做 discover-only 验证，只检查来源页能否发现内容，不写入 `dc_watchlist_items`，也不会触发 collect、summary 或 notify：
 
@@ -419,6 +419,12 @@ Threads 已支持：
 
 - `threads_post` / `post` / `thread`：固定 Threads 帖子 URL 监控，例如 `https://www.threads.com/@zuck/post/...` 或旧 `threads.net` 链接。该模式复用 `threads.post.read`，并统一归一到当前 `threads.com` canonical URL。
 - `threads_user` / `user` / `profile`：用户主页列表发现，抽取 `/@user/post/...` 链接，发现结果使用 `threads:<post_id>` 去重。默认 `auth_mode=public`，不读取本机 Cookie；需要登录态时必须同时设置全局 `Social.Threads.AuthMode=local_session` 和 source options `auth_mode=local_session`。
+
+YouTube 已支持：
+
+- `youtube_video` / `video`：固定公开视频或 Shorts URL 监控，例如 `https://www.youtube.com/watch?v=...`、`https://youtu.be/...`、`https://www.youtube.com/shorts/...`；统一归一为 `https://www.youtube.com/watch?v=<video_id>`。
+- `youtube_channel` / `channel`：频道页或列表页链接发现，抽取公开视频与 Shorts 的链接，并按 `youtube:<video_id>` 去重。
+- `youtube.video.read` 通过本地浏览器读取标题、简介、频道、发布时间、封面和可公开取得的字幕轨。不会导出会过期的播放流 URL；没有公开字幕时仍返回页面元数据与简介。
 
 Instagram 已支持：
 
@@ -943,6 +949,7 @@ Collect 在**无云端宿主**的情况下，把链接抓取并导出到本地�
 | 微博 | `weibo.com`、`m.weibo.cn` 等 | `weibo.post.read` |
 | 快手 | `kuaishou.com`、`v.kuaishou.com` 等 | `kuaishou.video.read` |
 | 知乎 | `zhihu.com`、`zhuanlan.zhihu.com` 等 | `zhihu.content.read` |
+| YouTube 视频 / Shorts | `youtube.com/watch`、`youtube.com/shorts`、`youtu.be` | `youtube.video.read` |
 | RSS / Atom | `.rss`、`.atom`、`.xml`、`/feed`、`/rss` | `feed.read` |
 | 任意网页 | 其他 `http(s)` URL | `browser.browse`（通用网页） |
 
@@ -959,6 +966,7 @@ digcrawl collect "https://www.bilibili.com/video/BVxxxx"
 digcrawl collect "https://m.weibo.cn/detail/xxxx"
 digcrawl collect "https://www.kuaishou.com/short-video/xxxx"
 digcrawl collect "https://www.zhihu.com/question/123/answer/456"
+digcrawl collect "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
 digcrawl collect "https://example.com/article" --format md,html,json --out ./my-output
 ```
 
@@ -1082,6 +1090,7 @@ collect-inbox/
 | `weibo.post.read` | 微博详情页 |
 | `kuaishou.video.read` | 快手视频页 |
 | `zhihu.content.read` | 知乎回答 / 专栏文章 / 视频 |
+| `youtube.video.read` | YouTube 视频 / Shorts 与公开字幕 |
 
 ### 浏览器（browser）
 

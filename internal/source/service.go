@@ -29,6 +29,7 @@ import (
 	weiboplatform "github.com/originaleric/digcrawl/internal/platform/weibo"
 	xplatform "github.com/originaleric/digcrawl/internal/platform/x"
 	xhsplatform "github.com/originaleric/digcrawl/internal/platform/xiaohongshu"
+	youtubeplatform "github.com/originaleric/digcrawl/internal/platform/youtube"
 	zhihuplatform "github.com/originaleric/digcrawl/internal/platform/zhihu"
 )
 
@@ -83,6 +84,8 @@ func (r Service) ListLatest(ctx context.Context, item Source) ([]Item, error) {
 		return r.readKuaishou(ctx, item)
 	case platform == "zhihu":
 		return r.readZhihu(ctx, item)
+	case platform == "youtube" || platform == "youtube.com":
+		return r.readYouTube(ctx, item)
 	case platform == "reddit":
 		return r.readReddit(ctx, item)
 	case platform == "x" || platform == "twitter":
@@ -1043,6 +1046,48 @@ func (r Service) readZhihuUserList(ctx context.Context, item Source) ([]Item, er
 	return r.readHTMLLinks(ctx, item, "zhihu")
 }
 
+func (r Service) readYouTube(ctx context.Context, item Source) ([]Item, error) {
+	switch inferYouTubeWatchlistType(item) {
+	case "youtube_video", "video", "short", "shorts", "watch":
+		return feedItemFromYouTubeVideo(item)
+	case "youtube_channel", "channel", "user", "profile", "author", "list":
+		return r.readYouTubeChannelList(ctx, item)
+	default:
+		if youtubeplatform.IsVideoURL(item.URL) {
+			return feedItemFromYouTubeVideo(item)
+		}
+		return r.readYouTubeChannelList(ctx, item)
+	}
+}
+
+func inferYouTubeWatchlistType(item Source) string {
+	if typ := strings.ToLower(strings.TrimSpace(item.Type)); typ != "" {
+		return typ
+	}
+	if youtubeplatform.IsVideoURL(item.URL) {
+		return "youtube_video"
+	}
+	return "youtube_channel"
+}
+
+func feedItemFromYouTubeVideo(item Source) ([]Item, error) {
+	norm, err := youtubeplatform.NormalizeURL(item.URL)
+	if err != nil {
+		return nil, err
+	}
+	if norm.PlatformID == "" || norm.ContentKind != youtubeplatform.ContentType {
+		return nil, fmt.Errorf("YouTube video URL is required")
+	}
+	link := firstNonEmpty(norm.CanonicalURL, item.URL)
+	key := "youtube:" + norm.PlatformID
+	return []Item{{ID: key, ContentKey: key, URL: link, CanonicalURL: link, Title: item.Name, ContentType: youtubeplatform.ContentType, Raw: map[string]any{"platform_id": norm.PlatformID, "source_url": item.URL}}}, nil
+}
+
+func (r Service) readYouTubeChannelList(ctx context.Context, item Source) ([]Item, error) {
+	item = withBrowserListDefaults(item, `a[href*="/watch?v="], a[href*="/shorts/"]`, "body")
+	return r.readHTMLLinks(ctx, item, "youtube")
+}
+
 func inferXWatchlistType(item Source) string {
 	typ := strings.ToLower(strings.TrimSpace(item.Type))
 	if typ != "" {
@@ -1562,6 +1607,8 @@ func browserCookieDomain(platform, rawURL string, opts map[string]any) string {
 		return "www.kuaishou.com"
 	case "zhihu":
 		return "www.zhihu.com"
+	case "youtube", "youtube.com":
+		return youtubeplatform.CookieDomain
 	case "threads":
 		if socialLocalSessionAllowed(platform, opts) {
 			return threadsplatform.CookieDomain
@@ -1793,6 +1840,12 @@ func discoveredLinkItem(ctx context.Context, platform, link, title string) Item 
 			key = id
 			canonical = firstNonEmpty(norm.CanonicalURL, link)
 		}
+	case "youtube", "youtube.com":
+		if norm, err := youtubeplatform.NormalizeURL(link); err == nil && norm.PlatformID != "" && norm.ContentKind == youtubeplatform.ContentType {
+			id = "youtube:" + norm.PlatformID
+			key = id
+			canonical = firstNonEmpty(norm.CanonicalURL, link)
+		}
 	case "xiaohongshu", "xhs":
 		if norm, err := xhsplatform.NormalizeURL(ctx, link); err == nil && norm.PlatformID != "" {
 			id = "xiaohongshu:" + norm.PlatformID
@@ -1863,6 +1916,8 @@ func platformLink(platform string, base *url.URL, link string) bool {
 		return (strings.Contains(host, "kuaishou.com")) && (strings.Contains(path, "/short-video/") || strings.Contains(path, "/photo/"))
 	case "zhihu":
 		return (host == "www.zhihu.com" || host == "zhihu.com" || host == "zhuanlan.zhihu.com") && (strings.Contains(path, "/question/") || strings.Contains(path, "/p/") || strings.Contains(path, "/zvideo/"))
+	case "youtube", "youtube.com":
+		return youtubeplatform.IsVideoURL(link)
 	case "xiaohongshu", "xhs":
 		if host == "xhslink.com" || host == "www.xhslink.com" {
 			return true
@@ -1897,6 +1952,9 @@ func contentTypeFor(platform, link string) string {
 		return "video"
 	}
 	if platform == "bilibili" || strings.Contains(link, "bilibili.com/video/") {
+		return "video"
+	}
+	if platform == "youtube" || platform == "youtube.com" || strings.Contains(link, "youtube.com/watch") || strings.Contains(link, "youtube.com/shorts/") || strings.Contains(link, "youtu.be/") {
 		return "video"
 	}
 	if platform == "kuaishou" || strings.Contains(link, "kuaishou.com/short-video/") || strings.Contains(link, "kuaishou.com/photo/") {

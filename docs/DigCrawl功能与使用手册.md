@@ -17,7 +17,7 @@ source/list discover -> collect detail -> normalize -> media/OCR/ASR enrich -> s
 | 能力 | 说明 |
 |------|------|
 | 单 URL 采集 | `digcrawl collect <url>` 输出 Markdown、HTML、JSON，并可下载媒体 |
-| 多平台 provider | 微信公众号、小红书、抖音、头条文章/视频、X、Reddit、Threads、Instagram、B站、微博、快手、知乎、RSS/Atom、普通网页 |
+| 多平台 provider | 微信公众号、小红书、抖音、头条文章/视频、X、Reddit、Threads、Instagram、B站、微博、快手、知乎、YouTube、RSS/Atom、普通网页 |
 | Watchlist | 定期扫描来源页、列表页、RSS、subreddit/user 等，发现新增内容后采集详情 |
 | 定时任务 | `watchlist serve` 读取 `Tasks` 和 watchlist source 周期，支持 interval/daily |
 | 持久化清单 | Watchlist source 可来自 YAML、数据库或 mixed，数据库支持 SQLite/MySQL |
@@ -43,6 +43,7 @@ source/list discover -> collect detail -> normalize -> media/OCR/ASR enrich -> s
 | 微博 | post API-first，浏览器兜底 | `weibo_user` API-first，失败后 HTML/browser fallback |
 | 快手 | Web GraphQL API-first，本机 Cookie/browser 兜底 | `kuaishou_user` API-first，失败后 HTML/browser fallback |
 | 知乎 | 浏览器读取 | `zhihu_user` browser/html fallback，平台 selector 等待动态内容 |
+| YouTube | 浏览器读取页面元数据与公开字幕轨 | `youtube_channel` 发现视频和 Shorts；不导出临时播放流 URL |
 | RSS/Atom | Feed service | Feed service |
 
 本机浏览器路径底层统一走 `internal/browser.BrowserBrowse`。头条、新增平台和列表 fallback 复用同一套 Chrome/Chromium 配置、Cookie store、allowed domain 和登录态；差别在于头条详情 provider 已有更完整的多策略 fallback，新平台详情 provider 后续会逐步补齐。Threads/Instagram 默认是 `auth_mode=public`，不读取本机 Cookie；只有全局 `Social.<Platform>.AuthMode=local_session` 和 source options `auth_mode=local_session` 同时开启时才复用登录态。
@@ -83,6 +84,7 @@ go build -o digcollect ./cmd/digcollect
 ./digcrawl collect "https://www.toutiao.com/article/..." --format md,json
 ./digcrawl collect "https://www.toutiao.com/video/..." --format md,json
 ./digcrawl collect "https://www.bilibili.com/video/BV..." --format md,json
+./digcrawl collect "https://www.youtube.com/watch?v=dQw4w9WgXcQ" --format md,json
 ./digcrawl collect "https://m.weibo.cn/detail/..." --format md,json
 ```
 
@@ -141,6 +143,7 @@ douyin_user, douyin_video,
 xiaohongshu_user, xiaohongshu_note,
 wechat_list, wechat_article,
 bilibili_user, bilibili_video,
+youtube_channel, youtube_video,
 weibo_user, weibo_post,
 kuaishou_user, kuaishou_video,
 zhihu_user, zhihu_answer, zhihu_article, zhihu_zvideo

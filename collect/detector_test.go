@@ -238,6 +238,34 @@ func TestDetectZhihuUserFallsBackToWeb(t *testing.T) {
 	}
 }
 
+func TestDetectYouTubeVideoAndShort(t *testing.T) {
+	t.Parallel()
+	for _, rawURL := range []string{
+		"https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+		"https://youtu.be/dQw4w9WgXcQ?t=10",
+		"https://www.youtube.com/shorts/dQw4w9WgXcQ",
+	} {
+		m, err := Detect(rawURL)
+		if err != nil {
+			t.Fatalf("Detect(%q): %v", rawURL, err)
+		}
+		if m.Platform != "youtube" || m.Tool != platformprov.ToolYouTubeVideoRead {
+			t.Fatalf("Detect(%q) = %+v", rawURL, m)
+		}
+	}
+}
+
+func TestDetectYouTubeChannelFallsBackToWeb(t *testing.T) {
+	t.Parallel()
+	m, err := Detect("https://www.youtube.com/@OpenAI")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.Platform != "web" || m.Tool != browserprov.ToolBrowserBrowse {
+		t.Fatalf("got %+v", m)
+	}
+}
+
 func TestDetectUnsupported(t *testing.T) {
 	t.Parallel()
 	_, err := Detect("ftp://example.com/page")

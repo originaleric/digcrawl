@@ -111,7 +111,7 @@ DigCrawl 将采集视为稳定的 **crawl / collect / normalize / export** 管�
 
 | 来源类别 | 已支持来源 |
 | --- | --- |
-| 社交内容 | 微信公众号、小红书、抖音、今日头条、X、Reddit、Threads、Instagram、B站、微博、快手、知乎 |
+| 社交内容 | 微信公众号、小红书、抖音、今日头条、X、Reddit、Threads、Instagram、B站、微博、快手、知乎、YouTube |
 | 订阅与发现 | RSS、Atom、sitemap、平台列表、主页和已支持的内容 feed |
 | 通用网页 | 任意 `http` 或 `https` 页面，可由通用浏览器读取工具处理 |
 

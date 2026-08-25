@@ -187,6 +187,30 @@ func TestServiceReadsFixedXPost(t *testing.T) {
 	}
 }
 
+func TestServiceReadsFixedYouTubeVideo(t *testing.T) {
+	items, err := Service{}.ListLatest(context.Background(), Source{ID: "youtube-video", Platform: "youtube", Type: "youtube_video", URL: "https://youtu.be/dQw4w9WgXcQ?t=42", Name: "Video"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 || items[0].ContentKey != "youtube:dQw4w9WgXcQ" || items[0].URL != "https://www.youtube.com/watch?v=dQw4w9WgXcQ" || items[0].ContentType != "video" {
+		t.Fatalf("unexpected items: %+v", items)
+	}
+}
+
+func TestServiceExtractsYouTubeVideoLinks(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`<a href="https://www.youtube.com/watch?v=dQw4w9WgXcQ&utm_source=a">watch</a><a href="https://www.youtube.com/shorts/dQw4w9WgXcQ">short duplicate</a><a href="https://www.youtube.com/@OpenAI">channel</a>`))
+	}))
+	defer srv.Close()
+	items, err := Service{}.ListLatest(context.Background(), Source{ID: "youtube-channel", Platform: "youtube", Type: "youtube_channel", URL: srv.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 || items[0].ContentKey != "youtube:dQw4w9WgXcQ" || items[0].ContentType != "video" {
+		t.Fatalf("unexpected items: %+v", items)
+	}
+}
+
 func TestServiceExtractsXStatusLinks(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`<html><body><a href="https://x.com/elonmusk/status/12345?s=20&utm_source=a">A</a><a href="https://twitter.com/elonmusk/status/12345?spm=1">B</a><script>{"url":"https:\/\/x.com\/elonmusk\/status\/67890"}</script></body></html>`))

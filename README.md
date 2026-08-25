@@ -111,7 +111,7 @@ DigCrawl treats crawling as a stable pipeline—**crawl, collect, normalize, exp
 
 | Source group | Supported sources |
 | --- | --- |
-| Social content | WeChat Official Accounts, Xiaohongshu, Douyin, Toutiao, X, Reddit, Threads, Instagram, Bilibili, Weibo, Kuaishou, and Zhihu |
+| Social content | WeChat Official Accounts, Xiaohongshu, Douyin, Toutiao, X, Reddit, Threads, Instagram, Bilibili, Weibo, Kuaishou, Zhihu, and YouTube |
 | Syndication and discovery | RSS, Atom, sitemap, platform lists, profile pages, and supported content feeds |
 | The open web | Any `http` or `https` page through the generic browser reader |
 

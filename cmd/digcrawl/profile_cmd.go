@@ -30,6 +30,7 @@ var skillReadTools = []string{
 	"weibo.post.read",
 	"kuaishou.video.read",
 	"zhihu.content.read",
+	"youtube.video.read",
 	"x.post.read",
 	"reddit.post.read",
 	"reddit.subreddit.read",

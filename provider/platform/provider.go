@@ -42,6 +42,7 @@ func (p *Provider) Register(_ context.Context, reg *registry.Registry) error {
 	reg.Register(WeiboPostReadEntry(domains, store))
 	reg.Register(KuaishouVideoReadEntry(domains, store))
 	reg.Register(ZhihuContentReadEntry(domains, store))
+	reg.Register(YouTubeVideoReadEntry(domains, store))
 	return nil
 }
 

@@ -13,6 +13,7 @@ Select the most specific read tool. Pass the original URL and `format: ["markdow
 | `weibo.com`, `m.weibo.cn` | `weibo.post.read` |
 | `kuaishou.com`, `v.kuaishou.com` | `kuaishou.video.read` |
 | `zhihu.com`, `zhuanlan.zhihu.com` | `zhihu.content.read` |
+| `youtube.com`, `youtu.be` video or Shorts URLs | `youtube.video.read` |
 | `x.com`, `twitter.com` | `x.post.read` |
 | Reddit post | `reddit.post.read` |
 | Reddit subreddit listing | `reddit.subreddit.read` |

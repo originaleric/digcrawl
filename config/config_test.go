@@ -273,6 +273,7 @@ func TestDefaultAllowedToolsIncludeSocialAndDomesticProviders(t *testing.T) {
 		"weibo.post.read",
 		"kuaishou.video.read",
 		"zhihu.content.read",
+		"youtube.video.read",
 	} {
 		if !stringSliceContains(cfg.Gateway.AllowedTools, tool) {
 			t.Fatalf("gateway allowed tools missing %s", tool)
@@ -302,6 +303,11 @@ func TestDefaultAllowedToolsIncludeSocialAndDomesticProviders(t *testing.T) {
 		"zhihu.com",
 		"www.zhihu.com",
 		"zhuanlan.zhihu.com",
+		"youtube.com",
+		"www.youtube.com",
+		"m.youtube.com",
+		"youtu.be",
+		"www.youtu.be",
 	} {
 		if !stringSliceContains(cfg.LocalBrowser.AllowedDomains, domain) {
 			t.Fatalf("local browser allowed domains missing %s", domain)

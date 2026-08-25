@@ -17,5 +17,6 @@ const (
 	ToolWeiboPostRead        = "weibo.post.read"
 	ToolKuaishouVideoRead    = "kuaishou.video.read"
 	ToolZhihuContentRead     = "zhihu.content.read"
+	ToolYouTubeVideoRead     = "youtube.video.read"
 	ToolFeedRead             = "feed.read"
 )

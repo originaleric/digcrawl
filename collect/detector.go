@@ -9,6 +9,7 @@ import (
 	"github.com/originaleric/digcrawl/internal/platform/instagram"
 	"github.com/originaleric/digcrawl/internal/platform/reddit"
 	"github.com/originaleric/digcrawl/internal/platform/threads"
+	"github.com/originaleric/digcrawl/internal/platform/youtube"
 	browserprov "github.com/originaleric/digcrawl/provider/browser"
 	platformprov "github.com/originaleric/digcrawl/provider/platform"
 )
@@ -73,6 +74,9 @@ func Detect(rawURL string) (Match, error) {
 	}
 	if isZhihuContentHostPath(host, u.EscapedPath()) {
 		return Match{Platform: "zhihu", Tool: platformprov.ToolZhihuContentRead}, nil
+	}
+	if youtube.IsVideoURL(rawURL) {
+		return Match{Platform: youtube.PlatformName, Tool: platformprov.ToolYouTubeVideoRead}, nil
 	}
 	for _, r := range rules {
 		if hostMatches(host, r.hosts) {
