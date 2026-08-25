@@ -182,6 +182,7 @@ Read the [runtime documentation](./runtime/README.md) before exposing a Gateway 
 
 | Date | Highlight | Why it matters |
 | --- | --- | --- |
+| 2026-08-25 | Added public YouTube video/Shorts reading, caption enrichment, and Watchlist discovery. | URLs are normalized and player identity is verified before content is accepted; expiring playback URLs are never exported. Video-frame OCR remains a shared, opt-in Collect service for any successfully downloaded video. |
 | 2026-08-24 | Video-frame OCR was production-validated with an OpenAI-compatible vision provider. | Downloaded local videos can yield burned-in subtitle and on-screen text even when ASR has no usable speech; blank frames remain normal empty results rather than provider failures. |
 | 2026-08-17 | Browser recovery, CDP service management, and local ASR startup were rebuilt around explicit lifecycle and cache state. | Browser profiles are not relaunched before they are released; Playwright cache paths are discovered dynamically; existing local ASR models and upgraded runners remain usable across restarts. |
 | 2026-08 | OCR uses DigCrawl’s OpenAI-compatible vision client and remains opt-in. | Image enrichment stays independent of DigFlow and does not require a bundled key; downloaded local videos can additionally use explicit, bounded frame OCR for burned-in subtitles. |
