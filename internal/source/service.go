@@ -1522,7 +1522,7 @@ func (r Service) readHTMLLinksBrowser(ctx context.Context, item Source, platform
 		WaitSelector:    waitSelector,
 		ContentSelector: contentSelector,
 		UseCookieDomain: browserCookieDomain(platform, item.URL, item.Options),
-		MetadataScript:  discoveryMetadataScript(),
+		MetadataScript:  discoveryMetadataScript(platform, item),
 	})
 	if err != nil {
 		return nil, err
@@ -1554,23 +1554,82 @@ func discoveryCandidatesFromBrowser(resp *browser.BrowserBrowseResponse) []strin
 	return out
 }
 
-func discoveryMetadataScript() string {
-	return `async () => {
+func discoveryMetadataScript(platform string, item Source) string {
+	pattern, _ := json.Marshal(discoveryReadyPattern(platform, item))
+	minCandidates := optionInt(item.Options, "limit")
+	if minCandidates <= 0 {
+		minCandidates = 2
+	}
+	return fmt.Sprintf(`async () => {
   const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+  const targetRegex = new RegExp(%s, 'i');
+  const uniq = (items) => [...new Set(items.map(v => String(v || '').trim()).filter(Boolean))];
   const collect = () => {
     const hrefs = Array.from(document.querySelectorAll('a[href]')).map(a => a.href).filter(Boolean);
     const scripts = Array.from(document.scripts).map(s => s.textContent || s.src || '').join('\n').slice(0, 200000);
     const text = (document.body && document.body.innerText || '').slice(0, 100000);
-    return { hrefs, scripts, text, url: String(location.href || '') };
+    const ready = uniq(hrefs.filter(href => targetRegex.test(href)));
+    return { hrefs, scripts, text, url: String(location.href || ''), ready };
   };
   let out = collect();
+  let lastSignature = out.ready.join('|');
+  let stableRounds = 0;
   for (let i = 0; i < 8; i++) {
     window.scrollTo(0, document.body ? document.body.scrollHeight : 0);
     await sleep(1500);
     out = collect();
+    const signature = out.ready.join('|');
+    if (out.ready.length >= %d && signature === lastSignature) {
+      stableRounds += 1;
+      if (i >= 1 && stableRounds >= 1) return out;
+    } else {
+      stableRounds = 0;
+      lastSignature = signature;
+    }
   }
   return out;
-}`
+}`, string(pattern), minCandidates)
+}
+
+func discoveryReadyPattern(platform string, item Source) string {
+	switch strings.ToLower(strings.TrimSpace(platform)) {
+	case "toutiao":
+		tab := toutiaoTabFromURL(item.URL)
+		switch tab {
+		case "video", "short_video":
+			return `/video/[0-9]+/?`
+		case "wtt":
+			return `/w/[0-9]+/?`
+		case "article":
+			return `/(?:article|group)/[0-9]+/?`
+		default:
+			return `/(?:article|group|video|w)/[0-9]+/?`
+		}
+	case "bilibili":
+		return `/video/(?:BV[0-9A-Za-z]+|av[0-9]+)/?`
+	case "x", "twitter":
+		return `/[A-Za-z0-9_]{1,32}/status/[0-9]+/?`
+	case "kuaishou", "ks":
+		return `/(?:short-video|photo)/[0-9A-Za-z_-]+/?`
+	case "zhihu":
+		return `/(?:question/[0-9]+/answer/[0-9]+|p/[0-9A-Za-z_-]+|zvideo/[0-9]+)/?`
+	case "youtube", "youtube.com":
+		return `/(?:watch\?v=|shorts/)[0-9A-Za-z_-]+`
+	case "instagram":
+		return `/(?:p|reel)/[0-9A-Za-z_-]+/?`
+	case "threads":
+		return `/@[A-Za-z0-9._]+/post/[0-9A-Za-z_-]+/?`
+	default:
+		return `/(?:article|group|video|w)/[0-9]+/?|/[A-Za-z0-9_]{1,32}/status/[0-9]+/?|/video/(?:BV[0-9A-Za-z]+|av[0-9]+)/?|/(?:detail|status)/[0-9A-Za-z]+/?|/(?:short-video|photo)/[0-9A-Za-z_-]+/?|/question/[0-9]+/answer/[0-9]+/?|/p/[0-9A-Za-z_-]+/?|/reel/[0-9A-Za-z_-]+/?|/@[A-Za-z0-9._]+/post/[0-9A-Za-z_-]+/?|/zvideo/[0-9]+/?`
+	}
+}
+
+func toutiaoTabFromURL(rawURL string) string {
+	u, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil {
+		return ""
+	}
+	return strings.ToLower(strings.TrimSpace(u.Query().Get("tab")))
 }
 
 func browserFallbackEnabled(opts map[string]any) bool {

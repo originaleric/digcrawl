@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/originaleric/digcrawl/config"
@@ -772,5 +773,61 @@ func TestToutiaoUserTokenFromURL(t *testing.T) {
 	got := toutiaoUserTokenFromURL("https://www.toutiao.com/c/user/token/abc123=/?source=profile")
 	if got != "abc123=" {
 		t.Fatalf("token = %q", got)
+	}
+}
+
+func TestDiscoveryReadyPatternHonorsToutiaoTabs(t *testing.T) {
+	tests := []struct {
+		name    string
+		rawURL  string
+		want    string
+		notWant string
+	}{
+		{
+			name:    "video tab waits for video links",
+			rawURL:  "https://www.toutiao.com/c/user/token/abc/?tab=video",
+			want:    `/video/[0-9]+/?`,
+			notWant: `/(?:article|group|video|w)/[0-9]+/?`,
+		},
+		{
+			name:    "short video tab waits for video links",
+			rawURL:  "https://www.toutiao.com/c/user/token/abc/?tab=short_video",
+			want:    `/video/[0-9]+/?`,
+			notWant: `/(?:article|group|video|w)/[0-9]+/?`,
+		},
+		{
+			name:    "wtt tab waits for micro post links",
+			rawURL:  "https://www.toutiao.com/c/user/token/abc/?tab=wtt",
+			want:    `/w/[0-9]+/?`,
+			notWant: `/(?:article|group|video|w)/[0-9]+/?`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			item := Source{Platform: "toutiao", Type: "toutiao_author", URL: tt.rawURL}
+			got := discoveryReadyPattern("toutiao", item)
+			if got != tt.want {
+				t.Fatalf("pattern = %q, want %q", got, tt.want)
+			}
+			script := discoveryMetadataScript("toutiao", item)
+			if !strings.Contains(script, tt.want) {
+				t.Fatalf("script does not include target pattern %q: %s", tt.want, script)
+			}
+			if strings.Contains(script, tt.notWant) {
+				t.Fatalf("script should not use generic toutiao pattern for tab-specific source: %s", script)
+			}
+		})
+	}
+}
+
+func TestDiscoveryMetadataScriptUsesStableEarlyExit(t *testing.T) {
+	script := discoveryMetadataScript("toutiao", Source{
+		URL:     "https://www.toutiao.com/c/user/token/abc/?tab=video",
+		Options: map[string]any{"limit": 3},
+	})
+	for _, want := range []string{"stableRounds", "out.ready.length >= 3", "return out"} {
+		if !strings.Contains(script, want) {
+			t.Fatalf("metadata script missing %q: %s", want, script)
+		}
 	}
 }
