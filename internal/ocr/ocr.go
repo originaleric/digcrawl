@@ -414,9 +414,9 @@ func writeResults(out map[string]any, meta map[string]any, cfg config.OCRConfig,
 		if r.SourceURL != "" {
 			m["source_url"] = r.SourceURL
 		}
-		if r.LocalPath != "" {
-			m["local_path"] = r.LocalPath
-		}
+		// Local paths are an internal acquisition detail. They may be temporary
+		// or belong to a private operator directory, so OCR output never exports
+		// them; source_url/source identify the usable origin instead.
 		if r.Source != "" {
 			m["source"] = r.Source
 		}
@@ -453,6 +453,31 @@ func writeResults(out map[string]any, meta map[string]any, cfg config.OCRConfig,
 	if cfg.AppendToTextOrDefault() {
 		out["text"] = appendOCRSection(stringValue(out, "text"), results)
 	}
+}
+
+// RequestedFailure reports a real OCR failure for callers that explicitly
+// requested OCR. A successful model response that finds no visible text still
+// carries text and is therefore not treated as a failure.
+func RequestedFailure(out map[string]any) error {
+	meta := ensureMeta(out)
+	if reason := strings.TrimSpace(stringValue(meta, "ocr_error")); reason != "" {
+		return fmt.Errorf("OCR unavailable: %s", reason)
+	}
+	results := ocrResultMaps(meta)
+	if len(results) == 0 {
+		return nil
+	}
+	for _, result := range results {
+		if strings.TrimSpace(stringValue(result, "text")) != "" {
+			return nil
+		}
+	}
+	for _, result := range results {
+		if reason := strings.TrimSpace(stringValue(result, "error")); reason != "" {
+			return fmt.Errorf("OCR unavailable: %s", reason)
+		}
+	}
+	return nil
 }
 
 func ocrResultMaps(meta map[string]any) []map[string]any {

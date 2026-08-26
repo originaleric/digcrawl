@@ -6,11 +6,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
-	"github.com/originaleric/digcrawl/config"
 	"github.com/originaleric/digcrawl/protocol"
 	"github.com/originaleric/digcrawl/runtime"
 	"github.com/originaleric/digcrawl/runtime/artifact"
@@ -46,20 +46,22 @@ func registerTools(s *mcpserver.MCPServer, rt *runtime.Runtime) {
 				Tool:  desc.Name,
 				Input: input,
 			}
-			call.Policy.TimeoutMs = int(runtime.RecommendedCallTimeout(config.Get(), call).Milliseconds())
+			call.Policy.TimeoutMs = mcpTimeoutMs(rt, call)
 			result := rt.Execute(ctx, call)
-			return toolResultToMCP(ctx, result, rt.ArtifactStore())
+			return toolResultToMCPWithInlineLimit(ctx, result, rt.ArtifactStore(), rt.ArtifactInlineLimit())
 		})
 	}
 }
 
-// mcpTimeoutMs gives MCP reads the same browser allowance as Collect. Explicit
-// local video enrichment also needs its configured download and ASR budgets;
-// otherwise Runtime's generic 60-second default can cancel a valid ASR job
-// after page retrieval has already completed.
-func mcpTimeoutMs(browserCfg config.LocalBrowserConfig, skillCfg config.SkillConfig, args map[string]any) int {
-	input, _ := json.Marshal(args)
-	return int(runtime.RecommendedCallTimeout(&config.Config{LocalBrowser: browserCfg, Skill: skillCfg}, &protocol.ToolCall{Input: input}).Milliseconds())
+// mcpTimeoutMs gives MCP the execution budget already bound to this Runtime.
+// In particular, a user-selected Skill profile may enable bounded local video
+// enrichment; consulting config.Get here would instead use an unrelated global
+// default and prematurely cancel that work.
+func mcpTimeoutMs(rt *runtime.Runtime, call *protocol.ToolCall) int {
+	if rt == nil {
+		return int((60 * time.Second).Milliseconds())
+	}
+	return int(rt.ExecutionTimeout(call).Milliseconds())
 }
 
 func buildMCPTool(desc protocol.ToolDescriptor) mcp.Tool {
@@ -102,6 +104,10 @@ func hasCapability(capabilities []string, want string) bool {
 }
 
 func toolResultToMCP(ctx context.Context, result *protocol.ToolResult, store artifact.Store) (*mcp.CallToolResult, error) {
+	return toolResultToMCPWithInlineLimit(ctx, result, store, artifact.DefaultInlineBytes)
+}
+
+func toolResultToMCPWithInlineLimit(ctx context.Context, result *protocol.ToolResult, store artifact.Store, inlineLimit int64) (*mcp.CallToolResult, error) {
 	if result == nil {
 		return mcp.NewToolResultError("nil result"), nil
 	}
@@ -114,7 +120,7 @@ func toolResultToMCP(ctx context.Context, result *protocol.ToolResult, store art
 	if len(result.Artifacts) > 0 {
 		output["artifacts"] = result.Artifacts
 	}
-	artifactContent, artifactErr := mcpArtifactContent(ctx, result.Artifacts, store)
+	artifactContent, artifactErr := mcpArtifactContent(ctx, result.Artifacts, store, inlineLimit)
 	if result.Status == "error" {
 		code := "TOOL_EXEC_FAILED"
 		message := "tool failed"
@@ -146,25 +152,25 @@ func toolResultToMCP(ctx context.Context, result *protocol.ToolResult, store art
 	return mcpResult, nil
 }
 
-func mcpArtifactContent(ctx context.Context, artifacts []protocol.Artifact, store artifact.Store) ([]mcp.Content, error) {
+func mcpArtifactContent(ctx context.Context, artifacts []protocol.Artifact, store artifact.Store, inlineLimit int64) ([]mcp.Content, error) {
 	if len(artifacts) == 0 {
 		return nil, nil
 	}
 	if store == nil {
 		return nil, fmt.Errorf("artifact store is unavailable")
 	}
-	limit := artifact.InlineLimit(config.Get().Gateway.ArtifactMaxInlineBytes)
+	limit := artifact.InlineLimit(inlineLimit)
 	content := make([]mcp.Content, 0, len(artifacts))
 	for _, item := range artifacts {
 		if item.Size > limit {
-			return nil, fmt.Errorf("artifact %q exceeds %d byte inline limit", item.ID, limit)
+			return nil, fmt.Errorf("artifact %q exceeds %d byte inline limit for this MCP transport", item.ID, limit)
 		}
 		data, mimeType, err := store.Get(ctx, item.ID)
 		if err != nil {
 			return nil, fmt.Errorf("artifact %q is unavailable: %w", item.ID, err)
 		}
 		if int64(len(data)) > limit {
-			return nil, fmt.Errorf("artifact %q exceeds %d byte inline limit", item.ID, limit)
+			return nil, fmt.Errorf("artifact %q exceeds %d byte inline limit for this MCP transport", item.ID, limit)
 		}
 		encoded := base64.StdEncoding.EncodeToString(data)
 		if strings.HasPrefix(strings.ToLower(mimeType), "image/") {

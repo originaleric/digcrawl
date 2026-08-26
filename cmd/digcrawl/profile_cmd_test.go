@@ -51,18 +51,36 @@ func TestWriteAndValidateSkillProfile(t *testing.T) {
 	}
 }
 
-func TestAllowSkillASRConfigurationToolOnlyForDefaultProfile(t *testing.T) {
+func TestAllowDefaultSkillProfileToolsOnlyForDefaultProfile(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	defaultCfg := &config.Config{SourcePath: config.DefaultSkillProfilePath()}
-	allowSkillASRConfigurationTool(defaultCfg)
-	if !containsTool(defaultCfg.Gateway.AllowedTools, "skill.asr.enable") {
-		t.Fatal("default Skill profile should expose the ASR enable tool in memory")
+	legacyTools := append([]string(nil), legacySkillReadTools...)
+	defaultCfg := &config.Config{SourcePath: config.DefaultSkillProfilePath(), Gateway: config.GatewayConfig{AllowedTools: legacyTools}}
+	allowDefaultSkillProfileTools(defaultCfg)
+	for _, tool := range []string{"skill.asr.enable", "youtube.video.read"} {
+		if !containsTool(defaultCfg.Gateway.AllowedTools, tool) {
+			t.Fatalf("default Skill profile should expose %s in memory", tool)
+		}
+	}
+	preYouTubeCfg := &config.Config{SourcePath: config.DefaultSkillProfilePath(), Gateway: config.GatewayConfig{AllowedTools: append([]string{"skill.asr.enable"}, legacySkillReadTools...)}}
+	allowDefaultSkillProfileTools(preYouTubeCfg)
+	if !containsTool(preYouTubeCfg.Gateway.AllowedTools, "youtube.video.read") {
+		t.Fatal("pre-YouTube standard profile should expose YouTube in memory")
+	}
+
+	restrictedCfg := &config.Config{SourcePath: config.DefaultSkillProfilePath(), Gateway: config.GatewayConfig{AllowedTools: []string{"gateway.ping"}}}
+	allowDefaultSkillProfileTools(restrictedCfg)
+	for _, tool := range []string{"skill.asr.enable", "youtube.video.read"} {
+		if containsTool(restrictedCfg.Gateway.AllowedTools, tool) {
+			t.Fatalf("restricted default-path profile must not receive %s", tool)
+		}
 	}
 
 	customCfg := &config.Config{SourcePath: filepath.Join(t.TempDir(), "custom.yaml")}
-	allowSkillASRConfigurationTool(customCfg)
-	if containsTool(customCfg.Gateway.AllowedTools, "skill.asr.enable") {
-		t.Fatal("custom profile must not receive the standard Skill configuration tool")
+	allowDefaultSkillProfileTools(customCfg)
+	for _, tool := range []string{"skill.asr.enable", "youtube.video.read"} {
+		if containsTool(customCfg.Gateway.AllowedTools, tool) {
+			t.Fatalf("custom profile must not receive %s", tool)
+		}
 	}
 }
 

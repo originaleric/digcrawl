@@ -8,22 +8,16 @@ import (
 	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
-	"github.com/originaleric/digcrawl/config"
 	"github.com/originaleric/digcrawl/protocol"
+	"github.com/originaleric/digcrawl/runtime"
 	"github.com/originaleric/digcrawl/runtime/artifact"
 )
 
-func TestMCPTimeoutMatchesCollectForReadAndExtendsExplicitASR(t *testing.T) {
-	browserCfg := config.LocalBrowserConfig{TotalTimeoutSec: 90}
-	skillCfg := config.SkillConfig{
-		Media: config.SkillMediaConfig{TimeoutSec: 30},
-		ASR:   config.ASRConfig{TimeoutSec: 300},
-	}
-	if got := mcpTimeoutMs(browserCfg, skillCfg, map[string]any{}); got != 120000 {
-		t.Fatalf("normal read timeout=%d want 120000", got)
-	}
-	if got := mcpTimeoutMs(browserCfg, skillCfg, map[string]any{"include_asr": true}); got != 3780000 {
-		t.Fatalf("ASR read timeout=%d want 3780000", got)
+func TestMCPTimeoutUsesBoundRuntimeExecutionPolicy(t *testing.T) {
+	const want = 23 * time.Minute
+	rt := runtime.New(nil, runtime.Options{TimeoutForCall: func(*protocol.ToolCall) time.Duration { return want }})
+	if got := time.Duration(mcpTimeoutMs(rt, &protocol.ToolCall{Tool: "youtube.video.read"})) * time.Millisecond; got != want {
+		t.Fatalf("MCP timeout=%s want %s", got, want)
 	}
 }
 
@@ -213,23 +207,47 @@ func TestToolResultToMCPReportsUnavailableArtifact(t *testing.T) {
 	}
 }
 
-func TestToolResultToMCPRejectsOversizedArtifactBeforeEmbedding(t *testing.T) {
+func TestToolResultToMCPRejectsOversizedArtifactWithoutRetrievalPath(t *testing.T) {
+	store, err := artifact.NewDiskStore(t.TempDir(), time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
 	result, err := toolResultToMCP(context.Background(), &protocol.ToolResult{
 		Status:    "success",
 		Artifacts: []protocol.Artifact{{ID: "too-large", Type: "image/png", Size: artifact.DefaultInlineBytes + 1}},
-	}, nil)
+	}, store)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !result.IsError {
-		t.Fatal("oversized artifact should be visible as a tool error")
+		t.Fatalf("MCP must not report an unreachable oversized artifact as success: %#v", result)
 	}
 	payload, ok := result.StructuredContent.(map[string]any)
 	if !ok {
-		t.Fatalf("missing structured error payload: %#v", result.StructuredContent)
+		t.Fatalf("missing structured artifact error: %#v", result.StructuredContent)
 	}
 	errPayload, ok := payload["error"].(map[string]string)
 	if !ok || errPayload["code"] != "ARTIFACT_UNAVAILABLE" {
-		t.Fatalf("missing oversized artifact error: %#v", payload)
+		t.Fatalf("oversized artifact error was not surfaced: %#v", payload)
+	}
+}
+
+func TestToolResultToMCPUsesRuntimeBoundInlineLimit(t *testing.T) {
+	store, err := artifact.NewDiskStore(t.TempDir(), time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	item, err := store.Put(context.Background(), "small-video", "video/mp4", "video.mp4", []byte("video"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := toolResultToMCPWithInlineLimit(context.Background(), &protocol.ToolResult{
+		Status: "success", Artifacts: []protocol.Artifact{item},
+	}, store, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.IsError {
+		t.Fatalf("configured inline limit must reject an artifact MCP cannot retrieve: %#v", result)
 	}
 }

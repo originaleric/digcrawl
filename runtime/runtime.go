@@ -18,12 +18,13 @@ import (
 
 // Options configures the gateway runtime.
 type Options struct {
-	InstanceID      string
-	AllowedTools    []string
-	ConfigDomains   []string
-	ArtifactStore   artifact.Store
-	Audit           *audit.Logger
-	RequireApproval bool
+	InstanceID             string
+	AllowedTools           []string
+	ConfigDomains          []string
+	ArtifactStore          artifact.Store
+	ArtifactMaxInlineBytes int64
+	Audit                  *audit.Logger
+	RequireApproval        bool
 	// TimeoutForCall supplies a configuration-aware default when a transport
 	// did not set ToolCall.Policy.TimeoutMs explicitly.
 	TimeoutForCall func(*protocol.ToolCall) time.Duration
@@ -40,6 +41,14 @@ type Runtime struct {
 // ArtifactStore returns the configured artifact store (may be nil).
 func (r *Runtime) ArtifactStore() artifact.Store {
 	return r.artifacts
+}
+
+// ArtifactInlineLimit returns this runtime's configured MCP attachment limit.
+func (r *Runtime) ArtifactInlineLimit() int64 {
+	if r == nil {
+		return artifact.DefaultInlineBytes
+	}
+	return artifact.InlineLimit(r.opts.ArtifactMaxInlineBytes)
 }
 
 func New(reg *registry.Registry, opts Options) *Runtime {

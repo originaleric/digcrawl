@@ -4,10 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
+	"os"
+	"path/filepath"
+	"time"
 
 	"github.com/originaleric/digcrawl/config"
 	iplatform "github.com/originaleric/digcrawl/internal/platform"
+	"github.com/originaleric/digcrawl/internal/platform/youtube"
 	"github.com/originaleric/digcrawl/protocol"
 	"github.com/originaleric/digcrawl/runtime/artifact"
 	"github.com/originaleric/digcrawl/runtime/executor"
@@ -84,6 +87,8 @@ func platformInputSchema() map[string]any {
 
 type platformReader func(ctx context.Context, in iplatform.ReadInput) (*iplatform.Content, error)
 
+var acquireYouTubeVideo = youtube.DownloadVideo
+
 func platformReadEntry(
 	name, description string,
 	capabilities []string,
@@ -101,7 +106,7 @@ func platformReadEntry(
 			Capabilities: capabilities,
 			Risk:         "network",
 		},
-		Handler: platformReadHandler(defaultDomains, configDomains, artStore, read),
+		Handler: platformReadHandlerNamed(name, defaultDomains, configDomains, artStore, read),
 	}
 }
 
@@ -110,6 +115,28 @@ func platformReadHandler(
 	artStore artifact.Store,
 	read platformReader,
 ) func(context.Context, *protocol.ToolCall) (map[string]any, []protocol.Artifact, error) {
+	return platformReadHandlerNamed("", defaultDomains, configDomains, artStore, read)
+}
+
+func platformReadHandlerNamed(
+	name string,
+	defaultDomains, configDomains []string,
+	artStore artifact.Store,
+	read platformReader,
+) func(context.Context, *protocol.ToolCall) (map[string]any, []protocol.Artifact, error) {
+	return platformReadHandlerNamedWithConfig(name, defaultDomains, configDomains, artStore, read, nil)
+}
+
+func platformReadHandlerNamedWithConfig(
+	name string,
+	defaultDomains, configDomains []string,
+	artStore artifact.Store,
+	read platformReader,
+	runtimeCfg *config.Config,
+) func(context.Context, *protocol.ToolCall) (map[string]any, []protocol.Artifact, error) {
+	if runtimeCfg == nil {
+		runtimeCfg = config.Get()
+	}
 	return func(ctx context.Context, call *protocol.ToolCall) (map[string]any, []protocol.Artifact, error) {
 		in, err := executor.DecodeInput[platformReadInput](call)
 		if err != nil {
@@ -130,23 +157,55 @@ func platformReadHandler(
 			}
 			return nil, nil, err
 		}
-		skillEnhancement := in.IncludeOCR || in.IncludeASR || in.IncludeSummary
-		out := iplatform.ApplyFormats(content, in.Format)
-		if !strings.HasPrefix(call.ID, "collect_") && skillEnhancement {
-			if err := skill.Enhance(ctx, out, config.Skill(), skill.EnhanceOptions{
-				CallID: call.ID, IncludeOCR: in.IncludeOCR, IncludeASR: in.IncludeASR,
-				IncludeSummary: in.IncludeSummary, SourceText: content.Text, ScreenshotBase64: content.ScreenshotBase64, ArtifactStore: artStore,
-			}); err != nil {
-				return out, nil, err
+		var artifacts []protocol.Artifact
+		var localVideoPaths []string
+		isCollect := executor.IsCollectExecution(ctx)
+		if name == ToolYouTubeVideoRead && shouldDownloadYouTubeMedia(runtimeCfg, isCollect, in) {
+			if isCollect && artStore == nil {
+				return nil, nil, fmt.Errorf("YouTube media delivery requires an enabled artifact store")
+			}
+			downloadCtx, cancelDownload := youtubeDownloadContext(runtimeCfg, ctx, isCollect)
+			defer cancelDownload()
+			retainVideo := !isCollect && runtimeCfg.Skill.Media.RetainDownloadedVideo
+			videoPath, cleanupVideo, downloadErr := acquireYouTubeVideo(downloadCtx, in.URL, youtubeDownloadMaxBytes(runtimeCfg, isCollect), retainVideo, runtimeCfg.Skill.Media.Dir)
+			if downloadErr != nil {
+				return nil, nil, downloadErr
+			}
+			defer cleanupVideo()
+			if isCollect {
+				art, handoffErr := persistCollectedYouTubeVideo(ctx, artStore, videoPath, youtubeDownloadMaxBytes(runtimeCfg, true))
+				if handoffErr != nil {
+					return nil, nil, fmt.Errorf("persist downloaded YouTube video: %w", handoffErr)
+				}
+				content.Media = append(content.Media, iplatform.MediaItem{Type: "video", ArtifactID: art.ID})
+			}
+			if !isCollect && (in.IncludeOCR || in.IncludeASR || in.IncludeSummary) {
+				localVideoPaths = append(localVideoPaths, videoPath)
+			}
+			content.PlatformMetadata = iplatform.EnsureMeta(content.PlatformMetadata)
+			content.PlatformMetadata["media_extraction_source"] = "youtube_yt_dlp"
+			if retainVideo {
+				content.PlatformMetadata["downloaded_video_retained"] = true
 			}
 		}
-		var artifacts []protocol.Artifact
+		skillEnhancement := in.IncludeOCR || in.IncludeASR || in.IncludeSummary
+		out := iplatform.ApplyFormats(content, in.Format)
+		if !isCollect && skillEnhancement {
+			if err := skill.Enhance(ctx, out, runtimeCfg.Skill, skill.EnhanceOptions{
+				IncludeOCR: in.IncludeOCR, IncludeASR: in.IncludeASR,
+				IncludeSummary: in.IncludeSummary, SourceText: content.Text, ScreenshotBase64: content.ScreenshotBase64, ArtifactStore: artStore, LocalVideoPaths: localVideoPaths,
+			}); err != nil {
+				// Direct video understanding returns its partial text/metadata only;
+				// the provider-owned MP4 is never an output artifact in this path.
+				return out, artifacts, err
+			}
+		}
 		if content.ScreenshotBase64 != "" {
-			artID := call.ID + "_screenshot"
+			artID := artifact.NewID()
 			if artStore == nil {
 				return out, nil, fmt.Errorf("screenshot artifact store is unavailable")
 			}
-			art, err := artifact.PutBase64PNG(ctx, artStore, artID, content.ScreenshotBase64, config.Get().Gateway.ArtifactMaxInlineBytes)
+			art, err := artifact.PutBase64PNG(ctx, artStore, artID, content.ScreenshotBase64, runtimeCfg.Gateway.ArtifactMaxInlineBytes)
 			if err != nil {
 				return out, nil, fmt.Errorf("persist screenshot artifact: %w", err)
 			}
@@ -157,10 +216,63 @@ func platformReadHandler(
 	}
 }
 
+// persistCollectedYouTubeVideo is a Collect delivery adapter. It is separate
+// from video understanding: ASR/OCR receive a local path directly and never
+// observe artifact identifiers or storage lifecycle.
+func persistCollectedYouTubeVideo(ctx context.Context, store artifact.Store, path string, maxBytes int64) (protocol.Artifact, error) {
+	if store == nil {
+		return protocol.Artifact{}, fmt.Errorf("artifact store is unavailable")
+	}
+	if fileStore, ok := store.(artifact.FileStore); ok {
+		return fileStore.PutFile(ctx, artifact.NewID(), "video/mp4", filepath.Base(path), path, maxBytes)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return protocol.Artifact{}, err
+	}
+	if maxBytes > 0 && int64(len(data)) > maxBytes {
+		return protocol.Artifact{}, fmt.Errorf("video exceeds max bytes %d", maxBytes)
+	}
+	return store.Put(ctx, artifact.NewID(), "video/mp4", filepath.Base(path), data)
+}
+
 func validatePlatformURL(rawURL string, call *protocol.ToolCall, configDomains, defaultDomains []string) error {
 	domains := policy.MergeDomains(&call.Policy, configDomains)
 	if len(domains) == 0 {
 		domains = defaultDomains
 	}
 	return policy.ValidateURLDomain(rawURL, domains, nil)
+}
+
+func shouldDownloadYouTubeMedia(cfg *config.Config, isCollect bool, in platformReadInput) bool {
+	if !isCollect {
+		if !in.IncludeASR && !in.IncludeSummary && !(in.IncludeOCR && cfg.Skill.OCR.VideoFrames.EnabledOrDefault()) {
+			return false
+		}
+		return skill.ValidateVideoEnhancementRequest(cfg.Skill, skill.EnhanceOptions{
+			IncludeOCR: in.IncludeOCR, IncludeASR: in.IncludeASR, IncludeSummary: in.IncludeSummary,
+		}) == nil
+	}
+	return in.IncludeMedia && cfg.Collect.DownloadMedia != nil && *cfg.Collect.DownloadMedia
+}
+
+func youtubeDownloadMaxBytes(cfg *config.Config, isCollect bool) int64 {
+	if isCollect {
+		return cfg.Collect.MaxMediaBytes
+	}
+	if maxBytes := cfg.Skill.Media.MaxBytes; maxBytes > 0 {
+		return maxBytes
+	}
+	return skill.DefaultSkillMediaMaxBytes
+}
+
+func youtubeDownloadContext(cfg *config.Config, ctx context.Context, isCollect bool) (context.Context, context.CancelFunc) {
+	seconds := cfg.Collect.MediaTimeoutSec
+	if !isCollect {
+		seconds = cfg.Skill.Media.TimeoutSecOrDefault()
+	}
+	if seconds <= 0 {
+		return context.WithCancel(ctx)
+	}
+	return context.WithTimeout(ctx, time.Duration(seconds)*time.Second)
 }

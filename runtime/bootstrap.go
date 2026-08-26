@@ -54,6 +54,7 @@ func collectProviders(cfg *config.Config, opts RegistryOptions) []provider.Provi
 	var out []provider.Provider
 	if cfg.Providers.PlatformEnabled == nil || *cfg.Providers.PlatformEnabled {
 		out = append(out, &platformprov.Provider{
+			Config:        cfg,
 			ConfigDomains: domains,
 			ArtifactStore: opts.ArtifactStore,
 		})
@@ -117,11 +118,12 @@ func NewArtifactStore(cfg *config.Config) (artifact.Store, error) {
 func runtimeOptions(cfg *config.Config, instanceID string, allowedTools []string, store artifact.Store) Options {
 	domains := cfg.Gateway.AllowedDomains
 	return Options{
-		InstanceID:      instanceID,
-		AllowedTools:    allowedTools,
-		ConfigDomains:   domains,
-		ArtifactStore:   store,
-		RequireApproval: cfg.Gateway.RequireApproval == nil || *cfg.Gateway.RequireApproval,
+		InstanceID:             instanceID,
+		AllowedTools:           allowedTools,
+		ConfigDomains:          domains,
+		ArtifactStore:          store,
+		ArtifactMaxInlineBytes: cfg.Gateway.ArtifactMaxInlineBytes,
+		RequireApproval:        cfg.Gateway.RequireApproval == nil || *cfg.Gateway.RequireApproval,
 		TimeoutForCall: func(call *protocol.ToolCall) time.Duration {
 			return RecommendedCallTimeout(cfg, call)
 		},

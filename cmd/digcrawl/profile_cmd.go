@@ -40,6 +40,31 @@ var skillReadTools = []string{
 	"feed.read",
 }
 
+// legacySkillReadTools is the shipped Skill allowlist before ASR opt-in and
+// YouTube support. Keep this list frozen: deriving it from skillReadTools
+// would let future default-tool additions change which user policies qualify
+// for a backward-compatible migration.
+var legacySkillReadTools = []string{
+	"gateway.ping",
+	"browser.browse",
+	"wechat.article.read",
+	"xiaohongshu.note.read",
+	"douyin.video.read",
+	"toutiao.article.read",
+	"toutiao.video.read",
+	"bilibili.video.read",
+	"weibo.post.read",
+	"kuaishou.video.read",
+	"zhihu.content.read",
+	"x.post.read",
+	"reddit.post.read",
+	"reddit.subreddit.read",
+	"reddit.user.read",
+	"threads.post.read",
+	"instagram.content.read",
+	"feed.read",
+}
+
 func runInit(args []string) {
 	fs := flag.NewFlagSet("init", flag.ExitOnError)
 	profile := fs.String("profile", "", "profile to create (currently: skill)")

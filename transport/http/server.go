@@ -97,6 +97,18 @@ func (s *Server) handleArtifact(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := strings.TrimPrefix(r.PathValue("id"), "/")
+	if streamStore, ok := s.artStore.(artifact.FileStore); ok {
+		reader, contentType, err := streamStore.Open(r.Context(), id)
+		if err != nil {
+			http.Error(w, "artifact not found", http.StatusNotFound)
+			return
+		}
+		defer reader.Close()
+		w.Header().Set("Content-Type", contentType)
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.Copy(w, reader)
+		return
+	}
 	data, contentType, err := s.artStore.Get(r.Context(), id)
 	if err != nil {
 		http.Error(w, "artifact not found", http.StatusNotFound)

@@ -44,11 +44,15 @@ type SkillConfig struct {
 
 // SkillMediaConfig controls media acquisition for explicit Skill OCR/ASR requests.
 type SkillMediaConfig struct {
-	DownloadMedia    bool   `yaml:"DownloadMedia" json:"DownloadMedia,omitempty"`
-	Dir              string `yaml:"Dir" json:"Dir,omitempty"`
-	MaxBytes         int64  `yaml:"MaxBytes" json:"MaxBytes,omitempty"`
-	TimeoutSec       int    `yaml:"TimeoutSec" json:"TimeoutSec,omitempty"`
-	MaxASRCandidates int    `yaml:"MaxASRCandidates" json:"MaxASRCandidates,omitempty"`
+	DownloadMedia bool `yaml:"DownloadMedia" json:"DownloadMedia,omitempty"`
+	// RetainDownloadedVideo keeps a provider-downloaded MP4 after explicit
+	// video ASR/OCR. It is opt-in; the default lifecycle is temporary download
+	// followed by cleanup after the provider finishes enrichment.
+	RetainDownloadedVideo bool   `yaml:"RetainDownloadedVideo" json:"RetainDownloadedVideo,omitempty"`
+	Dir                   string `yaml:"Dir" json:"Dir,omitempty"`
+	MaxBytes              int64  `yaml:"MaxBytes" json:"MaxBytes,omitempty"`
+	TimeoutSec            int    `yaml:"TimeoutSec" json:"TimeoutSec,omitempty"`
+	MaxASRCandidates      int    `yaml:"MaxASRCandidates" json:"MaxASRCandidates,omitempty"`
 }
 
 const (

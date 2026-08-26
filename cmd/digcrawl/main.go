@@ -232,7 +232,7 @@ func runMCP(args []string) {
 	if err != nil {
 		log.Fatalf("load MCP profile: %v (run `digcrawl init --profile skill` or pass --config)", err)
 	}
-	allowSkillASRConfigurationTool(cfg)
+	allowDefaultSkillProfileTools(cfg)
 	rt, err := runtime.NewRuntime(cfg)
 	if err != nil {
 		log.Fatalf("runtime: %v", err)
@@ -243,19 +243,54 @@ func runMCP(args []string) {
 	}
 }
 
-// allowSkillASRConfigurationTool keeps existing standard Skill profiles
-// forward-compatible without rewriting their allowlist at MCP startup. The
-// configuration tool persists only the two ASR opt-in settings after consent.
-func allowSkillASRConfigurationTool(cfg *config.Config) {
-	if cfg == nil || !config.IsDefaultSkillProfile(cfg.SourcePath) {
+// allowDefaultSkillProfileTools keeps existing standard Skill profiles
+// forward-compatible without rewriting their allowlist at MCP startup.
+func allowDefaultSkillProfileTools(cfg *config.Config) {
+	if cfg == nil || !config.IsDefaultSkillProfile(cfg.SourcePath) || !isLegacyDefaultSkillAllowlist(cfg.Gateway.AllowedTools) {
 		return
 	}
-	for _, tool := range cfg.Gateway.AllowedTools {
-		if tool == "skill.asr.enable" {
-			return
+	for _, required := range []string{"skill.asr.enable", "youtube.video.read"} {
+		found := false
+		for _, tool := range cfg.Gateway.AllowedTools {
+			if tool == required {
+				found = true
+				break
+			}
+		}
+		if !found {
+			cfg.Gateway.AllowedTools = append(cfg.Gateway.AllowedTools, required)
 		}
 	}
-	cfg.Gateway.AllowedTools = append(cfg.Gateway.AllowedTools, "skill.asr.enable")
+}
+
+// isLegacyDefaultSkillAllowlist recognizes only the two shipped allowlists
+// that predate YouTube support. A default-path profile may still be an
+// operator-customized policy and must not be broadened merely because of where
+// it is stored.
+func isLegacyDefaultSkillAllowlist(tools []string) bool {
+	return sameToolSet(tools, legacySkillReadTools) ||
+		sameToolSet(tools, append([]string{"skill.asr.enable"}, legacySkillReadTools...))
+}
+
+func sameToolSet(actual, standard []string) bool {
+	want := make(map[string]struct{}, len(standard))
+	for _, tool := range standard {
+		want[tool] = struct{}{}
+	}
+	if len(actual) != len(want) {
+		return false
+	}
+	seen := make(map[string]struct{}, len(actual))
+	for _, tool := range actual {
+		if _, ok := want[tool]; !ok {
+			return false
+		}
+		if _, duplicate := seen[tool]; duplicate {
+			return false
+		}
+		seen[tool] = struct{}{}
+	}
+	return true
 }
 
 func runCollectCommand(args []string) {

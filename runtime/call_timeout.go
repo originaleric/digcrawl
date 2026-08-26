@@ -25,6 +25,11 @@ func RecommendedCallTimeout(cfg *config.Config, call *protocol.ToolCall) time.Du
 	skillASRSeconds := 1800
 	directASRSeconds := 1800
 	summarySeconds := 60
+	ocrSeconds := config.OCRConfig{}.TimeoutSecOrDefault()
+	maxOCRImages := config.OCRConfig{}.MaxImagesOrDefault()
+	videoFrameSeconds := config.VideoFrameOCRConfig{}.TimeoutSecOrDefault()
+	maxVideoFrames := config.VideoFrameOCRConfig{}.MaxTotalFramesOrDefault()
+	videoFrameOCREnabled := false
 	if cfg != nil {
 		if cfg.LocalBrowser.TotalTimeoutSec > 0 {
 			browserSeconds = cfg.LocalBrowser.TotalTimeoutSec
@@ -34,6 +39,11 @@ func RecommendedCallTimeout(cfg *config.Config, call *protocol.ToolCall) time.Du
 		skillASRSeconds = cfg.Skill.ASR.MaxTimeoutSecOrDefault()
 		directASRSeconds = cfg.ASR.MaxTimeoutSecOrDefault()
 		summarySeconds = cfg.Skill.Summary.TimeoutSecOrDefault()
+		ocrSeconds = cfg.Skill.OCR.TimeoutSecOrDefault()
+		maxOCRImages = cfg.Skill.OCR.MaxImagesOrDefault()
+		videoFrameSeconds = cfg.Skill.OCR.VideoFrames.TimeoutSecOrDefault()
+		maxVideoFrames = cfg.Skill.OCR.VideoFrames.MaxTotalFramesOrDefault()
+		videoFrameOCREnabled = cfg.Skill.OCR.EnabledOrDefault() && cfg.Skill.OCR.VideoFrames.EnabledOrDefault()
 	}
 
 	if call != nil && call.Tool == "asr.transcribe" {
@@ -47,6 +57,8 @@ func RecommendedCallTimeout(cfg *config.Config, call *protocol.ToolCall) time.Du
 
 	seconds := browserSeconds + runtimeCallOverheadSeconds
 	var input struct {
+		IncludeMedia   bool `json:"include_media"`
+		IncludeOCR     bool `json:"include_ocr"`
 		IncludeASR     bool `json:"include_asr"`
 		IncludeSummary bool `json:"include_summary"`
 	}
@@ -59,9 +71,20 @@ func RecommendedCallTimeout(cfg *config.Config, call *protocol.ToolCall) time.Du
 	// sooner because they never enter that phase.
 	if input.IncludeASR || input.IncludeSummary {
 		seconds += maxASRCandidates * (mediaSeconds + skillASRSeconds)
+	} else if input.IncludeMedia {
+		seconds += mediaSeconds
 	}
 	if input.IncludeSummary {
 		seconds += summarySeconds
+	}
+	if input.IncludeOCR && cfg != nil && cfg.Skill.OCR.EnabledOrDefault() {
+		// Image OCR is sequential and bounded by MaxImages. Video-frame OCR
+		// additionally acquires one bounded local video candidate, extracts a
+		// bounded frame set, then recognizes each frame with the same provider.
+		seconds += maxOCRImages * ocrSeconds
+		if videoFrameOCREnabled {
+			seconds += mediaSeconds + videoFrameSeconds + maxVideoFrames*ocrSeconds
+		}
 	}
 	return time.Duration(seconds) * time.Second
 }

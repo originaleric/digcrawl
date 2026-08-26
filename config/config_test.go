@@ -65,6 +65,12 @@ func TestSkillMediaMaxASRCandidatesOrDefault(t *testing.T) {
 	}
 }
 
+func TestSkillMediaRetainDownloadedVideoDefaultsOff(t *testing.T) {
+	if (SkillMediaConfig{}).RetainDownloadedVideo {
+		t.Fatal("downloaded videos must be cleaned up unless the user explicitly opts in")
+	}
+}
+
 func TestDefaultConfigPathsUseXDGDirectory(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", "/tmp/digcrawl-xdg")
 	if got, want := DefaultConfigPath(), filepath.Join("/tmp/digcrawl-xdg", "digcrawl", "config.yaml"); got != want {

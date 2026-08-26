@@ -54,6 +54,10 @@ LocalBrowser:
 Skill:
   Media:
     DownloadMedia: false
+
+    # Keep provider-downloaded MP4 files after explicit ASR/video-frame OCR.
+    # Default false: the temporary MP4 is deleted after processing.
+    RetainDownloadedVideo: false
     # Required only for explicit ASR when DownloadMedia is true.
     # Replace with a user-owned absolute directory.
     Dir: "/absolute/path/to/digcrawl/skill-media"

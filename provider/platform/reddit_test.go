@@ -63,8 +63,8 @@ func TestRedditPostReadHandlerReturnsScreenshotArtifact(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := out["screenshot_artifact_id"]; got != "reddit_screenshot_screenshot" {
-		t.Fatalf("screenshot_artifact_id=%v", got)
+	if got := out["screenshot_artifact_id"]; got == "" || got == "reddit_screenshot_screenshot" {
+		t.Fatalf("screenshot artifact must use a runtime-owned ID: %v", got)
 	}
 	if len(artifacts) != 1 || artifacts[0].ID != out["screenshot_artifact_id"] {
 		t.Fatalf("artifacts=%+v", artifacts)

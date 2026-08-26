@@ -82,6 +82,26 @@ func TestRecommendedCallTimeoutRespectsASRCandidateLimit(t *testing.T) {
 	}
 }
 
+func TestRecommendedCallTimeoutIncludesExplicitOCRBudgets(t *testing.T) {
+	enabled := true
+	cfg := &config.Config{
+		LocalBrowser: config.LocalBrowserConfig{TotalTimeoutSec: 90},
+		Skill: config.SkillConfig{
+			Media: config.SkillMediaConfig{TimeoutSec: 30},
+			OCR: config.OCRConfig{
+				Enabled:     &enabled,
+				TimeoutSec:  20,
+				MaxImages:   3,
+				VideoFrames: config.VideoFrameOCRConfig{Enabled: &enabled, TimeoutSec: 40, MaxTotalFrames: 2},
+			},
+		},
+	}
+	call := &protocol.ToolCall{Input: json.RawMessage(`{"include_ocr":true}`)}
+	if got, want := RecommendedCallTimeout(cfg, call), 290*time.Second; got != want {
+		t.Fatalf("OCR timeout=%s want %s", got, want)
+	}
+}
+
 func TestExecutionTimeoutUsesConfiguredDefaultUnlessHostOverrides(t *testing.T) {
 	t.Parallel()
 	rt := New(registry.New(), Options{TimeoutForCall: func(*protocol.ToolCall) time.Duration { return 5 * time.Minute }})
@@ -231,7 +251,7 @@ func TestExecutePreservesStructuredOutputOnHandlerError(t *testing.T) {
 	reg.Register(registry.Entry{
 		Descriptor: protocol.ToolDescriptor{Name: "structured.error"},
 		Handler: func(ctx context.Context, call *protocol.ToolCall) (map[string]any, []protocol.Artifact, error) {
-			return map[string]any{"platform_metadata": map[string]any{"error_code": "LOGIN_REQUIRED"}}, nil, testStructuredError{code: "LOGIN_REQUIRED", msg: "login required"}
+			return map[string]any{"platform_metadata": map[string]any{"error_code": "LOGIN_REQUIRED"}}, []protocol.Artifact{{ID: "partial-media", Type: "video/mp4"}}, testStructuredError{code: "LOGIN_REQUIRED", msg: "login required"}
 		},
 	})
 	rt := New(reg, Options{})
@@ -241,6 +261,9 @@ func TestExecutePreservesStructuredOutputOnHandlerError(t *testing.T) {
 	}
 	if len(res.Output) == 0 {
 		t.Fatalf("expected structured output to be preserved")
+	}
+	if len(res.Artifacts) != 1 || res.Artifacts[0].ID != "partial-media" {
+		t.Fatalf("expected partial output artifact to be preserved: %+v", res.Artifacts)
 	}
 }
 
@@ -272,7 +295,7 @@ func TestExecutePreservesTypedMediaDownloadFailureFromSkill(t *testing.T) {
 			err := skill.Enhance(ctx, out, config.SkillConfig{
 				Media: config.SkillMediaConfig{DownloadMedia: true, Dir: t.TempDir()},
 				ASR:   config.ASRConfig{Enabled: &enabled, Provider: "stub"},
-			}, skill.EnhanceOptions{CallID: call.ID, IncludeASR: true})
+			}, skill.EnhanceOptions{IncludeASR: true})
 			return out, nil, err
 		},
 	})

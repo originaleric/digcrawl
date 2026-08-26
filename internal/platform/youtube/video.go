@@ -11,7 +11,8 @@ import (
 )
 
 // ReadVideo reads one public YouTube video. It uses browser-derived page state
-// and optional public caption tracks; it does not expose expiring playback URLs.
+// and optional public caption tracks. Explicit video download is owned by the
+// provider's yt-dlp integration after this page read succeeds.
 func ReadVideo(ctx context.Context, in platform.ReadInput) (*platform.Content, error) {
 	norm, err := NormalizeURL(in.URL)
 	if err != nil {
@@ -104,7 +105,17 @@ func normalizeVideo(ctx context.Context, in platform.ReadInput, norm *platform.N
 	content.PlatformMetadata["video_id"] = norm.PlatformID
 	content.PlatformMetadata["page_kind"] = ContentType
 	if in.IncludeMedia {
-		content.Media = platform.MediaFromMeta(meta)
+		// The player response can attach format-negotiation parameters to the
+		// thumbnail URL. Those parameters may force AVIF even when the downstream
+		// OCR provider cannot consume it. The stable public thumbnail endpoint is
+		// equivalent for this video and lets the existing image download path
+		// negotiate a broadly supported format.
+		if platform.MetaString(meta, "cover_url") != "" {
+			content.Media = []platform.MediaItem{{
+				Type: "image",
+				URL:  fmt.Sprintf("https://i.ytimg.com/vi/%s/hqdefault.jpg", norm.PlatformID),
+			}}
+		}
 	}
 	if in.IncludeScreenshot {
 		content.ScreenshotBase64 = resp.ScreenshotBase

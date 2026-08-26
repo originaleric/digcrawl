@@ -93,7 +93,11 @@ func (s *Service) collectTimeoutMs() int {
 		totalSec = 90
 	}
 	// Keep runtime's outer budget larger than browser navigation/selector work
-	// plus lightweight API probing and export handoff.
+	// plus explicit media acquisition. Export runs after Runtime.Execute and has
+	// the caller's context, so it is not included here.
+	if s.cfg.Collect.DownloadMedia != nil && *s.cfg.Collect.DownloadMedia && (s.cfg.Collect.IncludeMedia == nil || *s.cfg.Collect.IncludeMedia) {
+		totalSec += s.cfg.Collect.MediaTimeoutSec
+	}
 	return (totalSec + 30) * 1000
 }
 

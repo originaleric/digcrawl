@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -26,10 +27,24 @@ func InlineLimit(configured int64) int64 {
 	return configured
 }
 
+// NewID returns a runtime-owned opaque artifact identifier. External call IDs
+// are correlation data only and must not be reused as storage identities.
+func NewID() string {
+	return uuid.NewString()
+}
+
 // Store persists large tool outputs (screenshots, files).
 type Store interface {
 	Put(ctx context.Context, id, contentType, name string, data []byte) (protocol.Artifact, error)
 	Get(ctx context.Context, id string) ([]byte, string, error)
+}
+
+// FileStore extends Store for large artifacts. Callers can persist and serve
+// files without forcing a complete media payload into process memory.
+type FileStore interface {
+	Store
+	PutFile(ctx context.Context, id, contentType, name, sourcePath string, maxBytes int64) (protocol.Artifact, error)
+	Open(ctx context.Context, id string) (io.ReadCloser, string, error)
 }
 
 // DiskStore saves artifacts under a base directory.
@@ -61,8 +76,9 @@ func NewDiskStore(baseDir string, ttl time.Duration) (*DiskStore, error) {
 }
 
 func (s *DiskStore) Put(_ context.Context, id, contentType, name string, data []byte) (protocol.Artifact, error) {
-	if id == "" {
-		id = uuid.NewString()
+	var err error
+	if id, err = writeID(id); err != nil {
+		return protocol.Artifact{}, err
 	}
 	path := s.filePath(id)
 	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
@@ -84,7 +100,70 @@ func (s *DiskStore) Put(_ context.Context, id, contentType, name string, data []
 	}, nil
 }
 
-func (s *DiskStore) Get(_ context.Context, id string) ([]byte, string, error) {
+// PutFile persists a regular local file with a caller-provided size limit.
+// It is the large-media counterpart to Put and writes through a bounded copy.
+func (s *DiskStore) PutFile(_ context.Context, id, contentType, name, sourcePath string, maxBytes int64) (protocol.Artifact, error) {
+	info, err := os.Stat(sourcePath)
+	if err != nil {
+		return protocol.Artifact{}, err
+	}
+	if !info.Mode().IsRegular() {
+		return protocol.Artifact{}, fmt.Errorf("artifact source is not a regular file")
+	}
+	if maxBytes > 0 && info.Size() > maxBytes {
+		return protocol.Artifact{}, fmt.Errorf("artifact source exceeds max bytes %d", maxBytes)
+	}
+	if id, err = writeID(id); err != nil {
+		return protocol.Artifact{}, err
+	}
+	path := s.filePath(id)
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
+		return protocol.Artifact{}, err
+	}
+	source, err := os.Open(sourcePath)
+	if err != nil {
+		return protocol.Artifact{}, err
+	}
+	defer source.Close()
+	target, err := os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o640)
+	if err != nil {
+		return protocol.Artifact{}, err
+	}
+	reader := io.Reader(source)
+	if maxBytes > 0 {
+		reader = io.LimitReader(source, maxBytes+1)
+	}
+	written, copyErr := io.Copy(target, reader)
+	closeErr := target.Close()
+	if copyErr != nil || closeErr != nil || (maxBytes > 0 && written > maxBytes) {
+		_ = os.Remove(path)
+		if copyErr != nil {
+			return protocol.Artifact{}, copyErr
+		}
+		if closeErr != nil {
+			return protocol.Artifact{}, closeErr
+		}
+		return protocol.Artifact{}, fmt.Errorf("artifact source exceeds max bytes %d", maxBytes)
+	}
+	_ = os.WriteFile(s.metaPath(id), []byte(contentType), 0o640)
+	s.scheduleCleanup(time.Now().Add(s.TTL))
+	expires := time.Now().Add(s.TTL).Format(time.RFC3339)
+	return protocol.Artifact{ID: id, Type: contentType, Name: name, Size: written, URI: "digcrawl-artifact://" + id, ExpiresAt: expires}, nil
+}
+
+func (s *DiskStore) Get(ctx context.Context, id string) ([]byte, string, error) {
+	reader, contentType, err := s.Open(ctx, id)
+	if err != nil {
+		return nil, "", err
+	}
+	defer reader.Close()
+	data, err := io.ReadAll(reader)
+	return data, contentType, err
+}
+
+// Open returns an artifact stream for HTTP delivery without buffering it in
+// the transport process.
+func (s *DiskStore) Open(_ context.Context, id string) (io.ReadCloser, string, error) {
 	id = sanitizeID(id)
 	path := s.filePath(id)
 	if info, err := os.Stat(path); err != nil {
@@ -99,8 +178,8 @@ func (s *DiskStore) Get(_ context.Context, id string) ([]byte, string, error) {
 	if b, err := os.ReadFile(metaPath); err == nil {
 		contentType = strings.TrimSpace(string(b))
 	}
-	data, err := os.ReadFile(path)
-	return data, contentType, err
+	reader, err := os.Open(path)
+	return reader, contentType, err
 }
 
 func (s *DiskStore) scheduleCleanup(at time.Time) {
@@ -177,6 +256,20 @@ func sanitizeID(id string) string {
 	id = strings.TrimSpace(id)
 	id = strings.TrimPrefix(id, "digcrawl-artifact://")
 	return filepath.Base(id)
+}
+
+// writeID rejects path-like artifact IDs before any file operation. Reads
+// accept a digcrawl-artifact URI for convenience, but writers must preserve a
+// single opaque ID so every artifact remains beneath BaseDir.
+func writeID(id string) (string, error) {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return NewID(), nil
+	}
+	if id != filepath.Base(id) || id == "." || id == ".." {
+		return "", fmt.Errorf("artifact id must not contain a path")
+	}
+	return id, nil
 }
 
 // PutBase64PNG decodes base64 PNG and stores it.

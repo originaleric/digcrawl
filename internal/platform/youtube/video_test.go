@@ -15,13 +15,16 @@ func TestNormalizeVideoUsesDescriptionAndCoverWithoutPlaybackURL(t *testing.T) {
 	content := normalizeVideo(context.Background(), platform.ReadInput{IncludeMedia: true}, &platform.NormalizedURL{
 		OriginalURL: "https://youtu.be/dQw4w9WgXcQ", CanonicalURL: "https://www.youtube.com/watch?v=dQw4w9WgXcQ", PlatformID: "dQw4w9WgXcQ",
 	}, &browser.BrowserBrowseResponse{Metadata: map[string]any{
-		"title": "Video", "description": "Description", "author_name": "Channel", "cover_url": "https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg",
+		"title": "Video", "description": "Description", "author_name": "Channel", "cover_url": "https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg?sqp=forced-avif",
 	}})
 	if content.Title != "Video" || content.Text != "Description" || content.Author == nil || content.Author.Name != "Channel" {
 		t.Fatalf("unexpected content: %+v", content)
 	}
 	if len(content.Media) != 1 || content.Media[0].Type != "image" {
 		t.Fatalf("media=%+v", content.Media)
+	}
+	if got, want := content.Media[0].URL, "https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg"; got != want {
+		t.Fatalf("thumbnail URL=%q want stable endpoint %q", got, want)
 	}
 	if _, ok := content.PlatformMetadata["video_urls"]; ok {
 		t.Fatalf("provider must not expose playback URLs: %+v", content.PlatformMetadata)

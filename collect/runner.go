@@ -10,6 +10,7 @@ import (
 	"github.com/originaleric/digcrawl/protocol"
 	browserprov "github.com/originaleric/digcrawl/provider/browser"
 	"github.com/originaleric/digcrawl/runtime"
+	"github.com/originaleric/digcrawl/runtime/executor"
 )
 
 // RunOptions configures a single collect execution.
@@ -51,7 +52,7 @@ func Run(ctx context.Context, rt *runtime.Runtime, opts RunOptions) (map[string]
 	if opts.TimeoutMs > 0 {
 		call.Policy.TimeoutMs = opts.TimeoutMs
 	}
-	result := rt.Execute(ctx, call)
+	result := rt.Execute(executor.WithCollectExecution(ctx), call)
 	if result.Status != "success" {
 		msg := "tool execution failed"
 		if result.Error != nil {

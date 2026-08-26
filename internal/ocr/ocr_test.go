@@ -100,6 +100,31 @@ func TestEnrichMapPrefersDownloadedLocalImageWithoutDuplicateURL(t *testing.T) {
 	if results[0].LocalPath != local {
 		t.Fatalf("expected local image OCR, got %+v", results[0])
 	}
+	meta := out["platform_metadata"].(map[string]any)
+	encoded := meta["ocr_results"].([]map[string]any)
+	if _, exists := encoded[0]["local_path"]; exists {
+		t.Fatalf("OCR output must not export local paths: %+v", encoded[0])
+	}
+}
+
+func TestRequestedFailureDistinguishesProviderErrorFromNoTextResult(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		meta map[string]any
+		want bool
+	}{
+		{name: "all provider failures", meta: map[string]any{"ocr_results": []map[string]any{{"error": "OCR provider HTTP 400"}}}, want: true},
+		{name: "global provider failure", meta: map[string]any{"ocr_error": "OCR APIKey is empty"}, want: true},
+		{name: "model found no text", meta: map[string]any{"ocr_results": []map[string]any{{"text": "No readable text found."}}}},
+		{name: "no candidates", meta: map[string]any{"ocr_count": 0}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := RequestedFailure(map[string]any{"platform_metadata": tc.meta})
+			if (err != nil) != tc.want {
+				t.Fatalf("error=%v wantFailure=%v", err, tc.want)
+			}
+		})
+	}
 }
 
 func TestEnrichMapExtraDataURLScreenshot(t *testing.T) {
