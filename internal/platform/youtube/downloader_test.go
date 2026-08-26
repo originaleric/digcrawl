@@ -3,7 +3,9 @@ package youtube
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -12,13 +14,7 @@ import (
 func TestDownloadVideoUsesCanonicalURLAndEnforcesSize(t *testing.T) {
 	oldCommand := ytDLPCommand
 	t.Cleanup(func() { ytDLPCommand = oldCommand })
-	dir := t.TempDir()
-	command := filepath.Join(dir, "fake-yt-dlp")
-	script := "#!/bin/sh\nout=\"\"\nlast=\"\"\nwhile [ \"$#\" -gt 0 ]; do\n  if [ \"$1\" = \"--output\" ]; then out=\"$2\"; shift 2; continue; fi\n  last=\"$1\"; shift\ndone\npath=\"$(dirname \"$out\")/video.mp4\"\nprintf 'video' > \"$path\"\nprintf '%s\\n' \"$path\"\nprintf '%s\\n' \"$last\" >&2\n"
-	if err := os.WriteFile(command, []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	ytDLPCommand = command
+	ytDLPCommand = fakeYTDLP(t, "video")
 	path, cleanup, err := DownloadVideo(context.Background(), "https://youtu.be/dQw4w9WgXcQ", 16, false, "")
 	if err != nil {
 		t.Fatal(err)
@@ -39,13 +35,7 @@ func TestDownloadVideoUsesCanonicalURLAndEnforcesSize(t *testing.T) {
 func TestDownloadVideoRejectsOversizedOutput(t *testing.T) {
 	oldCommand := ytDLPCommand
 	t.Cleanup(func() { ytDLPCommand = oldCommand })
-	dir := t.TempDir()
-	command := filepath.Join(dir, "fake-yt-dlp")
-	script := "#!/bin/sh\nout=\"\"\nwhile [ \"$#\" -gt 0 ]; do\n  if [ \"$1\" = \"--output\" ]; then out=\"$2\"; shift 2; continue; fi\n  shift\ndone\npath=\"$(dirname \"$out\")/video.mp4\"\nprintf 'this file is too large' > \"$path\"\nprintf '%s\\n' \"$path\"\n"
-	if err := os.WriteFile(command, []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	ytDLPCommand = command
+	ytDLPCommand = fakeYTDLP(t, "oversized")
 	_, _, err := DownloadVideo(context.Background(), "https://www.youtube.com/watch?v=dQw4w9WgXcQ", 4, false, "")
 	if err == nil || !strings.Contains(err.Error(), "exceeds allowed maximum") {
 		t.Fatalf("err=%v", err)
@@ -55,11 +45,7 @@ func TestDownloadVideoRejectsOversizedOutput(t *testing.T) {
 func TestDownloadVideoPreservesDownloaderFailureDetail(t *testing.T) {
 	oldCommand := ytDLPCommand
 	t.Cleanup(func() { ytDLPCommand = oldCommand })
-	command := filepath.Join(t.TempDir(), "fake-yt-dlp")
-	if err := os.WriteFile(command, []byte("#!/bin/sh\necho 'provider diagnostic' >&2\nexit 7\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	ytDLPCommand = command
+	ytDLPCommand = fakeYTDLP(t, "failure")
 	_, _, err := DownloadVideo(context.Background(), "https://youtu.be/dQw4w9WgXcQ", 16, false, "")
 	if err == nil || !strings.Contains(err.Error(), "provider diagnostic") {
 		t.Fatalf("err=%v", err)
@@ -69,12 +55,7 @@ func TestDownloadVideoPreservesDownloaderFailureDetail(t *testing.T) {
 func TestDownloadVideoStopsWhenTemporaryDirectoryExceedsBound(t *testing.T) {
 	oldCommand := ytDLPCommand
 	t.Cleanup(func() { ytDLPCommand = oldCommand })
-	command := filepath.Join(t.TempDir(), "fake-yt-dlp")
-	script := "#!/bin/sh\nout=\"\"\nwhile [ \"$#\" -gt 0 ]; do\n  if [ \"$1\" = \"--output\" ]; then out=\"$2\"; shift 2; continue; fi\n  shift\ndone\ndir=\"$(dirname \"$out\")\"\ndd if=/dev/zero of=\"$dir/partial\" bs=1 count=13 2>/dev/null\nsleep 2\n"
-	if err := os.WriteFile(command, []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	ytDLPCommand = command
+	ytDLPCommand = fakeYTDLP(t, "temporary-oversized")
 	_, _, err := DownloadVideo(context.Background(), "https://youtu.be/dQw4w9WgXcQ", 4, false, "")
 	if err == nil || !strings.Contains(err.Error(), "temporary download size") {
 		t.Fatalf("err=%v", err)
@@ -84,11 +65,7 @@ func TestDownloadVideoStopsWhenTemporaryDirectoryExceedsBound(t *testing.T) {
 func TestDownloadVideoPreservesContextDeadline(t *testing.T) {
 	oldCommand := ytDLPCommand
 	t.Cleanup(func() { ytDLPCommand = oldCommand })
-	command := filepath.Join(t.TempDir(), "fake-yt-dlp")
-	if err := os.WriteFile(command, []byte("#!/bin/sh\nsleep 2\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	ytDLPCommand = command
+	ytDLPCommand = fakeYTDLP(t, "sleep")
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	t.Cleanup(cancel)
 	_, _, err := DownloadVideo(ctx, "https://youtu.be/dQw4w9WgXcQ", 16, false, "")
@@ -100,12 +77,7 @@ func TestDownloadVideoPreservesContextDeadline(t *testing.T) {
 func TestDownloadVideoRetainsOnlyWhenExplicitlyRequested(t *testing.T) {
 	oldCommand := ytDLPCommand
 	t.Cleanup(func() { ytDLPCommand = oldCommand })
-	command := filepath.Join(t.TempDir(), "fake-yt-dlp")
-	script := "#!/bin/sh\nout=\"\"\nwhile [ \"$#\" -gt 0 ]; do\n  if [ \"$1\" = \"--output\" ]; then out=\"$2\"; shift 2; continue; fi\n  shift\ndone\npath=\"$(dirname \"$out\")/video.mp4\"\nprintf 'video' > \"$path\"\nprintf '%s\\n' \"$path\"\n"
-	if err := os.WriteFile(command, []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	ytDLPCommand = command
+	ytDLPCommand = fakeYTDLP(t, "video")
 	root := t.TempDir()
 	path, cleanup, err := DownloadVideo(context.Background(), "https://youtu.be/dQw4w9WgXcQ", 16, true, root)
 	if err != nil {
@@ -118,4 +90,23 @@ func TestDownloadVideoRetainsOnlyWhenExplicitlyRequested(t *testing.T) {
 	if rel, err := filepath.Rel(root, path); err != nil || strings.HasPrefix(rel, "..") {
 		t.Fatalf("retained path=%q must belong to configured directory %q", path, root)
 	}
+}
+
+// fakeYTDLP builds a native executable rather than writing a shell script.
+// The downloader is an external-command boundary, so every operating system
+// must exercise the same success and failure contracts in CI.
+func fakeYTDLP(t testing.TB, mode string) string {
+	t.Helper()
+	t.Setenv("DIGCRAWL_TEST_FAKE_YTDLP_MODE", mode)
+	name := "fake-yt-dlp"
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	path := filepath.Join(t.TempDir(), name)
+	command := exec.Command("go", "build", "-o", path, "github.com/originaleric/digcrawl/internal/platform/youtube/testdata/fake_ytdlp")
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("build fake yt-dlp fixture: %v: %s", err, strings.TrimSpace(string(output)))
+	}
+	return path
 }
