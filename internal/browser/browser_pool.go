@@ -94,7 +94,7 @@ func normalizeLocalBrowserConfig(cfg config.LocalBrowserConfig) config.LocalBrow
 	// install` or a dependency update. Treat a missing explicit path the same as
 	// an unset one so the discovery order below can select a current executable.
 	if !isExecutableFile(cfg.ChromePath) {
-		cfg.ChromePath = discoverLocalChromePath()
+		cfg.ChromePath = discoverLocalChromePathForMode(*cfg.Headless)
 	}
 	if isHeadlessShellPath(cfg.ChromePath) {
 		cfg.ExtraArgs = appendMissingArgs(cfg.ExtraArgs, headlessShellCompatibilityArgs()...)
@@ -114,16 +114,26 @@ func CheckAvailable(cfg config.LocalBrowserConfig) error {
 }
 
 func discoverLocalChromePath() string {
+	return discoverLocalChromePathForMode(false)
+}
+
+func discoverLocalChromePathForMode(headless bool) string {
 	for _, key := range []string{"DIGCRAWL_CHROME_PATH", "CHROME_PATH", "CHROME_BIN"} {
 		if path := strings.TrimSpace(os.Getenv(key)); isExecutableFile(path) {
 			return path
 		}
 	}
 
-	// A bundled Playwright headless shell is an ephemeral cache artifact. Prefer
-	// an installed browser when available: it survives Playwright cache cleanup
-	// and is less sensitive to version-specific launch flags on desktop hosts.
-	if path := firstExecutablePath(localChromeCandidates(), playwrightHeadlessShellCandidates()); path != "" {
+	installed := localChromeCandidates()
+	headlessShell := playwrightHeadlessShellCandidates()
+	if headless {
+		// Service crawls run headless and do not need an interactive browser.
+		// Prefer the Playwright headless shell there because desktop Chrome can
+		// be constrained by user-session, profile, or window-server state.
+		if path := firstExecutablePath(headlessShell, installed); path != "" {
+			return path
+		}
+	} else if path := firstExecutablePath(installed, headlessShell); path != "" {
 		return path
 	}
 

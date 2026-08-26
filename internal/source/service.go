@@ -1367,17 +1367,14 @@ func (r Service) readHTMLLinks(ctx context.Context, item Source, platform string
 		if out, err := r.readHTMLLinksBrowser(ctx, item, platform, base); err == nil {
 			return out, nil
 		} else if staticErr != nil {
-			if platform == "toutiao" {
-				if accessErr := r.toutiaoAuthorAccessError(ctx, item.URL); accessErr != nil {
-					return nil, accessErr
-				}
+			accessErr := r.toutiaoAccessProbeError(ctx, item.URL, platform)
+			if accessErr != nil {
+				return nil, fmt.Errorf("%v; browser fallback: %w; access probe: %v", staticErr, err, accessErr)
 			}
 			return nil, fmt.Errorf("%v; browser fallback: %w", staticErr, err)
 		} else {
-			if platform == "toutiao" {
-				if accessErr := r.toutiaoAuthorAccessError(ctx, item.URL); accessErr != nil {
-					return nil, accessErr
-				}
+			if accessErr := r.toutiaoAccessProbeError(ctx, item.URL, platform); accessErr != nil {
+				return nil, fmt.Errorf("browser fallback: %w; access probe: %v", err, accessErr)
 			}
 			return nil, err
 		}
@@ -1391,6 +1388,13 @@ func (r Service) readHTMLLinks(ctx context.Context, item Source, platform string
 		return nil, staticErr
 	}
 	return nil, fmt.Errorf("CONTENT_NOT_FOUND: no %s content links found", platform)
+}
+
+func (r Service) toutiaoAccessProbeError(ctx context.Context, rawURL, platform string) error {
+	if platform != "toutiao" {
+		return nil
+	}
+	return r.toutiaoAuthorAccessError(ctx, rawURL)
 }
 
 func (r Service) readSocialHTMLLinks(ctx context.Context, item Source, platform, waitSelector, contentSelector string) ([]Item, error) {
@@ -1551,11 +1555,21 @@ func discoveryCandidatesFromBrowser(resp *browser.BrowserBrowseResponse) []strin
 }
 
 func discoveryMetadataScript() string {
-	return `() => {
-  const hrefs = Array.from(document.querySelectorAll('a[href]')).map(a => a.href).filter(Boolean);
-  const scripts = Array.from(document.scripts).map(s => s.textContent || s.src || '').join('\n').slice(0, 200000);
-  const text = (document.body && document.body.innerText || '').slice(0, 100000);
-  return { hrefs, scripts, text, url: String(location.href || '') };
+	return `async () => {
+  const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+  const collect = () => {
+    const hrefs = Array.from(document.querySelectorAll('a[href]')).map(a => a.href).filter(Boolean);
+    const scripts = Array.from(document.scripts).map(s => s.textContent || s.src || '').join('\n').slice(0, 200000);
+    const text = (document.body && document.body.innerText || '').slice(0, 100000);
+    return { hrefs, scripts, text, url: String(location.href || '') };
+  };
+  let out = collect();
+  for (let i = 0; i < 8; i++) {
+    window.scrollTo(0, document.body ? document.body.scrollHeight : 0);
+    await sleep(1500);
+    out = collect();
+  }
+  return out;
 }`
 }
 
