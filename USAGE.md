@@ -267,7 +267,7 @@ Platform:
 
 OCR 启用后会在平台工具、通用浏览器读取和 Collect 导出中统一生效。结果写入 `platform_metadata.ocr_results`，并记录 `ocr_count`、provider、model、图片来源和错误诊断。直接平台/浏览器调用会把截图作为显式 OCR 候选；Collect 下载媒体时会优先对本地 `.assets/` 图片做 OCR，未下载媒体时会使用远程图片 URL。OpenAI-compatible Provider 对本地图片和截图会转换为 data URL，再调用 `/chat/completions`。合法响应但没有可读文字的图片或视频帧会保留为正常空结果：不计入 `ocr_count`、不追加空的 `## OCR` 段；HTTP 失败、响应无法解析或响应缺少 `choices` 仍会记录为错误。
 
-对于只有 BGM 或没有可用语音的视频，可以显式开启本地视频抽帧 OCR。Collect 在 `Collect.DownloadMedia=true` 时会处理其导出的视频；直接平台读取（如 `youtube.video.read`）则需同时显式请求 `include_ocr=true`、启用 `Skill.Media.DownloadMedia` 和 `Skill.OCR.VideoFrames.Enabled`。Provider 仅负责下载受限本地 MP4，并把文件路径传给既有 ASR/抽帧 OCR core；这些 core 只输入视频、输出识别结果，不感知平台、artifact 或 transport。直接读取默认在识别后删除 MP4；将 `Skill.Media.RetainDownloadedVideo=true` 作为显式 opt-in 后，文件保留在既有 `Skill.Media.Dir` 下。通用 Skill 媒体获取会在该目录内为每次执行创建私有子目录；外部 call ID 仅关联请求，不能参与目录或 manifest 命名。Collect 的 MP4 导出是独立交付路径，不参与 ASR/OCR 的输入契约。DigCrawl 以固定间隔调用本机 `ffmpeg` 抽取 JPEG，再交给已配置的 OCR provider；临时帧在识别后删除，不会写入 `.assets/` 或 OCR 结果。它不替代 ASR：`ASR.Enabled=true` 处理音频，`OCR.VideoFrames.Enabled=true` 处理内嵌文字；两者均开启时各自执行，任一失败不会阻止另一项。`MaxFrames` 与 `TimeoutSec` 分别是每个视频的抽帧数量和 ffmpeg 运行上限；`MaxTotalFrames` 则是单条内容的硬总量预留上限，按媒体出现顺序分配，失败或没有可抽帧的视频也会占用其预留份额，以防异常媒体绕过限制。`OCR.MaxImages` 只限制文章图片与截图，两类预算互不抢占。若 provider 是远程服务，抽出的帧会发送给它，因此默认关闭。
+对于只有 BGM 或没有可用语音的视频，可以显式开启本地视频抽帧 OCR。Collect 在 `Collect.DownloadMedia=true` 时会处理其导出的视频；直接平台读取（如 `youtube.video.read`）则需同时显式请求 `include_ocr=true`、启用 `Skill.Media.DownloadMedia` 和 `Skill.OCR.VideoFrames.Enabled`。Provider 仅负责下载受限本地 MP4，并把文件路径传给既有 ASR/抽帧 OCR core；这些 core 只输入视频、输出识别结果，不感知平台、artifact 或 transport。直接读取默认在识别后删除 MP4；用户明确要求保留时，宿主调用 `skill.media.configure` 设置 `retain_downloaded_video=true`，文件保留在既有 `Skill.Media.Dir` 下。成功结果会在 `platform_metadata.retained_media_relative_path` 给出相对此目录的路径，宿主据此定位文件，且不得把本机绝对路径返回到对话。`digcrawl init --profile skill` 会为该字段生成 profile 同级的跨平台绝对目录；不需要、也不应在文档中写死某个用户名路径。用户也可通过同一工具设置 `max_bytes` 调整每次下载上限。通用 Skill 媒体获取会在该目录内为每次执行创建私有子目录；外部 call ID 仅关联请求，不能参与目录或 manifest 命名。Collect 的 MP4 导出是独立交付路径，不参与 ASR/OCR 的输入契约。DigCrawl 以固定间隔调用本机 `ffmpeg` 抽取 JPEG，再交给已配置的 OCR provider；临时帧在识别后删除，不会写入 `.assets/` 或 OCR 结果。它不替代 ASR：`ASR.Enabled=true` 处理音频，`OCR.VideoFrames.Enabled=true` 处理内嵌文字；两者均开启时各自执行，任一失败不会阻止另一项。`MaxFrames` 与 `TimeoutSec` 分别是每个视频的抽帧数量和 ffmpeg 运行上限；`MaxTotalFrames` 则是单条内容的硬总量预留上限，按媒体出现顺序分配，失败或没有可抽帧的视频也会占用其预留份额，以防异常媒体绕过限制。`OCR.MaxImages` 只限制文章图片与截图，两类预算互不抢占。若 provider 是远程服务，抽出的帧会发送给它，因此默认关闭。
 
 ```yaml
 OCR:
@@ -424,7 +424,7 @@ YouTube 已支持：
 
 - `youtube_video` / `video`：固定公开视频或 Shorts URL 监控，例如 `https://www.youtube.com/watch?v=...`、`https://youtu.be/...`、`https://www.youtube.com/shorts/...`；统一归一为 `https://www.youtube.com/watch?v=<video_id>`。
 - `youtube_channel` / `channel`：频道页或列表页链接发现，抽取公开视频与 Shorts 的链接，并按 `youtube:<video_id>` 去重。
-- `youtube.video.read` 通过本地浏览器读取标题、简介、频道、发布时间、封面和可公开取得的字幕轨。显式 ASR 或视频帧 OCR 请求时，YouTube provider 需要本机 `yt-dlp` 与 `ffmpeg`，下载并合并自适应流为受限本地 MP4，再直接调用通用 ASR 与视频抽帧 OCR。默认完成后删除 MP4；`Skill.Media.RetainDownloadedVideo=true` 才会保留到 `Skill.Media.Dir`。`include_media=true` 仅返回公开视频封面等媒体元数据，不承诺通过 stdio MCP 交付大 MP4。不会导出会过期的播放流 URL；没有公开字幕时仍返回页面元数据与简介。
+- `youtube.video.read` 通过本地浏览器读取标题、简介、频道、发布时间、封面和可公开取得的字幕轨。显式 ASR 或视频帧 OCR 请求时，YouTube provider 需要本机 `yt-dlp` 与 `ffmpeg`，下载并合并自适应流为受限本地 MP4，再直接调用通用 ASR 与视频抽帧 OCR。默认完成后删除 MP4；用户明确要求保留时，host agent 调用 `skill.media.configure` 的 `retain_downloaded_video=true`，保留到 `Skill.Media.Dir`，并从返回的 `platform_metadata.retained_media_relative_path` 定位该文件。`include_media=true` 仅返回公开视频封面等媒体元数据，不承诺通过 stdio MCP 交付大 MP4。不会导出会过期的播放流 URL；没有公开字幕时仍返回页面元数据与简介。
 
 YouTube 下载最高选择 360p，优先保证音轨、下载时延与抽帧效率；直接 Skill 理解受 `Skill.Media.MaxBytes` 限制，Collect 导出受 `Collect.MaxMediaBytes` 限制。较长视频需要在相应 profile 中提高既有预算；`yt-dlp` 必须预先安装并位于 `PATH`，例如 macOS 可使用 `brew install yt-dlp`。
 
@@ -917,7 +917,7 @@ digcrawl collector --server http://127.0.0.1:8790 --token dev
 
 ### Agent Skill 最小 profile
 
-使用仓库级 `digcrawl` Skill 时，优先通过 `digcrawl init --profile skill` 创建用户目录中的最小 profile；也可复制 `config/digcrawl-skill.example.yaml` 自行维护。宿主配置只保存二进制和 profile 的绝对路径，DigCrawl 不会自动修改它。图片文字和页面视觉理解优先由宿主 Agent 读取 MCP 返回的截图附件；`media` URL 只作来源引用。宿主也负责基于 Markdown、图片观察和 `asr_text` 完成总结。仅视频转写使用本地 `Skill.ASR`，用户明确请求时才需启用 `Skill.Media.DownloadMedia`、配置媒体目录和 ASR 依赖；下载的 MP4 默认只在本次理解期间存在，如需保留必须显式设定 `Skill.Media.RetainDownloadedVideo=true`。`skill.asr.enable` 会在写入两个基础 opt-in 开关前检查 ffmpeg 与当前 provider，缺失依赖时不会写入配置。默认 Skill profile 不包含 OCR 或 LLM API Key，也不使用 DigFlow。
+使用仓库级 `digcrawl` Skill 时，优先通过 `digcrawl init --profile skill` 创建用户目录中的最小 profile；也可复制 `config/digcrawl-skill.example.yaml` 自行维护。`init` 会生成 profile 同级、跨平台的绝对 `Skill.Media.Dir`，宿主配置只保存二进制和 profile 的绝对路径。图片文字和页面视觉理解优先由宿主 Agent 读取 MCP 返回的截图附件；`media` URL 只作来源引用。宿主也负责基于 Markdown、图片观察和 `asr_text` 完成总结。仅视频转写使用本地 `Skill.ASR`，用户明确请求时才需启用 `Skill.Media.DownloadMedia`、配置媒体目录和 ASR 依赖；下载的 MP4 默认只在本次理解期间存在。用户说“保存影片”“处理后删除影片”或明确调整下载上限时，host agent 应调用 `skill.media.configure`，仅覆写既有的保留开关或 `max_bytes`，而不是编辑 YAML；工具结果会返回实际媒体目录。保留成功的视频在视频工具结果的 `platform_metadata.retained_media_relative_path` 中以相对路径返回，宿主以该目录解析它，不能要求或显示绝对路径。配置写入会同时受同进程准入和跨进程 profile 锁保护；若另一项本地配置更新尚未完成，请根据可重试的 `SKILL_PROFILE_BUSY` 稍后重试。`skill.asr.enable` 会在写入两个基础 opt-in 开关前检查 ffmpeg 与当前 provider，缺失依赖时不会写入配置。默认 Skill profile 不包含 OCR 或 LLM API Key，也不使用 DigFlow。
 
 ---
 

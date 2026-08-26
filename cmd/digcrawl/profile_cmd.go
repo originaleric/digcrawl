@@ -20,6 +20,7 @@ import (
 var skillReadTools = []string{
 	"gateway.ping",
 	"skill.asr.enable",
+	"skill.media.configure",
 	"browser.browse",
 	"wechat.article.read",
 	"xiaohongshu.note.read",
@@ -64,6 +65,13 @@ var legacySkillReadTools = []string{
 	"instagram.content.read",
 	"feed.read",
 }
+
+// preSkillMediaConfigureTools is the shipped default Skill allowlist before
+// user-controlled media retention and download budgets were configurable from
+// the host Agent. It is deliberately built from the frozen pre-ASR/YouTube
+// list rather than skillReadTools, so a later default tool cannot broaden an
+// operator-customized allowlist by accident.
+var preSkillMediaConfigureTools = append(append([]string{}, legacySkillReadTools...), "skill.asr.enable", "youtube.video.read")
 
 func runInit(args []string) {
 	fs := flag.NewFlagSet("init", flag.ExitOnError)
@@ -154,11 +162,12 @@ func defaultSkillProfile(baseDir string) map[string]any {
 		},
 		"Skill": map[string]any{
 			"Media": map[string]any{
-				"DownloadMedia":    false,
-				"Dir":              filepath.Join(baseDir, "media"),
-				"MaxBytes":         128 * 1024 * 1024,
-				"TimeoutSec":       config.DefaultSkillMediaTimeoutSec,
-				"MaxASRCandidates": config.DefaultSkillMaxASRCandidates,
+				"DownloadMedia":         false,
+				"RetainDownloadedVideo": false,
+				"Dir":                   filepath.Join(baseDir, "media"),
+				"MaxBytes":              128 * 1024 * 1024,
+				"TimeoutSec":            config.DefaultSkillMediaTimeoutSec,
+				"MaxASRCandidates":      config.DefaultSkillMaxASRCandidates,
 			},
 			"ASR": map[string]any{
 				"Enabled":       false,

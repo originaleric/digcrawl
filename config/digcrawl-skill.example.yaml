@@ -9,6 +9,9 @@ Gateway:
     - gateway.ping
     # One-time, confirmation-protected switch for local video ASR.
     - skill.asr.enable
+    # Updates only Skill.Media retention or per-download size after an
+    # explicit user request; it never selects a provider or changes credentials.
+    - skill.media.configure
     - browser.browse
     - wechat.article.read
     - xiaohongshu.note.read
@@ -58,8 +61,9 @@ Skill:
     # Keep provider-downloaded MP4 files after explicit ASR/video-frame OCR.
     # Default false: the temporary MP4 is deleted after processing.
     RetainDownloadedVideo: false
-    # Required only for explicit ASR when DownloadMedia is true.
-    # Replace with a user-owned absolute directory.
+    # `digcrawl init --profile skill` generates an OS-native absolute
+    # directory beside the user profile. This copied example needs a
+    # user-owned absolute directory instead.
     Dir: "/absolute/path/to/digcrawl/skill-media"
     MaxBytes: 134217728
     TimeoutSec: 120

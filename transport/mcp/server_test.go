@@ -57,7 +57,8 @@ func TestBuildMCPToolMarksHealthCheckReadOnlyAndIdempotent(t *testing.T) {
 
 func TestBuildMCPToolMarksLocalSkillSettingAsDestructive(t *testing.T) {
 	tool := buildMCPTool(protocol.ToolDescriptor{
-		Name: "skill.asr.enable",
+		Name:         "skill.media.configure",
+		Capabilities: []string{"config.local"},
 	})
 	if tool.Annotations.DestructiveHint == nil || !*tool.Annotations.DestructiveHint {
 		t.Fatalf("local configuration tool must advertise a local write: %+v", tool.Annotations)

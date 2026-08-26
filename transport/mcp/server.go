@@ -73,7 +73,7 @@ func buildMCPTool(desc protocol.ToolDescriptor) mcp.Tool {
 		tool.Annotations.ReadOnlyHint = mcp.ToBoolPtr(true)
 		tool.Annotations.DestructiveHint = mcp.ToBoolPtr(false)
 		tool.Annotations.IdempotentHint = mcp.ToBoolPtr(true)
-	} else if desc.RequiresUserApproval || desc.Name == "skill.asr.enable" {
+	} else if desc.RequiresUserApproval || hasCapability(desc.Capabilities, "config.local") {
 		tool.Annotations.DestructiveHint = mcp.ToBoolPtr(true)
 	} else if !hasCapability(desc.Capabilities, "web.interact") {
 		// Content reads can update local session cookies or artifacts, so they

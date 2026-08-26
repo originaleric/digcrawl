@@ -63,6 +63,8 @@ Add the same local MCP command to the Agent you use:
 
 After configuration, simply give your Agent a supported URL and ask it to read, summarize, compare, quote, or—when explicitly requested—transcribe it. The Agent uses DigCrawl locally and preserves structured outcomes such as login required, captcha, or rate limiting.
 
+For explicit local-video preferences, say “keep downloaded videos”, “clean up downloaded videos after processing”, or “set the video download limit to 512 MiB”. The Skill updates only the user-owned media retention or size setting through its local configuration tool; it does not require a platform-specific path or edit the profile in chat.
+
 The Skill does not include API keys or expose browser cookies. See the [Agent Skill](./.agents/skills/digcrawl/) for routing behavior and [Use with AI Agents](#use-with-ai-agents) for security details.
 
 ## Quick Start
@@ -182,6 +184,7 @@ Read the [runtime documentation](./runtime/README.md) before exposing a Gateway 
 
 | Date | Highlight | Why it matters |
 | --- | --- | --- |
+| 2026-08-26 | Added explicit Skill video-retention preferences and safe profile updates. | Agents can retain or clean up downloaded videos and set a download cap without editing YAML; concurrent local profile writes are serialized and cancellable. |
 | 2026-08-26 | Finalized execution isolation and external-ID boundaries for video understanding. | Each Skill media operation owns a distinct workspace; external call IDs correlate requests only and cannot overwrite local media or manifests. |
 | 2026-08-26 | Decoupled downloaded-video understanding for YouTube, Skill, and Collect. | Providers own download/cleanup; ASR and frame OCR accept only a local video path and return content. MP4 retention is explicit opt-in and Collect export remains a separate delivery path. |
 | 2026-08-25 | Added public YouTube video/Shorts reading, caption enrichment, and Watchlist discovery. | URLs are normalized and player identity is verified before content is accepted. |

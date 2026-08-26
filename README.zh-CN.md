@@ -63,6 +63,8 @@ digcrawl mcp --config "$HOME/.config/digcrawl/digcrawl-skill.yaml"
 
 配置完成后，只需把支持的 URL 发给 Agent，并要求它读取、总结、比较、引用，或在明确请求时转写视频。Agent 会在本机调用 DigCrawl，并保留需要登录、验证码、频控等结构化结果。
 
+如需调整本地视频偏好，可以直接对 Agent 说“保存影片”“处理后删除影片”或“将视频下载上限调到 512 MiB”。Skill 会通过本机配置工具仅更新用户 profile 中既有的保留或大小设置，不需要指定平台路径，也不会在对话中直接编辑 profile。保留成功后，视频工具会在 `platform_metadata.retained_media_relative_path` 中返回相对媒体目录的路径，避免暴露本机绝对路径。
+
 Skill 不包含 API Key，也不会暴露浏览器 Cookie。路由规则详见 [Agent Skill](./.agents/skills/digcrawl/)；安全细节详见[在 AI Agent 中使用](#在-ai-agent-中使用)。
 
 ## 快速开始
@@ -182,6 +184,7 @@ DigCrawl 在用户机器上运行，并将访问边界保持可见：
 
 | 时间 | 更新 | 对使用者的意义 |
 | --- | --- | --- |
+| 2026-08-26 | 新增显式的 Skill 视频保留偏好与安全 profile 更新。 | Agent 可在用户明确要求时保存或清理下载影片、调整上限，无需编辑 YAML；本地并发 profile 写入会串行化且可取消。 |
 | 2026-08-26 | 收口视频理解的执行隔离与外部 ID 边界。 | Skill 媒体目录每次执行独立；外部 call ID 仅关联请求，不能覆盖本地媒体或 manifest。 |
 | 2026-08-26 | 解耦 YouTube、Skill 与 Collect 的下载视频理解。 | Provider 管理下载与清理；ASR/抽帧 OCR 只接收本地视频路径并返回内容。MP4 保留必须显式 opt-in，Collect 导出保持独立交付路径。 |
 | 2026-08-25 | 新增公开视频/Shorts 的 YouTube 读取、字幕富化与 Watchlist 发现。 | URL 会归一化，且仅在播放器身份确认后接受内容；不会导出会过期的播放 URL。 |

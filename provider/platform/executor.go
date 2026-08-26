@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/originaleric/digcrawl/config"
@@ -160,20 +161,21 @@ func platformReadHandlerNamedWithConfig(
 		var artifacts []protocol.Artifact
 		var localVideoPaths []string
 		isCollect := executor.IsCollectExecution(ctx)
-		if name == ToolYouTubeVideoRead && shouldDownloadYouTubeMedia(runtimeCfg, isCollect, in) {
+		skillCfg := activeSkillConfig(runtimeCfg)
+		if name == ToolYouTubeVideoRead && shouldDownloadYouTubeMedia(runtimeCfg, skillCfg, isCollect, in) {
 			if isCollect && artStore == nil {
 				return nil, nil, fmt.Errorf("YouTube media delivery requires an enabled artifact store")
 			}
-			downloadCtx, cancelDownload := youtubeDownloadContext(runtimeCfg, ctx, isCollect)
+			downloadCtx, cancelDownload := youtubeDownloadContext(runtimeCfg, skillCfg, ctx, isCollect)
 			defer cancelDownload()
-			retainVideo := !isCollect && runtimeCfg.Skill.Media.RetainDownloadedVideo
-			videoPath, cleanupVideo, downloadErr := acquireYouTubeVideo(downloadCtx, in.URL, youtubeDownloadMaxBytes(runtimeCfg, isCollect), retainVideo, runtimeCfg.Skill.Media.Dir)
+			retainVideo := !isCollect && skillCfg.Media.RetainDownloadedVideo
+			videoPath, cleanupVideo, downloadErr := acquireYouTubeVideo(downloadCtx, in.URL, youtubeDownloadMaxBytes(runtimeCfg, skillCfg, isCollect), retainVideo, skillCfg.Media.Dir)
 			if downloadErr != nil {
 				return nil, nil, downloadErr
 			}
 			defer cleanupVideo()
 			if isCollect {
-				art, handoffErr := persistCollectedYouTubeVideo(ctx, artStore, videoPath, youtubeDownloadMaxBytes(runtimeCfg, true))
+				art, handoffErr := persistCollectedYouTubeVideo(ctx, artStore, videoPath, youtubeDownloadMaxBytes(runtimeCfg, skillCfg, true))
 				if handoffErr != nil {
 					return nil, nil, fmt.Errorf("persist downloaded YouTube video: %w", handoffErr)
 				}
@@ -185,13 +187,18 @@ func platformReadHandlerNamedWithConfig(
 			content.PlatformMetadata = iplatform.EnsureMeta(content.PlatformMetadata)
 			content.PlatformMetadata["media_extraction_source"] = "youtube_yt_dlp"
 			if retainVideo {
+				relativePath, err := retainedMediaRelativePath(skillCfg.Media.Dir, videoPath)
+				if err != nil {
+					return nil, nil, fmt.Errorf("identify retained YouTube video: %w", err)
+				}
 				content.PlatformMetadata["downloaded_video_retained"] = true
+				content.PlatformMetadata["retained_media_relative_path"] = relativePath
 			}
 		}
 		skillEnhancement := in.IncludeOCR || in.IncludeASR || in.IncludeSummary
 		out := iplatform.ApplyFormats(content, in.Format)
 		if !isCollect && skillEnhancement {
-			if err := skill.Enhance(ctx, out, runtimeCfg.Skill, skill.EnhanceOptions{
+			if err := skill.Enhance(ctx, out, skillCfg, skill.EnhanceOptions{
 				IncludeOCR: in.IncludeOCR, IncludeASR: in.IncludeASR,
 				IncludeSummary: in.IncludeSummary, SourceText: content.Text, ScreenshotBase64: content.ScreenshotBase64, ArtifactStore: artStore, LocalVideoPaths: localVideoPaths,
 			}); err != nil {
@@ -214,6 +221,26 @@ func platformReadHandlerNamedWithConfig(
 		}
 		return out, artifacts, nil
 	}
+}
+
+// retainedMediaRelativePath gives a host enough information to find a video
+// the user chose to keep without disclosing the machine-specific media root.
+// youtube.DownloadVideo already verifies that retained files are beneath this
+// root; this second boundary check keeps that output contract true for every
+// provider adapter and focused test injection.
+func retainedMediaRelativePath(mediaRoot, path string) (string, error) {
+	mediaRoot = strings.TrimSpace(mediaRoot)
+	if mediaRoot == "" {
+		return "", fmt.Errorf("retained media directory is not configured")
+	}
+	relativePath, err := filepath.Rel(mediaRoot, path)
+	if err != nil {
+		return "", err
+	}
+	if relativePath == "." || filepath.IsAbs(relativePath) || relativePath == ".." || strings.HasPrefix(relativePath, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("retained video is outside the configured media directory")
+	}
+	return filepath.ToSlash(relativePath), nil
 }
 
 // persistCollectedYouTubeVideo is a Collect delivery adapter. It is separate
@@ -244,32 +271,45 @@ func validatePlatformURL(rawURL string, call *protocol.ToolCall, configDomains, 
 	return policy.ValidateURLDomain(rawURL, domains, nil)
 }
 
-func shouldDownloadYouTubeMedia(cfg *config.Config, isCollect bool, in platformReadInput) bool {
+// activeSkillConfig takes one coherent Skill snapshot for a direct provider
+// call. Configuration tools replace only this section while MCP workers may be
+// reading it, so direct field access through config.Get() would race and could
+// combine a retention choice with an unrelated previous download budget.
+// Injected configs are used by Collect and focused tests and are immutable for
+// the lifetime of that execution.
+func activeSkillConfig(cfg *config.Config) config.SkillConfig {
+	if cfg == config.Get() {
+		return config.Skill()
+	}
+	return cfg.Skill
+}
+
+func shouldDownloadYouTubeMedia(cfg *config.Config, skillCfg config.SkillConfig, isCollect bool, in platformReadInput) bool {
 	if !isCollect {
-		if !in.IncludeASR && !in.IncludeSummary && !(in.IncludeOCR && cfg.Skill.OCR.VideoFrames.EnabledOrDefault()) {
+		if !in.IncludeASR && !in.IncludeSummary && !(in.IncludeOCR && skillCfg.OCR.VideoFrames.EnabledOrDefault()) {
 			return false
 		}
-		return skill.ValidateVideoEnhancementRequest(cfg.Skill, skill.EnhanceOptions{
+		return skill.ValidateVideoEnhancementRequest(skillCfg, skill.EnhanceOptions{
 			IncludeOCR: in.IncludeOCR, IncludeASR: in.IncludeASR, IncludeSummary: in.IncludeSummary,
 		}) == nil
 	}
 	return in.IncludeMedia && cfg.Collect.DownloadMedia != nil && *cfg.Collect.DownloadMedia
 }
 
-func youtubeDownloadMaxBytes(cfg *config.Config, isCollect bool) int64 {
+func youtubeDownloadMaxBytes(cfg *config.Config, skillCfg config.SkillConfig, isCollect bool) int64 {
 	if isCollect {
 		return cfg.Collect.MaxMediaBytes
 	}
-	if maxBytes := cfg.Skill.Media.MaxBytes; maxBytes > 0 {
+	if maxBytes := skillCfg.Media.MaxBytes; maxBytes > 0 {
 		return maxBytes
 	}
 	return skill.DefaultSkillMediaMaxBytes
 }
 
-func youtubeDownloadContext(cfg *config.Config, ctx context.Context, isCollect bool) (context.Context, context.CancelFunc) {
+func youtubeDownloadContext(cfg *config.Config, skillCfg config.SkillConfig, ctx context.Context, isCollect bool) (context.Context, context.CancelFunc) {
 	seconds := cfg.Collect.MediaTimeoutSec
 	if !isCollect {
-		seconds = cfg.Skill.Media.TimeoutSecOrDefault()
+		seconds = skillCfg.Media.TimeoutSecOrDefault()
 	}
 	if seconds <= 0 {
 		return context.WithCancel(ctx)

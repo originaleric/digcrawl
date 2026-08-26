@@ -58,7 +58,7 @@ digcrawl config validate --config "$HOME/.config/digcrawl/digcrawl-skill.yaml"
 digcrawl doctor --config "$HOME/.config/digcrawl/digcrawl-skill.yaml"
 ```
 
-macOS / Linux 默认目录为 `$XDG_CONFIG_HOME/digcrawl/`（XDG 未设置时为 `~/.config/digcrawl/`），Windows 为 `%APPDATA%\DigCrawl\`。`init` 不会覆盖已有文件，只有传入 `--force` 才会替换。也可以复制 [`config/digcrawl-skill.example.yaml`](../config/digcrawl-skill.example.yaml) 到任意用户目录自行维护；不论哪种方式，MCP 注册始终使用二进制与 profile 的绝对路径：
+macOS / Linux 默认目录为 `$XDG_CONFIG_HOME/digcrawl/`（XDG 未设置时为 `~/.config/digcrawl/`），Windows 为 `%APPDATA%\DigCrawl\`。`init` 同时生成 profile 同级的跨平台绝对 `Skill.Media.Dir`，因此无需在文档或 host 中写死用户名路径。`init` 不会覆盖已有文件，只有传入 `--force` 才会替换。也可以复制 [`config/digcrawl-skill.example.yaml`](../config/digcrawl-skill.example.yaml) 到任意用户目录自行维护；不论哪种方式，MCP 注册始终使用二进制与 profile 的绝对路径：
 
 ```bash
 digcrawl mcp --config /absolute/path/to/digcrawl-skill.yaml
@@ -66,7 +66,7 @@ digcrawl mcp --config /absolute/path/to/digcrawl-skill.yaml
 
 Codex、Claude Code、WorkBuddy 等宿主只需按各自格式登记这条 stdio 命令，DigCrawl 不会自动改写宿主配置。Homebrew tap 发布后可使用 `brew install --cask originaleric/tap/digcrawl`，它仍基于同一 GitHub Release。
 
-Skill 默认只读取链接；归档、Watchlist、浏览器交互和任意本地文件转写仍不暴露。图片文字和视觉分析由 Codex、Claude Code 等宿主读取 DigCrawl 返回的页面截图附件完成：平台工具使用 `include_media` 与 `include_screenshot`，但不使用本地 `include_ocr`。`media` URL 是来源引用，若没有 MCP 图片附件，宿主不得声称已识别该图片。视频 ASR 与抽帧 OCR 是显式本地能力：Provider 下载受限临时 MP4，通用 core 仅接收该本地文件并返回理解结果，不感知平台、artifact 或 Collect；默认处理完成即清理，只有 `Skill.Media.RetainDownloadedVideo=true` 才保留到 `Skill.Media.Dir`。通用 Skill 媒体获取会在该目录内为每次执行创建私有子目录；外部 call ID 只用于请求关联，不能命名或覆盖本地媒体、固定下载文件或 manifest。Collect 的文件导出保持独立，不是这些 core 的输入前提。用户同意调用 `skill.asr.enable` 时，DigCrawl 会先检查 ffmpeg 与当前 ASR provider；缺失依赖时不会写入 opt-in 状态，宿主应保留错误并提示用户完成本地配置。视频摘要始终由宿主基于返回的 Markdown 和成功的 `asr_text` 完成；默认 profile 仅保留 `Skill.Media` 与 `Skill.ASR`，不包含 OCR、Summary 或模型 API Key，也不使用 DigFlow。`Gateway.AllowedDomains` 留空时允许任意 `http/https` 目标；配置后作为可选的访问收紧策略。用户明确请求截图时，返回当前视口图片；`Gateway.ArtifactMaxInlineBytes` 控制 MCP 附件上限，默认 `10485760`（10 MiB）。Cookie、artifact、下载媒体和登录态始终保留在用户本机。遇到小红书、抖音、头条、Threads 或 Instagram 的 `LOGIN_REQUIRED` 时，先经用户同意再运行 `digcrawl browser login --platform <platform>`；它会打开 DigCrawl 独立的有头登录窗口，不读取日常浏览器 profile，完成登录后在终端按 Enter 保存 Cookie。
+Skill 默认只读取链接；归档、Watchlist、浏览器交互和任意本地文件转写仍不暴露。图片文字和视觉分析由 Codex、Claude Code 等宿主读取 DigCrawl 返回的页面截图附件完成：平台工具使用 `include_media` 与 `include_screenshot`，但不使用本地 `include_ocr`。`media` URL 是来源引用，若没有 MCP 图片附件，宿主不得声称已识别该图片。视频 ASR 与抽帧 OCR 是显式本地能力：Provider 下载受限临时 MP4，通用 core 仅接收该本地文件并返回理解结果，不感知平台、artifact 或 Collect；默认处理完成即清理。用户明确说“保存影片”“处理后删除影片”或明确要求调整单次下载上限时，宿主调用 `skill.media.configure` 覆写现有 `RetainDownloadedVideo` 或 `MaxBytes`，而不是直接编辑 YAML；文件保留时写入 `Skill.Media.Dir`，视频结果的 `platform_metadata.retained_media_relative_path` 则提供相对此目录的定位路径，绝不返回本机绝对路径。通用 Skill 媒体获取会在该目录内为每次执行创建私有子目录；外部 call ID 只用于请求关联，不能命名或覆盖本地媒体、固定下载文件或 manifest。Collect 的文件导出保持独立，不是这些 core 的输入前提。用户同意调用 `skill.asr.enable` 时，DigCrawl 会先检查 ffmpeg 与当前 ASR provider；缺失依赖时不会写入 opt-in 状态，宿主应保留错误并提示用户完成本地配置。视频摘要始终由宿主基于返回的 Markdown 和成功的 `asr_text` 完成；默认 profile 仅保留 `Skill.Media` 与 `Skill.ASR`，不包含 OCR、Summary 或模型 API Key，也不使用 DigFlow。`Gateway.AllowedDomains` 留空时允许任意 `http/https` 目标；配置后作为可选的访问收紧策略。用户明确请求截图时，返回当前视口图片；`Gateway.ArtifactMaxInlineBytes` 控制 MCP 附件上限，默认 `10485760`（10 MiB）。Cookie、artifact、下载媒体和登录态始终保留在用户本机。遇到小红书、抖音、头条、Threads 或 Instagram 的 `LOGIN_REQUIRED` 时，先经用户同意再运行 `digcrawl browser login --platform <platform>`；它会打开 DigCrawl 独立的有头登录窗口，不读取日常浏览器 profile，完成登录后在终端按 Enter 保存 Cookie。
 
 ## 4. 常用命令
 

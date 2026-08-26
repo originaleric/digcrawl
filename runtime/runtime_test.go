@@ -71,6 +71,30 @@ func TestRecommendedCallTimeoutUsesSkillMediaDefault(t *testing.T) {
 	}
 }
 
+func TestRecommendedCallTimeoutReadsActiveSkillSnapshotDuringUpdates(t *testing.T) {
+	old := config.Skill()
+	t.Cleanup(func() { config.SetSkill(old) })
+	enabled := true
+	first := config.SkillConfig{Media: config.SkillMediaConfig{TimeoutSec: 10, MaxASRCandidates: 1}, ASR: config.ASRConfig{Enabled: &enabled, MaxTimeoutSec: 20}}
+	second := config.SkillConfig{Media: config.SkillMediaConfig{TimeoutSec: 30, MaxASRCandidates: 2}, ASR: config.ASRConfig{Enabled: &enabled, MaxTimeoutSec: 40}}
+	config.SetSkill(first)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 1000; i++ {
+			config.SetSkill(second)
+			config.SetSkill(first)
+		}
+	}()
+	call := &protocol.ToolCall{Input: json.RawMessage(`{"include_asr":true}`)}
+	for i := 0; i < 1000; i++ {
+		if got := RecommendedCallTimeout(config.Get(), call); got <= 0 {
+			t.Fatalf("timeout=%s", got)
+		}
+	}
+	<-done
+}
+
 func TestRecommendedCallTimeoutRespectsASRCandidateLimit(t *testing.T) {
 	cfg := &config.Config{Skill: config.SkillConfig{
 		Media: config.SkillMediaConfig{TimeoutSec: 30, MaxASRCandidates: 1},

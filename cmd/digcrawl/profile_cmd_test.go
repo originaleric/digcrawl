@@ -24,8 +24,11 @@ func TestWriteAndValidateSkillProfile(t *testing.T) {
 	if !filepath.IsAbs(cfg.Skill.ASR.ModelCacheDir) {
 		t.Fatalf("Skill.ASR.ModelCacheDir must be absolute: %q", cfg.Skill.ASR.ModelCacheDir)
 	}
-	if cfg.Skill.Media.DownloadMedia || cfg.Skill.ASR.EnabledOrDefault() {
+	if cfg.Skill.Media.DownloadMedia || cfg.Skill.ASR.EnabledOrDefault() || cfg.Skill.Media.RetainDownloadedVideo {
 		t.Fatal("new Skill profile must not opt into local media or ASR")
+	}
+	if !filepath.IsAbs(cfg.Skill.Media.Dir) {
+		t.Fatalf("new Skill profile media directory must be absolute: %q", cfg.Skill.Media.Dir)
 	}
 	if got, want := cfg.Skill.Media.MaxBytes, int64(128*1024*1024); got != want {
 		t.Fatalf("new Skill profile media limit=%d want %d", got, want)
@@ -36,8 +39,10 @@ func TestWriteAndValidateSkillProfile(t *testing.T) {
 	if got, want := cfg.Skill.Media.MaxASRCandidates, config.DefaultSkillMaxASRCandidates; got != want {
 		t.Fatalf("new Skill profile ASR candidates=%d want %d", got, want)
 	}
-	if !containsTool(cfg.Gateway.AllowedTools, "skill.asr.enable") {
-		t.Fatal("new Skill profile must expose the confirmation-protected ASR enable tool")
+	for _, tool := range []string{"skill.asr.enable", "skill.media.configure"} {
+		if !containsTool(cfg.Gateway.AllowedTools, tool) {
+			t.Fatalf("new Skill profile must expose %s", tool)
+		}
 	}
 	for _, prohibited := range []string{"browser.action", "browser.snapshot", "asr.transcribe"} {
 		for _, allowed := range cfg.Gateway.AllowedTools {
@@ -56,7 +61,7 @@ func TestAllowDefaultSkillProfileToolsOnlyForDefaultProfile(t *testing.T) {
 	legacyTools := append([]string(nil), legacySkillReadTools...)
 	defaultCfg := &config.Config{SourcePath: config.DefaultSkillProfilePath(), Gateway: config.GatewayConfig{AllowedTools: legacyTools}}
 	allowDefaultSkillProfileTools(defaultCfg)
-	for _, tool := range []string{"skill.asr.enable", "youtube.video.read"} {
+	for _, tool := range []string{"skill.asr.enable", "youtube.video.read", "skill.media.configure"} {
 		if !containsTool(defaultCfg.Gateway.AllowedTools, tool) {
 			t.Fatalf("default Skill profile should expose %s in memory", tool)
 		}
@@ -66,10 +71,15 @@ func TestAllowDefaultSkillProfileToolsOnlyForDefaultProfile(t *testing.T) {
 	if !containsTool(preYouTubeCfg.Gateway.AllowedTools, "youtube.video.read") {
 		t.Fatal("pre-YouTube standard profile should expose YouTube in memory")
 	}
+	preConfigureCfg := &config.Config{SourcePath: config.DefaultSkillProfilePath(), Gateway: config.GatewayConfig{AllowedTools: append([]string(nil), preSkillMediaConfigureTools...)}}
+	allowDefaultSkillProfileTools(preConfigureCfg)
+	if !containsTool(preConfigureCfg.Gateway.AllowedTools, "skill.media.configure") {
+		t.Fatal("pre-configuration standard profile should expose Skill media configuration in memory")
+	}
 
 	restrictedCfg := &config.Config{SourcePath: config.DefaultSkillProfilePath(), Gateway: config.GatewayConfig{AllowedTools: []string{"gateway.ping"}}}
 	allowDefaultSkillProfileTools(restrictedCfg)
-	for _, tool := range []string{"skill.asr.enable", "youtube.video.read"} {
+	for _, tool := range []string{"skill.asr.enable", "youtube.video.read", "skill.media.configure"} {
 		if containsTool(restrictedCfg.Gateway.AllowedTools, tool) {
 			t.Fatalf("restricted default-path profile must not receive %s", tool)
 		}

@@ -249,7 +249,7 @@ func allowDefaultSkillProfileTools(cfg *config.Config) {
 	if cfg == nil || !config.IsDefaultSkillProfile(cfg.SourcePath) || !isLegacyDefaultSkillAllowlist(cfg.Gateway.AllowedTools) {
 		return
 	}
-	for _, required := range []string{"skill.asr.enable", "youtube.video.read"} {
+	for _, required := range []string{"skill.asr.enable", "youtube.video.read", "skill.media.configure"} {
 		found := false
 		for _, tool := range cfg.Gateway.AllowedTools {
 			if tool == required {
@@ -263,13 +263,14 @@ func allowDefaultSkillProfileTools(cfg *config.Config) {
 	}
 }
 
-// isLegacyDefaultSkillAllowlist recognizes only the two shipped allowlists
-// that predate YouTube support. A default-path profile may still be an
-// operator-customized policy and must not be broadened merely because of where
-// it is stored.
+// isLegacyDefaultSkillAllowlist recognizes only frozen shipped allowlists that
+// predate the current configuration tool. A default-path profile may still be
+// an operator-customized policy and must not be broadened merely because of
+// where it is stored.
 func isLegacyDefaultSkillAllowlist(tools []string) bool {
 	return sameToolSet(tools, legacySkillReadTools) ||
-		sameToolSet(tools, append([]string{"skill.asr.enable"}, legacySkillReadTools...))
+		sameToolSet(tools, append([]string{"skill.asr.enable"}, legacySkillReadTools...)) ||
+		sameToolSet(tools, preSkillMediaConfigureTools)
 }
 
 func sameToolSet(actual, standard []string) bool {

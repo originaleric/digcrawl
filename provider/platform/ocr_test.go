@@ -135,15 +135,15 @@ func TestShouldDownloadYouTubeMediaHonorsSkillASROptIn(t *testing.T) {
 	oldSkill := config.Skill()
 	t.Cleanup(func() { config.SetSkill(oldSkill) })
 	config.SetSkill(config.SkillConfig{})
-	if shouldDownloadYouTubeMedia(config.Get(), false, platformReadInput{IncludeASR: true}) {
+	if shouldDownloadYouTubeMedia(config.Get(), config.Skill(), false, platformReadInput{IncludeASR: true}) {
 		t.Fatal("disabled Skill ASR must not trigger YouTube download")
 	}
 	enabled := true
 	config.SetSkill(config.SkillConfig{Media: config.SkillMediaConfig{DownloadMedia: true, Dir: t.TempDir()}, ASR: config.ASRConfig{Enabled: &enabled}})
-	if !shouldDownloadYouTubeMedia(config.Get(), false, platformReadInput{IncludeASR: true}) {
+	if !shouldDownloadYouTubeMedia(config.Get(), config.Skill(), false, platformReadInput{IncludeASR: true}) {
 		t.Fatal("enabled Skill ASR must acquire YouTube media")
 	}
-	if shouldDownloadYouTubeMedia(config.Get(), false, platformReadInput{IncludeMedia: true}) {
+	if shouldDownloadYouTubeMedia(config.Get(), config.Skill(), false, platformReadInput{IncludeMedia: true}) {
 		t.Fatal("include_media alone must not acquire a private MP4")
 	}
 }
@@ -161,12 +161,12 @@ func TestShouldDownloadYouTubeMediaForExplicitVideoFrameOCR(t *testing.T) {
 			},
 		},
 	})
-	if !shouldDownloadYouTubeMedia(config.Get(), false, platformReadInput{IncludeOCR: true}) {
+	if !shouldDownloadYouTubeMedia(config.Get(), config.Skill(), false, platformReadInput{IncludeOCR: true}) {
 		t.Fatal("explicit video-frame OCR must acquire YouTube media")
 	}
 
 	config.SetSkill(config.SkillConfig{OCR: config.OCRConfig{Enabled: &enabled, VideoFrames: config.VideoFrameOCRConfig{Enabled: &enabled}}})
-	if shouldDownloadYouTubeMedia(config.Get(), false, platformReadInput{IncludeOCR: true}) {
+	if shouldDownloadYouTubeMedia(config.Get(), config.Skill(), false, platformReadInput{IncludeOCR: true}) {
 		t.Fatal("video-frame OCR without Skill media opt-in must not acquire YouTube media")
 	}
 }
@@ -181,7 +181,7 @@ func TestShouldDownloadYouTubeMediaUsesSkillSummaryEnvValidation(t *testing.T) {
 		ASR:     config.ASRConfig{Enabled: &enabled},
 		Summary: config.SkillSummaryConfig{Enabled: &enabled, LLM: config.LLMSummaryConfig{APIKey: "${DIGCRAWL_TEST_SUMMARY_KEY}"}},
 	})
-	if !shouldDownloadYouTubeMedia(config.Get(), false, platformReadInput{IncludeSummary: true}) {
+	if !shouldDownloadYouTubeMedia(config.Get(), config.Skill(), false, platformReadInput{IncludeSummary: true}) {
 		t.Fatal("environment-backed valid Skill summary must acquire YouTube media")
 	}
 }
@@ -276,9 +276,20 @@ func TestYouTubeRetentionIsAnExplicitProviderOptIn(t *testing.T) {
 	if meta["downloaded_video_retained"] != true {
 		t.Fatalf("retained output must be explicit without exposing its local path: %+v", meta)
 	}
+	if got, want := meta["retained_media_relative_path"], "retained.mp4"; got != want {
+		t.Fatalf("retained output path=%#v want %q", got, want)
+	}
 	serialized, _ := json.Marshal(out)
 	if strings.Contains(string(serialized), videoPath) {
 		t.Fatalf("retained local path must not leak through tool output: %s", serialized)
+	}
+}
+
+func TestRetainedMediaRelativePathRejectsOutsideMediaRoot(t *testing.T) {
+	mediaDir := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "retained.mp4")
+	if _, err := retainedMediaRelativePath(mediaDir, outside); err == nil {
+		t.Fatal("retained media outside the configured root must not be exposed")
 	}
 }
 
