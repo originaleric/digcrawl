@@ -1269,7 +1269,6 @@ ExtraArgs:
 - 仓库：<https://github.com/originaleric/digcrawl>
 - 示例配置：[`config/config.yaml`](config/config.yaml)
 - Collect 模块：[`collect/README.md`](collect/README.md)
-- 更新记录：[`updates/`](updates/)
 
 ---
 
