@@ -375,7 +375,27 @@ stop_macos() {
 }
 
 mac_service_pid() {
-  launchctl print "gui/${UID}/${SERVICE_LABEL}" 2>/dev/null | awk -F'= ' '/pid =/ {print $2; exit}'
+  launchctl print "gui/${UID}/${SERVICE_LABEL}" 2>/dev/null | awk -F'= ' '/^[[:space:]]*pid =/ {print $2; exit}'
+}
+
+mac_service_state() {
+  launchctl print "gui/${UID}/${SERVICE_LABEL}" 2>/dev/null | awk -F'= ' '/^[[:space:]]*state =/ {print $2; exit}'
+}
+
+wait_for_mac_service_running() {
+  local attempt
+  local pid
+  local state
+  for ((attempt = 0; attempt < 5; attempt++)); do
+    pid="$(mac_service_pid)"
+    state="$(mac_service_state)"
+    if [[ "${state}" == "running" && -n "${pid}" ]]; then
+      printf '%s\n' "${pid}"
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
 }
 
 restart_macos() {
@@ -387,10 +407,9 @@ restart_macos() {
   if launchctl print "gui/${UID}/${SERVICE_LABEL}" >/dev/null 2>&1; then
     old_pid="$(mac_service_pid)"
     if launchctl kickstart -k "gui/${UID}/${SERVICE_LABEL}" >/dev/null 2>&1; then
-      sleep 1
-      new_pid="$(mac_service_pid)"
+      new_pid="$(wait_for_mac_service_running)" || fail "restart did not leave ${SERVICE_LABEL} running; inspect logs or try: launchctl kickstart -k gui/$(id -u)/${SERVICE_LABEL}"
       if [[ -n "${old_pid}" && "${new_pid}" == "${old_pid}" ]]; then
-        fail "restart did not replace ${SERVICE_LABEL}; pid is still ${old_pid}"
+        fail "restart did not replace ${SERVICE_LABEL}; it may still be running the previous binary. Try: launchctl kickstart -k gui/$(id -u)/${SERVICE_LABEL}"
       fi
       echo "restarted ${SERVICE_LABEL}"
       return
@@ -399,10 +418,9 @@ restart_macos() {
   fi
   stop_macos
   start_macos
-  sleep 1
-  new_pid="$(mac_service_pid)"
+  new_pid="$(wait_for_mac_service_running)" || fail "restart did not leave ${SERVICE_LABEL} running; inspect logs or try running this command in a local terminal: launchctl kickstart -k gui/$(id -u)/${SERVICE_LABEL}"
   if [[ -n "${old_pid}" && "${new_pid}" == "${old_pid}" ]]; then
-    fail "restart did not replace ${SERVICE_LABEL}; pid is still ${old_pid}. Try running this command in a local terminal: launchctl kickstart -k gui/$(id -u)/${SERVICE_LABEL}"
+    fail "restart did not replace ${SERVICE_LABEL}; it may still be running the previous binary. Try running this command in a local terminal: launchctl kickstart -k gui/$(id -u)/${SERVICE_LABEL}"
   fi
 }
 

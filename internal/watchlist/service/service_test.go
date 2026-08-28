@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -22,12 +23,37 @@ func boolPtr(v bool) *bool {
 }
 
 type recordingNotifier struct {
-	calls int
+	calls    int
+	messages []notify.Message
 }
 
 func (n *recordingNotifier) Send(ctx context.Context, channelID string, msg notify.Message) notify.Result {
 	n.calls++
+	n.messages = append(n.messages, msg)
 	return notify.Result{ChannelID: channelID, Status: StatusNotified}
+}
+
+type staticFeedReader struct {
+	items []FeedItem
+	err   error
+}
+
+func (r staticFeedReader) ListLatest(ctx context.Context, item WatchItem) ([]FeedItem, error) {
+	return r.items, r.err
+}
+
+type fixedResultNotifier struct {
+	calls  int
+	result notify.Result
+}
+
+func (n *fixedResultNotifier) Send(ctx context.Context, channelID string, msg notify.Message) notify.Result {
+	n.calls++
+	res := n.result
+	if res.ChannelID == "" {
+		res.ChannelID = channelID
+	}
+	return res
 }
 
 func baseNotificationConfig() *config.Config {
@@ -654,6 +680,170 @@ func TestRunItemSuppressesNoUpdateAfterSameDayContentNotification(t *testing.T) 
 	}
 	if sum.Notified != 0 || notifier.calls != 0 {
 		t.Fatalf("same-day content notification should suppress no-update send, summary=%+v calls=%d", sum, notifier.calls)
+	}
+}
+
+func TestRunItemSendsNoUpdateOnlyOncePerDay(t *testing.T) {
+	ctx := context.Background()
+	st, err := watchlist.OpenStore(filepath.Join(t.TempDir(), "watch.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	item := WatchItem{
+		ID: "rss-local", Name: "RSS 列表", Platform: "rss", Type: "rss", URL: "https://example.com/feed", NotifyTo: "feishu-default",
+		Options: map[string]any{"notify_no_update": true, "limit": 1},
+	}
+	feed := FeedItem{ID: "g1", ContentKey: "g1", URL: "https://example.com/a", Title: "A"}
+	if _, err := st.UpsertDiscovered(ctx, item.ID, feed, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.UpdateItemStatus(ctx, item.ID, feed.ContentKey, StatusNotified, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	notifier := &recordingNotifier{}
+	svc := &Service{
+		cfg:      &config.Config{Watchlist: config.WatchlistConfig{DefaultInterval: "6h"}},
+		store:    st,
+		feeds:    staticFeedReader{items: []FeedItem{feed}},
+		notifier: notifier,
+	}
+	first, err := svc.RunItem(ctx, item)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Notified != 1 || notifier.calls != 1 {
+		t.Fatalf("first complete no-update run should notify once, summary=%+v calls=%d", first, notifier.calls)
+	}
+	second, err := svc.RunItem(ctx, item)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !second.NoUpdateSuppressed || !strings.Contains(second.NoUpdateSuppressedReason, "already sent a no-update") {
+		t.Fatalf("expected duplicate no-update suppression, got %+v", second)
+	}
+	if second.Notified != 0 || notifier.calls != 1 {
+		t.Fatalf("duplicate no-update run should not notify, summary=%+v calls=%d", second, notifier.calls)
+	}
+}
+
+func TestRunItemNotifiesLoginRequiredOnlyOncePerDay(t *testing.T) {
+	ctx := context.Background()
+	st, err := watchlist.OpenStore(filepath.Join(t.TempDir(), "watch.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	item := WatchItem{
+		ID: "toutiao-video", Name: "头条作手阿飞视频列表", Platform: "toutiao", Type: "toutiao_author", URL: "https://www.toutiao.com/c/user/token/",
+		NotifyTo: "feishu-default",
+	}
+	notifier := &recordingNotifier{}
+	svc := &Service{
+		cfg:      &config.Config{Watchlist: config.WatchlistConfig{DefaultInterval: "6h"}},
+		store:    st,
+		feeds:    staticFeedReader{err: errors.New("LOGIN_REQUIRED: toutiao author page requires login")},
+		notifier: notifier,
+	}
+	first, err := svc.RunItem(ctx, item)
+	if err == nil {
+		t.Fatal("expected login-required discovery error")
+	}
+	if first.Notified != 1 || notifier.calls != 1 {
+		t.Fatalf("first login-required run should notify once, summary=%+v calls=%d", first, notifier.calls)
+	}
+	if len(notifier.messages) != 1 || !strings.Contains(notifier.messages[0].Title, "需要重新登录") || !strings.Contains(notifier.messages[0].Text, item.Name) || !strings.Contains(notifier.messages[0].Text, "digcrawl browser login --platform toutiao") {
+		t.Fatalf("unexpected login-required notification: %+v", notifier.messages)
+	}
+	second, err := svc.RunItem(ctx, item)
+	if err == nil {
+		t.Fatal("expected repeated login-required discovery error")
+	}
+	if second.Notified != 0 || notifier.calls != 1 {
+		t.Fatalf("repeated login-required run should not notify again, summary=%+v calls=%d", second, notifier.calls)
+	}
+}
+
+func TestRunItemDoesNotDoubleSendLoginRequiredAfterRetryFailure(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "watch.db")
+	st, err := watchlist.OpenStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	item := WatchItem{
+		ID: "toutiao-video", Name: "头条作手阿飞视频列表", Platform: "toutiao", Type: "toutiao_author", URL: "https://www.toutiao.com/c/user/token/",
+		NotifyTo: "feishu-default",
+	}
+	notifier := &fixedResultNotifier{result: notify.Result{Status: StatusNotifyFailed, Error: "temporary failure", Retryable: true}}
+	svc := &Service{
+		cfg:      &config.Config{Watchlist: config.WatchlistConfig{DefaultInterval: "6h"}},
+		store:    st,
+		feeds:    staticFeedReader{err: errors.New("LOGIN_REQUIRED: toutiao author page requires login")},
+		notifier: notifier,
+	}
+	if _, err := svc.RunItem(ctx, item); err == nil {
+		t.Fatal("expected login-required discovery error")
+	}
+	if notifier.calls != 1 {
+		t.Fatalf("expected the initial login-required notification attempt, got %d", notifier.calls)
+	}
+	if err := forceDeliveryRetryAt(ctx, path, item.ID, loginRequiredDeliveryKey(item.Platform, time.Now()), "2000-01-01T00:00:00Z"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.RunItem(ctx, item); err == nil {
+		t.Fatal("expected repeated login-required discovery error")
+	}
+	if notifier.calls != 2 {
+		t.Fatalf("a due retry must be the only notification attempt in its run, got %d", notifier.calls)
+	}
+}
+
+func TestRunItemDoesNotDoubleSendNoUpdateAfterRetryFailure(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "watch.db")
+	st, err := watchlist.OpenStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	item := WatchItem{
+		ID: "rss-local", Name: "RSS 列表", Platform: "rss", Type: "rss", URL: "https://example.com/feed", NotifyTo: "feishu-default",
+		Options: map[string]any{"notify_no_update": true, "limit": 1},
+	}
+	feed := FeedItem{ID: "g1", ContentKey: "g1", URL: "https://example.com/a", Title: "A"}
+	if _, err := st.UpsertDiscovered(ctx, item.ID, feed, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.UpdateItemStatus(ctx, item.ID, feed.ContentKey, StatusNotified, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	notifier := &fixedResultNotifier{result: notify.Result{Status: StatusNotifyFailed, Error: "temporary failure", Retryable: true}}
+	svc := &Service{
+		cfg:      &config.Config{Watchlist: config.WatchlistConfig{DefaultInterval: "6h"}},
+		store:    st,
+		feeds:    staticFeedReader{items: []FeedItem{feed}},
+		notifier: notifier,
+	}
+	if _, err := svc.RunItem(ctx, item); err != nil {
+		t.Fatal(err)
+	}
+	if notifier.calls != 1 {
+		t.Fatalf("expected the initial no-update notification attempt, got %d", notifier.calls)
+	}
+	if err := forceDeliveryRetryAt(ctx, path, item.ID, noUpdateDeliveryKey(time.Now()), "2000-01-01T00:00:00Z"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.RunItem(ctx, item); err != nil {
+		t.Fatal(err)
+	}
+	if notifier.calls != 2 {
+		t.Fatalf("a due retry must be the only no-update attempt in its run, got %d", notifier.calls)
 	}
 }
 

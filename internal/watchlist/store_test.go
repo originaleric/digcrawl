@@ -122,6 +122,40 @@ func TestStoreDetectsSameDayContentDelivery(t *testing.T) {
 	}
 }
 
+func TestStoreDetectsExactNotifiedDelivery(t *testing.T) {
+	ctx := context.Background()
+	st, err := OpenStore(filepath.Join(t.TempDir(), "watch.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	if err := st.UpsertDelivery(ctx, "w1", "__no_update__:2026-08-28", "c1", StatusNotified, "", false, "none", "none"); err != nil {
+		t.Fatal(err)
+	}
+	ok, err := st.HasNotifiedDelivery(ctx, "w1", "__no_update__:2026-08-28")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("expected exact notified delivery to be found")
+	}
+	if ok, err := st.HasNotifiedDelivery(ctx, "w1", "__login_required__:toutiao:2026-08-28"); err != nil || ok {
+		t.Fatalf("unexpected missing delivery result ok=%v err=%v", ok, err)
+	}
+	if err := st.UpsertDelivery(ctx, "w1", "__login_required__:toutiao:2026-08-28", "c1", StatusNotifyFailed, "temporary", true, "login", "login"); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := st.HasDelivery(ctx, "w1", "__login_required__:toutiao:2026-08-28"); err != nil || !ok {
+		t.Fatalf("expected failed delivery to be recorded ok=%v err=%v", ok, err)
+	}
+	if err := st.UpsertDelivery(ctx, "w1", "__login_required__:toutiao:"+time.Now().Format("2006-01-02"), "c1", StatusNotified, "", false, "login", "login"); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := st.HasNotifiedContentOnDate(ctx, "w1", time.Now()); err != nil || ok {
+		t.Fatalf("system notifications must not count as notified content ok=%v err=%v", ok, err)
+	}
+}
+
 func TestStoreUpdatesCollectedMetadataWithoutBlankingExistingValues(t *testing.T) {
 	ctx := context.Background()
 	st, err := OpenStore(filepath.Join(t.TempDir(), "watch.db"))

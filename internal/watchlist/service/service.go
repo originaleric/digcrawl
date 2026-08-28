@@ -22,6 +22,7 @@ import (
 type Store = watchlist.Store
 type WatchItem = watchlist.WatchItem
 type FeedItem = watchlist.FeedItem
+type FeedReader = watchlist.FeedReader
 type RunSummary = watchlist.RunSummary
 type TaskDefinition = watchlist.TaskDefinition
 type CollectedItem = watchlist.CollectedItem
@@ -43,7 +44,7 @@ type Service struct {
 	cfg        *config.Config
 	store      *Store
 	collector  *collect.Service
-	feeds      FeedRegistry
+	feeds      FeedReader
 	summarizer summary.Provider
 	notifier   notify.Notifier
 	owner      string
@@ -537,6 +538,14 @@ func (s *Service) RunItem(ctx context.Context, item WatchItem) (RunSummary, erro
 		status = "failed"
 		errText = err.Error()
 		sum.Errors = append(sum.Errors, err.Error())
+		if isLoginRequiredError(err) {
+			notified, notifyErr := s.notifyLoginRequired(ctx, item, time.Now())
+			if notifyErr != nil {
+				sum.Errors = append(sum.Errors, notifyErr.Error())
+			} else if notified {
+				sum.Notified++
+			}
+		}
 		return sum, err
 	}
 	limit := s.cfg.Watchlist.MaxItemsPerRunOrDefault()
@@ -622,10 +631,16 @@ func (s *Service) RunItem(ctx context.Context, item WatchItem) (RunSummary, erro
 		} else if alreadyNotified {
 			sum.NoUpdateSuppressed = true
 			sum.NoUpdateSuppressedReason = "source already notified real content today; no-update notification suppressed"
+		} else if alreadySent, err := s.store.HasNotifiedDelivery(ctx, item.ID, noUpdateDeliveryKey(time.Now())); err != nil {
+			sum.Errors = append(sum.Errors, err.Error())
+		} else if alreadySent {
+			sum.NoUpdateSuppressed = true
+			sum.NoUpdateSuppressedReason = "source already sent a no-update notification today"
 		} else if shouldNotifyNoUpdateForRun(item.Options, sum.Discovered, sum.Errors, contentActivity) {
-			if err := s.notifyNoUpdate(ctx, item, time.Now()); err != nil {
+			notified, err := s.notifyNoUpdate(ctx, item, time.Now())
+			if err != nil {
 				sum.Errors = append(sum.Errors, err.Error())
-			} else {
+			} else if notified {
 				sum.Notified++
 			}
 		} else if reason := noUpdateSuppressedReasonForRun(item.Options, sum.Discovered, sum.Errors, contentActivity); reason != "" {
@@ -727,9 +742,17 @@ func (s *Service) retryPendingDeliveries(ctx context.Context, item WatchItem) (i
 	return notified, nil
 }
 
-func (s *Service) notifyNoUpdate(ctx context.Context, item WatchItem, now time.Time) error {
+func (s *Service) notifyNoUpdate(ctx context.Context, item WatchItem, now time.Time) (bool, error) {
 	if now.IsZero() {
 		now = time.Now()
+	}
+	key := noUpdateDeliveryKey(now)
+	alreadyRecorded, err := s.store.HasDelivery(ctx, item.ID, key)
+	if err != nil {
+		return false, err
+	}
+	if alreadyRecorded {
+		return false, nil
 	}
 	name := strings.TrimSpace(item.Name)
 	if name == "" {
@@ -740,20 +763,76 @@ func (s *Service) notifyNoUpdate(ctx context.Context, item WatchItem, now time.T
 	text := fmt.Sprintf("%s\n\n%s 今日无更新。", title, date)
 	res := s.notifier.Send(ctx, item.NotifyTo, notify.Message{Title: title, Text: text})
 	if res.Status == "notified" || res.Status == StatusNotified {
-		key := "__no_update__:" + date
-		_ = s.store.UpsertDelivery(ctx, item.ID, key, res.ChannelID, StatusNotified, "", false, title, text)
-		return nil
+		if err := s.store.UpsertDelivery(ctx, item.ID, key, res.ChannelID, StatusNotified, "", false, title, text); err != nil {
+			return false, err
+		}
+		return true, nil
 	}
 	status := StatusNotifyFailed
 	if !res.Retryable {
 		status = StatusNotifyFinalFail
 	}
-	key := "__no_update__:" + date
-	_ = s.store.UpsertDelivery(ctx, item.ID, key, res.ChannelID, status, res.Error, res.Retryable, title, text)
-	if strings.TrimSpace(res.Error) == "" {
-		return fmt.Errorf("notify no-update message failed")
+	if err := s.store.UpsertDelivery(ctx, item.ID, key, res.ChannelID, status, res.Error, res.Retryable, title, text); err != nil {
+		return false, err
 	}
-	return fmt.Errorf("notify no-update message failed: %s", res.Error)
+	if strings.TrimSpace(res.Error) == "" {
+		return false, fmt.Errorf("notify no-update message failed")
+	}
+	return false, fmt.Errorf("notify no-update message failed: %s", res.Error)
+}
+
+func (s *Service) notifyLoginRequired(ctx context.Context, item WatchItem, now time.Time) (bool, error) {
+	if now.IsZero() {
+		now = time.Now()
+	}
+	platform := strings.ToLower(strings.TrimSpace(item.Platform))
+	if platform == "" {
+		platform = "目标平台"
+	}
+	key := loginRequiredDeliveryKey(platform, now)
+	alreadyRecorded, err := s.store.HasDelivery(ctx, item.ID, key)
+	if err != nil {
+		return false, err
+	}
+	if alreadyRecorded {
+		return false, nil
+	}
+	name := strings.TrimSpace(item.Name)
+	if name == "" {
+		name = strings.TrimSpace(item.ID)
+	}
+	title := fmt.Sprintf("%s 需要重新登录", name)
+	text := fmt.Sprintf("%s\n\n来源「%s」的登录状态已失效，无法判断是否有更新。请在本机终端运行：\n\ndigcrawl browser login --platform %s\n\n完成登录后，Watchlist 会在下次轮询继续抓取。", title, name, platform)
+	res := s.notifier.Send(ctx, item.NotifyTo, notify.Message{Title: title, Text: text})
+	if res.Status == "notified" || res.Status == StatusNotified {
+		if err := s.store.UpsertDelivery(ctx, item.ID, key, res.ChannelID, StatusNotified, "", false, title, text); err != nil {
+			return false, err
+		}
+		return true, nil
+	}
+	status := StatusNotifyFailed
+	if !res.Retryable {
+		status = StatusNotifyFinalFail
+	}
+	if err := s.store.UpsertDelivery(ctx, item.ID, key, res.ChannelID, status, res.Error, res.Retryable, title, text); err != nil {
+		return false, err
+	}
+	if strings.TrimSpace(res.Error) == "" {
+		return false, fmt.Errorf("notify login-required message failed")
+	}
+	return false, fmt.Errorf("notify login-required message failed: %s", res.Error)
+}
+
+func noUpdateDeliveryKey(now time.Time) string {
+	return "__no_update__:" + now.In(time.Local).Format("2006-01-02")
+}
+
+func loginRequiredDeliveryKey(platform string, now time.Time) string {
+	return "__login_required__:" + strings.ToLower(strings.TrimSpace(platform)) + ":" + now.In(time.Local).Format("2006-01-02")
+}
+
+func isLoginRequiredError(err error) bool {
+	return err != nil && strings.Contains(strings.ToUpper(err.Error()), "LOGIN_REQUIRED")
 }
 
 func (s *Service) normalizeItem(raw config.WatchlistItem) (WatchItem, error) {
