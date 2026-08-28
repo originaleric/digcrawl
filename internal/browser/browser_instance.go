@@ -88,7 +88,7 @@ func (im *InstanceManager) CreateInstance(ctx context.Context, name string) (*Br
 	if im.cfg.ChromePath != "" {
 		l = l.Bin(im.cfg.ChromePath)
 	}
-	l = applyLauncherExtraArgs(l, im.cfg.ExtraArgs)
+	l = applyBackgroundLauncherPolicy(l, im.cfg.ExtraArgs)
 
 	controlURL, err := l.Launch()
 	if err != nil {

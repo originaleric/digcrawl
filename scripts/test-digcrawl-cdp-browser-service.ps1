@@ -44,6 +44,19 @@ foreach ($main in @(
     Assert-True (@(Get-ManagedChromeProcesses).Count -eq 1) "exact main process should match: $main"
 }
 
+function Test-CdpReady { return $true }
+
+$unmutedMain = 'chrome.exe --remote-debugging-port=9323 --user-data-dir="C:\Users\Dig Crawl\AppData\Local\DigCrawl\cdp-browser" --no-first-run'
+Set-FakeProcesses @($unmutedMain)
+Assert-True (@(Get-MutedManagedChromeProcesses).Count -eq 0) 'a managed browser without --mute-audio must not satisfy the service contract'
+Assert-True (-not (Test-ServiceCdpReady)) 'an unmuted managed browser must fail service readiness'
+
+$mutedMain = "$unmutedMain --mute-audio"
+Set-FakeProcesses @($mutedMain)
+Assert-True (@(Get-MutedManagedChromeProcesses).Count -eq 1) 'a muted managed browser should satisfy the service contract'
+Assert-True (Test-ServiceCdpReady) 'a muted managed browser should pass service readiness'
+Assert-True ((Get-ChromeLaunchArguments) -contains '--mute-audio') 'managed Chrome launch arguments must include --mute-audio'
+
 foreach ($foreign in @(
     'chrome.exe --remote-debugging-port=93230 --user-data-dir="C:\Users\Dig Crawl\AppData\Local\DigCrawl\cdp-browser" --no-first-run',
     'chrome.exe --remote-debugging-port=9323 --user-data-dir="C:\Users\Dig Crawl\AppData\Local\DigCrawl\cdp-browser-other" --no-first-run',
@@ -58,5 +71,12 @@ function Stop-Service { $script:StopCalled = $true }
 function Wait-CdpStopped { return $script:StopCalled }
 Prepare-Install
 Assert-True $script:StopCalled 'reinstall must call Stop-Service, not only Stop-ScheduledTask'
+
+$script:Lifecycle = @()
+function Stop-Service { $script:Lifecycle += 'stop' }
+function Wait-CdpStopped { $script:Lifecycle += 'released'; return $true }
+function Start-Service { $script:Lifecycle += 'start' }
+Restart-ManagedService
+Assert-True (($script:Lifecycle -join ',') -eq 'stop,released,start') 'restart must wait for the prior CDP browser to release before starting a replacement'
 
 Write-Output 'Windows CDP browser service regression checks passed'

@@ -595,7 +595,7 @@ func (m *browserManager) openBrowserConnection(ctx context.Context) (*browserCon
 		if proxy := strings.TrimSpace(m.cfg.ProxyURL); proxy != "" {
 			started = started.Proxy(proxy)
 		}
-		started = applyLauncherExtraArgs(started, m.cfg.ExtraArgs)
+		started = applyBackgroundLauncherPolicy(started, m.cfg.ExtraArgs)
 		controlURL, err = started.Launch()
 	}
 	if err != nil {

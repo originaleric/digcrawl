@@ -7,6 +7,15 @@ import (
 	"github.com/go-rod/rod/lib/launcher/flags"
 )
 
+// applyBackgroundLauncherPolicy finalizes a crawler-owned browser launch.
+// ExtraArgs remain useful for browser compatibility, but cannot override the
+// product invariant that background rendering never emits audio. Interactive
+// login intentionally does not call this helper.
+func applyBackgroundLauncherPolicy(l *launcher.Launcher, extraArgs []string) *launcher.Launcher {
+	l = applyLauncherExtraArgs(l, extraArgs)
+	return l.Set(flags.Flag("mute-audio"))
+}
+
 func applyLauncherExtraArgs(l *launcher.Launcher, args []string) *launcher.Launcher {
 	for _, raw := range args {
 		arg := strings.TrimSpace(raw)
