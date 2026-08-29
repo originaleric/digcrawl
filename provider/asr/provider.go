@@ -31,6 +31,7 @@ func (p *Provider) Register(_ context.Context, reg *registry.Registry) error {
 	}
 	if config.IsDefaultSkillProfile(p.SkillProfilePath) {
 		reg.Register(EnableSkillASREntry())
+		reg.Register(ConfigureSkillMediaEntry())
 	}
 	return nil
 }

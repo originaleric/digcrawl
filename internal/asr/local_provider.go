@@ -386,7 +386,11 @@ func localCommandFallback(ctx context.Context, command string, args []string, mo
 }
 
 func findPythonInterpreter(ctx context.Context, modelCacheDir string) (string, error) {
-	if runtime, ok := localASRRuntimeReady(ctx, localASRRuntimeDir(modelCacheDir)); ok {
+	runtimeDir := localASRRuntimeDir(modelCacheDir)
+	if runtime := localASRRuntimePython(runtimeDir); runtime != "" {
+		if err := localASRImportCheck(ctx, runtime); err != nil {
+			return "", fmt.Errorf("prepared local ASR runtime %q failed its health check; rerun `digcrawl asr setup`: %w", runtime, err)
+		}
 		return runtime, nil
 	}
 	// Match setup's supported-version selection rather than choosing an arbitrary
@@ -396,8 +400,8 @@ func findPythonInterpreter(ctx context.Context, modelCacheDir string) (string, e
 	if err != nil {
 		return "", err
 	}
-	if !localASRImportReady(ctx, python) {
-		return "", fmt.Errorf("local ASR runtime is not installed or did not pass its health check; run `digcrawl asr setup`")
+	if err := localASRImportCheck(ctx, python); err != nil {
+		return "", fmt.Errorf("local ASR runtime is not installed or did not pass its health check; run `digcrawl asr setup`: %w", err)
 	}
 	return python, nil
 }

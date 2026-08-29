@@ -7,6 +7,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -22,6 +23,7 @@ import (
 type Store = watchlist.Store
 type WatchItem = watchlist.WatchItem
 type FeedItem = watchlist.FeedItem
+type FeedReader = watchlist.FeedReader
 type RunSummary = watchlist.RunSummary
 type TaskDefinition = watchlist.TaskDefinition
 type CollectedItem = watchlist.CollectedItem
@@ -43,10 +45,23 @@ type Service struct {
 	cfg        *config.Config
 	store      *Store
 	collector  *collect.Service
-	feeds      FeedRegistry
+	feeds      FeedReader
 	summarizer summary.Provider
 	notifier   notify.Notifier
 	owner      string
+}
+
+type pendingFeed struct {
+	feed FeedItem
+	key  string
+}
+
+type itemResult struct {
+	collected  int
+	summarized int
+	notified   int
+	activity   int
+	errors     []string
 }
 
 func NewService(cfg *config.Config) (*Service, error) {
@@ -359,12 +374,12 @@ func isFeishuAppChannel(ch config.FeishuChannel) bool {
 }
 
 func (s *Service) RunOnce(ctx context.Context) ([]RunSummary, error) {
-	var summaries []RunSummary
-	var firstErr error
 	rawItems, err := s.configuredItems(ctx)
 	if err != nil {
 		return nil, err
 	}
+	items := make([]WatchItem, 0, len(rawItems))
+	var firstErr error
 	for _, raw := range rawItems {
 		item, err := s.normalizeItem(raw)
 		if err != nil {
@@ -376,11 +391,13 @@ func (s *Service) RunOnce(ctx context.Context) ([]RunSummary, error) {
 		if !item.Enabled {
 			continue
 		}
-		sum, err := s.RunItem(ctx, item)
-		summaries = append(summaries, sum)
-		if err != nil && firstErr == nil {
-			firstErr = err
-		}
+		items = append(items, item)
+	}
+	summaries, runErr := runBounded(s.cfg.Watchlist.Scheduler.MaxConcurrentRunsOrDefault(), items, func(item WatchItem) (RunSummary, error) {
+		return s.RunItem(ctx, item)
+	})
+	if firstErr == nil {
+		firstErr = runErr
 	}
 	return summaries, firstErr
 }
@@ -447,8 +464,12 @@ func (s *Service) RunDue(ctx context.Context, now time.Time) ([]RunSummary, erro
 	if now.IsZero() {
 		now = time.Now()
 	}
-	var summaries []RunSummary
 	var firstErr error
+	type scheduledItem struct {
+		item WatchItem
+		def  TaskDefinition
+	}
+	var dueItems []scheduledItem
 	activeTaskIDs := []string{}
 	rawItems, err := s.configuredItems(ctx)
 	if err != nil {
@@ -483,14 +504,60 @@ func (s *Service) RunDue(ctx context.Context, now time.Time) ([]RunSummary, erro
 		if !due {
 			continue
 		}
-		sum, err := s.runScheduledTask(ctx, item, def)
-		summaries = append(summaries, sum)
-		if err != nil && firstErr == nil {
-			firstErr = err
-		}
+		dueItems = append(dueItems, scheduledItem{item: item, def: def})
+	}
+	summaries, runErr := runBounded(s.cfg.Watchlist.Scheduler.MaxConcurrentRunsOrDefault(), dueItems, func(due scheduledItem) (RunSummary, error) {
+		return s.runScheduledTask(ctx, due.item, due.def)
+	})
+	if firstErr == nil {
+		firstErr = runErr
 	}
 	if err := s.store.DisableMissingTaskDefinitions(ctx, "watchlist.collect", activeTaskIDs, now); err != nil && firstErr == nil {
 		firstErr = err
+	}
+	return summaries, firstErr
+}
+
+// runBounded runs Watchlist items with a fixed worker bound while returning
+// summaries in input order. A bound of one preserves the previous behavior.
+func runBounded[T any](limit int, items []T, run func(T) (RunSummary, error)) ([]RunSummary, error) {
+	if len(items) == 0 {
+		return nil, nil
+	}
+	if limit <= 0 {
+		limit = 1
+	}
+	if limit > len(items) {
+		limit = len(items)
+	}
+	type result struct {
+		summary RunSummary
+		err     error
+	}
+	results := make([]result, len(items))
+	jobs := make(chan int)
+	var workers sync.WaitGroup
+	for range limit {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			for index := range jobs {
+				results[index].summary, results[index].err = run(items[index])
+			}
+		}()
+	}
+	for index := range items {
+		jobs <- index
+	}
+	close(jobs)
+	workers.Wait()
+	summaries := make([]RunSummary, len(items))
+	var firstErr error
+	for index, result := range results {
+		summaries[index] = result.summary
+		if firstErr == nil && result.err != nil {
+			firstErr = result.err
+		}
 	}
 	return summaries, firstErr
 }
@@ -537,6 +604,14 @@ func (s *Service) RunItem(ctx context.Context, item WatchItem) (RunSummary, erro
 		status = "failed"
 		errText = err.Error()
 		sum.Errors = append(sum.Errors, err.Error())
+		if isLoginRequiredError(err) {
+			notified, notifyErr := s.notifyLoginRequired(ctx, item, time.Now())
+			if notifyErr != nil {
+				sum.Errors = append(sum.Errors, notifyErr.Error())
+			} else if notified {
+				sum.Notified++
+			}
+		}
 		return sum, err
 	}
 	limit := s.cfg.Watchlist.MaxItemsPerRunOrDefault()
@@ -544,13 +619,19 @@ func (s *Service) RunItem(ctx context.Context, item WatchItem) (RunSummary, erro
 		feeds = feeds[:limit]
 	}
 	sum.Discovered = len(feeds)
+	var pending []pendingFeed
+	seenContentKeys := make(map[string]struct{}, len(feeds))
 	for _, feed := range feeds {
 		key := watchlist.ContentKey(feed)
+		if _, seen := seenContentKeys[key]; seen {
+			continue
+		}
 		isNew, err := s.store.UpsertDiscovered(ctx, item.ID, feed, baseline)
 		if err != nil {
 			sum.Errors = append(sum.Errors, err.Error())
 			continue
 		}
+		seenContentKeys[key] = struct{}{}
 		if baseline {
 			continue
 		}
@@ -566,55 +647,17 @@ func (s *Service) RunItem(ctx context.Context, item WatchItem) (RunSummary, erro
 		} else {
 			sum.NewItems++
 		}
-		collected, err := s.collectFeedItem(ctx, feed)
-		if err != nil {
-			_ = s.store.UpdateItemStatus(ctx, item.ID, key, StatusCollectFailed, err.Error(), "")
-			sum.Errors = append(sum.Errors, err.Error())
-			continue
-		}
-		sum.Collected++
-		contentActivity++
-		if err := s.store.UpdateItemCollectedMetadata(ctx, item.ID, key, collected.Title, collected.PublishedAt, collected.ContentType); err != nil {
-			sum.Errors = append(sum.Errors, err.Error())
-		}
-		_ = s.store.UpdateItemStatus(ctx, item.ID, key, StatusCollected, "", "")
-		req := summary.Request{
-			WatchID: item.ID, Platform: item.Platform, SourceName: item.Name, RunTime: time.Now().Format(time.RFC3339),
-			Items: []summary.Item{{
-				ItemID: key, URL: feed.URL, Title: firstNonEmpty(collected.Title, feed.Title),
-				PublishedAt: firstNonEmpty(collected.PublishedAt, feedPublishedAtText(feed.PublishedAt)),
-				Text:        collected.Text, ASRText: collected.ASRText, OCRText: collected.OCRText, Metadata: collected.Metadata,
-			}},
-		}
-		res, err := s.summarizer.Summarize(ctx, req)
-		if err != nil {
-			_ = s.store.UpdateItemStatus(ctx, item.ID, key, StatusSummaryFailed, "", err.Error())
-			sum.Errors = append(sum.Errors, err.Error())
-			continue
-		}
-		if err := validateSummaryResultForCollectedItem(collected, res); err != nil {
-			_ = s.store.UpdateItemStatus(ctx, item.ID, key, StatusSummaryFailed, "", err.Error())
-			sum.Errors = append(sum.Errors, err.Error())
-			continue
-		}
-		collected.Summary = res
-		sum.Summarized++
-		_ = s.store.UpdateItemStatus(ctx, item.ID, key, StatusSummarized, "", res.Error)
-		msg := watchlist.RenderNotification(res)
-		notifyResult := s.notifier.Send(ctx, item.NotifyTo, msg)
-		if notifyResult.Status == "notified" || notifyResult.Status == StatusNotified {
-			sum.Notified++
-			_ = s.store.UpdateItemStatus(ctx, item.ID, key, StatusNotified, "", "")
-			_ = s.store.UpsertDeliveryWithProvider(ctx, item.ID, key, notifyResult.ChannelID, StatusNotified, "", false, msg.Title, msg.Text, res.Provider)
-			continue
-		}
-		status := StatusNotifyFailed
-		if !notifyResult.Retryable {
-			status = StatusNotifyFinalFail
-		}
-		_ = s.store.UpdateItemStatus(ctx, item.ID, key, status, "", "")
-		_ = s.store.UpsertDeliveryWithProvider(ctx, item.ID, key, notifyResult.ChannelID, StatusNotifyFailed, notifyResult.Error, notifyResult.Retryable, msg.Title, msg.Text, res.Provider)
-		sum.Errors = append(sum.Errors, notifyResult.Error)
+		pending = append(pending, pendingFeed{feed: feed, key: key})
+	}
+	results := runPendingFeeds(s.cfg.Watchlist.Collect.MaxConcurrentItemsOrDefault(), pending, func(pending pendingFeed) itemResult {
+		return s.processPendingFeed(ctx, item, pending.feed, pending.key)
+	})
+	for _, result := range results {
+		sum.Collected += result.collected
+		sum.Summarized += result.summarized
+		sum.Notified += result.notified
+		contentActivity += result.activity
+		sum.Errors = append(sum.Errors, result.errors...)
 	}
 	if !baseline && sum.NewItems == 0 {
 		if alreadyNotified, err := s.store.HasNotifiedContentOnDate(ctx, item.ID, time.Now()); err != nil {
@@ -622,10 +665,16 @@ func (s *Service) RunItem(ctx context.Context, item WatchItem) (RunSummary, erro
 		} else if alreadyNotified {
 			sum.NoUpdateSuppressed = true
 			sum.NoUpdateSuppressedReason = "source already notified real content today; no-update notification suppressed"
+		} else if alreadySent, err := s.store.HasNotifiedDelivery(ctx, item.ID, noUpdateDeliveryKey(time.Now())); err != nil {
+			sum.Errors = append(sum.Errors, err.Error())
+		} else if alreadySent {
+			sum.NoUpdateSuppressed = true
+			sum.NoUpdateSuppressedReason = "source already sent a no-update notification today"
 		} else if shouldNotifyNoUpdateForRun(item.Options, sum.Discovered, sum.Errors, contentActivity) {
-			if err := s.notifyNoUpdate(ctx, item, time.Now()); err != nil {
+			notified, err := s.notifyNoUpdate(ctx, item, time.Now())
+			if err != nil {
 				sum.Errors = append(sum.Errors, err.Error())
-			} else {
+			} else if notified {
 				sum.Notified++
 			}
 		} else if reason := noUpdateSuppressedReasonForRun(item.Options, sum.Discovered, sum.Errors, contentActivity); reason != "" {
@@ -638,6 +687,86 @@ func (s *Service) RunItem(ctx context.Context, item WatchItem) (RunSummary, erro
 		errText = strings.Join(sum.Errors, "; ")
 	}
 	return sum, nil
+}
+
+func runPendingFeeds[T any](limit int, feeds []T, run func(T) itemResult) []itemResult {
+	if len(feeds) == 0 {
+		return nil
+	}
+	if limit <= 0 {
+		limit = 1
+	}
+	if limit > len(feeds) {
+		limit = len(feeds)
+	}
+	results := make([]itemResult, len(feeds))
+	jobs := make(chan int)
+	var workers sync.WaitGroup
+	for range limit {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			for index := range jobs {
+				results[index] = run(feeds[index])
+			}
+		}()
+	}
+	for index := range feeds {
+		jobs <- index
+	}
+	close(jobs)
+	workers.Wait()
+	return results
+}
+
+func (s *Service) processPendingFeed(ctx context.Context, item WatchItem, feed FeedItem, key string) itemResult {
+	result := itemResult{}
+	collected, err := s.collectFeedItem(ctx, feed)
+	if err != nil {
+		_ = s.store.UpdateItemStatus(ctx, item.ID, key, StatusCollectFailed, err.Error(), "")
+		result.errors = append(result.errors, err.Error())
+		return result
+	}
+	result.collected++
+	result.activity++
+	if err := s.store.UpdateItemCollectedMetadata(ctx, item.ID, key, collected.Title, collected.PublishedAt, collected.ContentType); err != nil {
+		result.errors = append(result.errors, err.Error())
+	}
+	_ = s.store.UpdateItemStatus(ctx, item.ID, key, StatusCollected, "", "")
+	req := summary.Request{WatchID: item.ID, Platform: item.Platform, SourceName: item.Name, RunTime: time.Now().Format(time.RFC3339), Items: []summary.Item{{
+		ItemID: key, URL: feed.URL, Title: firstNonEmpty(collected.Title, feed.Title),
+		PublishedAt: firstNonEmpty(collected.PublishedAt, feedPublishedAtText(feed.PublishedAt)),
+		Text:        collected.Text, ASRText: collected.ASRText, OCRText: collected.OCRText, Metadata: collected.Metadata,
+	}}}
+	res, err := s.summarizer.Summarize(ctx, req)
+	if err != nil {
+		_ = s.store.UpdateItemStatus(ctx, item.ID, key, StatusSummaryFailed, "", err.Error())
+		result.errors = append(result.errors, err.Error())
+		return result
+	}
+	if err := validateSummaryResultForCollectedItem(collected, res); err != nil {
+		_ = s.store.UpdateItemStatus(ctx, item.ID, key, StatusSummaryFailed, "", err.Error())
+		result.errors = append(result.errors, err.Error())
+		return result
+	}
+	result.summarized++
+	_ = s.store.UpdateItemStatus(ctx, item.ID, key, StatusSummarized, "", res.Error)
+	msg := watchlist.RenderNotification(res)
+	notifyResult := s.notifier.Send(ctx, item.NotifyTo, msg)
+	if notifyResult.Status == "notified" || notifyResult.Status == StatusNotified {
+		result.notified++
+		_ = s.store.UpdateItemStatus(ctx, item.ID, key, StatusNotified, "", "")
+		_ = s.store.UpsertDeliveryWithProvider(ctx, item.ID, key, notifyResult.ChannelID, StatusNotified, "", false, msg.Title, msg.Text, res.Provider)
+		return result
+	}
+	status := StatusNotifyFailed
+	if !notifyResult.Retryable {
+		status = StatusNotifyFinalFail
+	}
+	_ = s.store.UpdateItemStatus(ctx, item.ID, key, status, "", "")
+	_ = s.store.UpsertDeliveryWithProvider(ctx, item.ID, key, notifyResult.ChannelID, StatusNotifyFailed, notifyResult.Error, notifyResult.Retryable, msg.Title, msg.Text, res.Provider)
+	result.errors = append(result.errors, notifyResult.Error)
+	return result
 }
 
 func (s *Service) runScheduledTask(ctx context.Context, item WatchItem, def TaskDefinition) (RunSummary, error) {
@@ -727,9 +856,17 @@ func (s *Service) retryPendingDeliveries(ctx context.Context, item WatchItem) (i
 	return notified, nil
 }
 
-func (s *Service) notifyNoUpdate(ctx context.Context, item WatchItem, now time.Time) error {
+func (s *Service) notifyNoUpdate(ctx context.Context, item WatchItem, now time.Time) (bool, error) {
 	if now.IsZero() {
 		now = time.Now()
+	}
+	key := noUpdateDeliveryKey(now)
+	alreadyRecorded, err := s.store.HasDelivery(ctx, item.ID, key)
+	if err != nil {
+		return false, err
+	}
+	if alreadyRecorded {
+		return false, nil
 	}
 	name := strings.TrimSpace(item.Name)
 	if name == "" {
@@ -740,20 +877,76 @@ func (s *Service) notifyNoUpdate(ctx context.Context, item WatchItem, now time.T
 	text := fmt.Sprintf("%s\n\n%s 今日无更新。", title, date)
 	res := s.notifier.Send(ctx, item.NotifyTo, notify.Message{Title: title, Text: text})
 	if res.Status == "notified" || res.Status == StatusNotified {
-		key := "__no_update__:" + date
-		_ = s.store.UpsertDelivery(ctx, item.ID, key, res.ChannelID, StatusNotified, "", false, title, text)
-		return nil
+		if err := s.store.UpsertDelivery(ctx, item.ID, key, res.ChannelID, StatusNotified, "", false, title, text); err != nil {
+			return false, err
+		}
+		return true, nil
 	}
 	status := StatusNotifyFailed
 	if !res.Retryable {
 		status = StatusNotifyFinalFail
 	}
-	key := "__no_update__:" + date
-	_ = s.store.UpsertDelivery(ctx, item.ID, key, res.ChannelID, status, res.Error, res.Retryable, title, text)
-	if strings.TrimSpace(res.Error) == "" {
-		return fmt.Errorf("notify no-update message failed")
+	if err := s.store.UpsertDelivery(ctx, item.ID, key, res.ChannelID, status, res.Error, res.Retryable, title, text); err != nil {
+		return false, err
 	}
-	return fmt.Errorf("notify no-update message failed: %s", res.Error)
+	if strings.TrimSpace(res.Error) == "" {
+		return false, fmt.Errorf("notify no-update message failed")
+	}
+	return false, fmt.Errorf("notify no-update message failed: %s", res.Error)
+}
+
+func (s *Service) notifyLoginRequired(ctx context.Context, item WatchItem, now time.Time) (bool, error) {
+	if now.IsZero() {
+		now = time.Now()
+	}
+	platform := strings.ToLower(strings.TrimSpace(item.Platform))
+	if platform == "" {
+		platform = "目标平台"
+	}
+	key := loginRequiredDeliveryKey(platform, now)
+	alreadyRecorded, err := s.store.HasDelivery(ctx, item.ID, key)
+	if err != nil {
+		return false, err
+	}
+	if alreadyRecorded {
+		return false, nil
+	}
+	name := strings.TrimSpace(item.Name)
+	if name == "" {
+		name = strings.TrimSpace(item.ID)
+	}
+	title := fmt.Sprintf("%s 需要重新登录", name)
+	text := fmt.Sprintf("%s\n\n来源「%s」的登录状态已失效，无法判断是否有更新。请在本机终端运行：\n\ndigcrawl browser login --platform %s\n\n完成登录后，Watchlist 会在下次轮询继续抓取。", title, name, platform)
+	res := s.notifier.Send(ctx, item.NotifyTo, notify.Message{Title: title, Text: text})
+	if res.Status == "notified" || res.Status == StatusNotified {
+		if err := s.store.UpsertDelivery(ctx, item.ID, key, res.ChannelID, StatusNotified, "", false, title, text); err != nil {
+			return false, err
+		}
+		return true, nil
+	}
+	status := StatusNotifyFailed
+	if !res.Retryable {
+		status = StatusNotifyFinalFail
+	}
+	if err := s.store.UpsertDelivery(ctx, item.ID, key, res.ChannelID, status, res.Error, res.Retryable, title, text); err != nil {
+		return false, err
+	}
+	if strings.TrimSpace(res.Error) == "" {
+		return false, fmt.Errorf("notify login-required message failed")
+	}
+	return false, fmt.Errorf("notify login-required message failed: %s", res.Error)
+}
+
+func noUpdateDeliveryKey(now time.Time) string {
+	return "__no_update__:" + now.In(time.Local).Format("2006-01-02")
+}
+
+func loginRequiredDeliveryKey(platform string, now time.Time) string {
+	return "__login_required__:" + strings.ToLower(strings.TrimSpace(platform)) + ":" + now.In(time.Local).Format("2006-01-02")
+}
+
+func isLoginRequiredError(err error) bool {
+	return err != nil && strings.Contains(strings.ToUpper(err.Error()), "LOGIN_REQUIRED")
 }
 
 func (s *Service) normalizeItem(raw config.WatchlistItem) (WatchItem, error) {

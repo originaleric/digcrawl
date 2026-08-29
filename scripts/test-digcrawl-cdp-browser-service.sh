@@ -26,7 +26,20 @@ mkdir -p "${TEST_ROOT}/linux-home" "${TEST_ROOT}/macos-home"
 ln -s /usr/bin/true "${TEST_ROOT}/Chrome With Space"
 mkdir -p "${TEST_ROOT}/bin"
 ln -s /usr/bin/true "${TEST_ROOT}/bin/google-chrome"
+CAPTURE_CHROME="${TEST_ROOT}/capture-chrome"
+printf '%s\n' '#!/usr/bin/env bash' 'printf "%s\\n" "$@" > "${DIGCRAWL_TEST_ARGS_OUTPUT:?}"' > "${CAPTURE_CHROME}"
+chmod 700 "${CAPTURE_CHROME}"
 export TEST_ROOT SERVICE_SCRIPT
+
+# Assert the effective Chrome invocation, rather than merely checking that a
+# source file happens to contain the flag.
+bash -c '
+  set -euo pipefail
+  curl() { return 22; }
+  export -f curl
+  HOME="$TEST_ROOT/run-foreground-home" DIGCRAWL_CHROME_PATH="$TEST_ROOT/capture-chrome" DIGCRAWL_TEST_ARGS_OUTPUT="$TEST_ROOT/chrome-args" "$SERVICE_SCRIPT" run-foreground
+  grep -Fx -- "--mute-audio" "$TEST_ROOT/chrome-args"
+'
 
 bash -c '
   set -euo pipefail
@@ -35,7 +48,7 @@ bash -c '
   export test_home
   systemctl() { case "$*" in *enable*) touch "$test_home/ready" ;; esac; }
   curl() { test -f "$test_home/ready" || return 22; printf "{\"webSocketDebuggerUrl\":\"ws://127.0.0.1:9323/devtools/browser/test\"}"; }
-  ps() { test -f "$test_home/ready" || return 0; printf "%s\n" "chrome --remote-debugging-port=9323 --user-data-dir=$test_home/.local/share/digcrawl/cdp-browser --no-first-run"; }
+  ps() { test -f "$test_home/ready" || return 0; printf "%s\n" "chrome --remote-debugging-port=9323 --user-data-dir=$test_home/.local/share/digcrawl/cdp-browser --no-first-run --mute-audio"; }
   export -f uname systemctl curl ps
   HOME="$test_home" DIGCRAWL_CHROME_PATH="$TEST_ROOT/Chrome With Space" "$SERVICE_SCRIPT" install
   unit="$test_home/.config/systemd/user/digcrawl-cdp-browser.service"
@@ -52,7 +65,7 @@ bash -c '
   export test_home
   systemctl() { case "$*" in *enable*) touch "$test_home/ready" ;; esac; }
   curl() { test -f "$test_home/ready" || return 22; printf "{\"webSocketDebuggerUrl\":\"ws://127.0.0.1:9323/devtools/browser/test\"}"; }
-  ps() { test -f "$test_home/ready" || return 0; printf "%s\\n" "chrome --remote-debugging-port=9323 --user-data-dir=$test_home/.local/share/digcrawl/cdp-browser --no-first-run"; }
+  ps() { test -f "$test_home/ready" || return 0; printf "%s\\n" "chrome --remote-debugging-port=9323 --user-data-dir=$test_home/.local/share/digcrawl/cdp-browser --no-first-run --mute-audio"; }
   export -f uname systemctl curl ps
   HOME="$test_home" PATH="$TEST_ROOT/bin:$PATH" "$SERVICE_SCRIPT" install
   metadata="$test_home/.local/state/digcrawl/cdp-browser-services/digcrawl-cdp-browser.tsv"
@@ -69,7 +82,7 @@ bash -c '
   export test_home
   systemctl() { case "$*" in *enable*) touch "$test_home/ready" ;; esac; }
   curl() { test -f "$test_home/ready" || return 22; printf "{\"webSocketDebuggerUrl\":\"ws://127.0.0.1:19432/devtools/browser/test\"}"; }
-  ps() { test -f "$test_home/ready" || return 0; printf "%s\n" "chrome --remote-debugging-port=19432 --user-data-dir=$test_home/.local/share/digcrawl/cdp-browser --no-first-run"; }
+  ps() { test -f "$test_home/ready" || return 0; printf "%s\n" "chrome --remote-debugging-port=19432 --user-data-dir=$test_home/.local/share/digcrawl/cdp-browser --no-first-run --mute-audio"; }
   export -f uname systemctl curl ps
   HOME="$test_home" DIGCRAWL_CDP_BROWSER_SERVICE_NAME="digcrawl-video" DIGCRAWL_CDP_PORT=19432 DIGCRAWL_CHROME_PATH="$TEST_ROOT/Chrome With Space" "$SERVICE_SCRIPT" install
   HOME="$test_home" "$SERVICE_SCRIPT" status | grep -F "127.0.0.1:19432"
@@ -84,9 +97,9 @@ bash -c '
   uname() { printf "Darwin\\n"; }
   test_home="$TEST_ROOT/macos-custom-home"
   export test_home
-  launchctl() { case "$*" in *kickstart*) touch "$test_home/ready" ;; esac; }
+  launchctl() { case "$*" in *bootout*) rm -f "$test_home/ready" ;; *kickstart*) touch "$test_home/ready" ;; esac; }
   curl() { test -f "$test_home/ready" || return 22; printf "{\"webSocketDebuggerUrl\":\"ws://127.0.0.1:19433/devtools/browser/test\"}"; }
-  ps() { test -f "$test_home/ready" || return 0; printf "%s\n" "Google Chrome --remote-debugging-port=19433 --user-data-dir=$test_home/.local/share/digcrawl/cdp-browser --no-first-run"; }
+  ps() { test -f "$test_home/ready" || return 0; printf "%s\n" "Google Chrome --remote-debugging-port=19433 --user-data-dir=$test_home/.local/share/digcrawl/cdp-browser --no-first-run --mute-audio"; }
   export -f uname launchctl curl ps
   HOME="$test_home" DIGCRAWL_CDP_BROWSER_SERVICE_LABEL="com.digcrawl.video" DIGCRAWL_CDP_PORT=19433 DIGCRAWL_CHROME_PATH="$TEST_ROOT/Chrome With Space" "$SERVICE_SCRIPT" install
   HOME="$test_home" "$SERVICE_SCRIPT" status | grep -F "127.0.0.1:19433"
@@ -101,18 +114,23 @@ bash -c '
   uname() { printf "Darwin\\n"; }
   test_home="$TEST_ROOT/macos-home"
   export test_home
-  launchctl() { case "$*" in *kickstart*) touch "$test_home/ready" ;; esac; }
+  launchctl() { case "$*" in *bootout*) rm -f "$test_home/ready" ;; *kickstart*) touch "$test_home/ready" ;; esac; }
   curl() { test -f "$test_home/ready" || return 22; printf "{\"webSocketDebuggerUrl\":\"ws://127.0.0.1:9323/devtools/browser/test\"}"; }
-  ps() { test -f "$test_home/ready" || return 0; printf "%s\n" "Google Chrome --remote-debugging-port=9323 --user-data-dir=$test_home/.local/share/digcrawl/cdp-browser --no-first-run"; }
+  ps() { test -f "$test_home/ready" || return 0; printf "%s\n" "Google Chrome --remote-debugging-port=9323 --user-data-dir=$test_home/.local/share/digcrawl/cdp-browser --no-first-run --mute-audio"; }
   export -f uname launchctl curl ps
   HOME="$test_home" DIGCRAWL_CHROME_PATH="$TEST_ROOT/Chrome With Space" "$SERVICE_SCRIPT" install
   plist="$test_home/Library/LaunchAgents/com.digcrawl.cdp-browser.plist"
   launcher="$test_home/Library/Application Support/DigCrawl/bin/com.digcrawl.cdp-browser.sh"
   test -f "$plist"
   test -x "$launcher"
+  cmp -s "$SERVICE_SCRIPT" "$launcher"
   grep -F "<string>$launcher</string><string>run-foreground</string>" "$plist"
   grep -F "<key>DIGCRAWL_CHROME_PATH</key><string>$TEST_ROOT/Chrome With Space</string>" "$plist"
   if command -v plutil >/dev/null 2>&1; then plutil -lint "$plist"; fi
+  printf "stale" > "$launcher"
+  HOME="$test_home" "$SERVICE_SCRIPT" status 2>&1 | grep -F "staged launcher differs"
+  HOME="$test_home" "$SERVICE_SCRIPT" restart
+  cmp -s "$SERVICE_SCRIPT" "$launcher"
 '
 
 if bash -c '
@@ -139,6 +157,7 @@ if bash -c '
   export test_home
   export FAKE_CHROME_COMMAND
   for FAKE_CHROME_COMMAND in \
+	"chrome --remote-debugging-port=9323 --user-data-dir=$test_home/.local/share/digcrawl/cdp-browser --no-first-run" \
     "chrome --remote-debugging-port=93230 --user-data-dir=$test_home/.local/share/digcrawl/cdp-browser --no-first-run" \
     "chrome --remote-debugging-port=9323 --user-data-dir=$test_home/.local/share/digcrawl/cdp-browser-other --no-first-run" \
     "chrome --remote-debugging-port=9323 --user-data-dir=$test_home/.local/share/digcrawl/cdp-browser --no-first-run --type=renderer"; do
@@ -158,7 +177,7 @@ if bash -c '
   # uses another profile. Installation must refuse it rather than borrowing
   # another local authenticated browser session.
   curl() { printf "{\"webSocketDebuggerUrl\":\"ws://127.0.0.1:9323/devtools/browser/foreign\"}"; }
-  ps() { printf "%s\\n" "chrome --remote-debugging-port=9323 --user-data-dir=/tmp/not-digcrawl"; }
+  ps() { printf "%s\\n" "chrome --remote-debugging-port=9323 --user-data-dir=/tmp/not-digcrawl --mute-audio"; }
   export -f uname systemctl curl ps
   HOME="$TEST_ROOT/conflict-home" DIGCRAWL_CHROME_PATH="$TEST_ROOT/Chrome With Space" "$SERVICE_SCRIPT" install
 '; then

@@ -30,12 +30,12 @@ func TestEffectiveASRTimeoutUsesProbedDurationForLocalProvider(t *testing.T) {
 	if err := os.WriteFile(mediaPath, []byte("media"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	copyLocalASRTestCommand(t, filepath.Join(dir, "ffprobe"))
+	copyLocalASRTestCommand(t, localASRTestExecutablePath(dir, "ffprobe"))
 	t.Setenv("DIGCRAWL_TEST_LOCAL_ASR_MODE", "ffprobe")
 	got := effectiveASRTimeout(context.Background(), mediaPath, config.ASRConfig{
 		Provider:   "local",
 		TimeoutSec: 1,
-		FFmpegPath: filepath.Join(dir, "ffmpeg"),
+		FFmpegPath: localASRTestExecutablePath(dir, "ffmpeg"),
 	})
 	if want := 14*time.Minute + 33*time.Second + 853*time.Millisecond; got != want {
 		t.Fatalf("timeout=%s want %s", got, want)
@@ -48,7 +48,7 @@ func TestTranscribePropagatesDynamicTimeoutToLocalProvider(t *testing.T) {
 	if err := os.WriteFile(mediaPath, []byte("media"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	ffmpeg := filepath.Join(dir, "ffmpeg")
+	ffmpeg := localASRTestExecutablePath(dir, "ffmpeg")
 	data, err := os.ReadFile(testutil.FakeFFmpeg(t, dir))
 	if err != nil {
 		t.Fatal(err)
@@ -56,8 +56,8 @@ func TestTranscribePropagatesDynamicTimeoutToLocalProvider(t *testing.T) {
 	if err := os.WriteFile(ffmpeg, data, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	copyLocalASRTestCommand(t, filepath.Join(dir, "ffprobe"))
-	localCommand := filepath.Join(dir, "local-asr")
+	copyLocalASRTestCommand(t, localASRTestExecutablePath(dir, "ffprobe"))
+	localCommand := localASRTestExecutablePath(dir, "local-asr")
 	copyLocalASRTestCommand(t, localCommand)
 	t.Setenv("DIGCRAWL_TEST_LOCAL_ASR_MODE", "slow-transcript-with-probe")
 
@@ -82,14 +82,14 @@ func TestTranscribeRejectsDynamicBudgetAboveMaximum(t *testing.T) {
 	if err := os.WriteFile(mediaPath, []byte("media"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	copyLocalASRTestCommand(t, filepath.Join(dir, "ffprobe"))
+	copyLocalASRTestCommand(t, localASRTestExecutablePath(dir, "ffprobe"))
 	t.Setenv("DIGCRAWL_TEST_LOCAL_ASR_MODE", "ffprobe")
 
 	_, err := Transcribe(context.Background(), mediaPath, config.ASRConfig{
 		Provider:      "local",
 		TimeoutSec:    1,
 		MaxTimeoutSec: 60,
-		FFmpegPath:    filepath.Join(dir, "ffmpeg"),
+		FFmpegPath:    localASRTestExecutablePath(dir, "ffmpeg"),
 	}, Options{})
 	if err == nil || !strings.Contains(err.Error(), "exceeding ASR.MaxTimeoutSec") {
 		t.Fatalf("error=%v, want maximum-budget guidance", err)
@@ -113,7 +113,7 @@ func TestTranscribeCountsDurationProbeInsideOperationBudget(t *testing.T) {
 	if err := os.WriteFile(mediaPath, []byte("media"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	ffmpeg := filepath.Join(dir, "ffmpeg")
+	ffmpeg := localASRTestExecutablePath(dir, "ffmpeg")
 	data, err := os.ReadFile(testutil.FakeFFmpeg(t, dir))
 	if err != nil {
 		t.Fatal(err)
@@ -121,7 +121,7 @@ func TestTranscribeCountsDurationProbeInsideOperationBudget(t *testing.T) {
 	if err := os.WriteFile(ffmpeg, data, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	copyLocalASRTestCommand(t, filepath.Join(dir, "ffprobe"))
+	copyLocalASRTestCommand(t, localASRTestExecutablePath(dir, "ffprobe"))
 	t.Setenv("DIGCRAWL_TEST_LOCAL_ASR_MODE", "slow-probe")
 
 	started := time.Now()

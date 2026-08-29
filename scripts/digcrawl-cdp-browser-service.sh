@@ -275,8 +275,23 @@ browser_process_matches_config() {
   return 1
 }
 
+browser_process_mutes_audio() {
+  # The service owns this browser, so its main process must retain the launch
+  # invariant rather than merely expose a reachable CDP endpoint. Keep this
+  # separate from profile matching to report an outdated staged launcher
+  # precisely on macOS.
+  local command_line required_args
+  required_args="--remote-debugging-port=${PORT} --user-data-dir=${USER_DATA_DIR} --no-first-run"
+  while IFS= read -r command_line; do
+    [[ "${command_line}" == *"${required_args}"* ]] || continue
+    [[ "${command_line}" != *"--type="* ]] || continue
+    [[ "${command_line}" =~ (^|[[:space:]])--mute-audio([[:space:]]|$) ]] && return 0
+  done < <(ps -ax -o command=)
+  return 1
+}
+
 cdp_service_ready() {
-  cdp_ready && browser_process_matches_config
+	cdp_ready && browser_process_matches_config && browser_process_mutes_audio
 }
 
 wait_for_cdp() {
@@ -286,6 +301,10 @@ wait_for_cdp() {
       return 0
     fi
     if cdp_ready; then
+	  if browser_process_matches_config; then
+	    echo "error: CDP browser is missing --mute-audio; run $0 restart to update the managed service" >&2
+	    return 2
+	  fi
       echo "error: CDP port ${PORT} is occupied by a browser that does not use this service profile" >&2
       return 2
     fi
@@ -377,6 +396,7 @@ run_foreground() {
   validate_config
   if cdp_ready; then
     if browser_process_matches_config; then
+	  browser_process_mutes_audio || fail "managed CDP browser is missing --mute-audio; run $0 restart"
       # A service manager may briefly start a replacement while the previous
       # compatible Chrome is still exiting. Do not launch a second process
       # against the same profile; wait until the compatible one is gone.
@@ -397,6 +417,7 @@ run_foreground() {
     --no-first-run \
     --no-default-browser-check \
     --disable-gpu \
+    --mute-audio \
     about:blank
 }
 
@@ -453,8 +474,16 @@ stop_macos() {
 
 status_macos() {
   if cdp_service_ready; then
+	if ! cmp -s "${SELF_PATH}" "$(mac_launcher_path)"; then
+	  echo "WARN CDP browser is running, but its staged launcher differs from the current source; run $0 restart to apply updates" >&2
+	fi
     echo "OK   CDP endpoint: $(cdp_url)"
+	return 0
   elif cdp_ready; then
+	if browser_process_matches_config; then
+	  echo "FAIL CDP browser is missing --mute-audio; run $0 restart to update the staged launcher" >&2
+	  return 1
+	fi
     echo "FAIL CDP endpoint is occupied by a browser outside this service profile: $(cdp_url)"
     return 1
   else
@@ -524,13 +553,36 @@ status_linux() {
   systemctl --user --no-pager status "${SERVICE_NAME}"
   if cdp_service_ready; then
     echo "OK   CDP endpoint: $(cdp_url)"
+	return 0
   elif cdp_ready; then
+	if browser_process_matches_config; then
+	  echo "FAIL CDP browser is missing --mute-audio; run $0 restart" >&2
+	  return 1
+	fi
     echo "FAIL CDP endpoint is occupied by a browser outside this service profile: $(cdp_url)"
     return 1
   else
     echo "FAIL CDP endpoint unavailable: $(cdp_url)"
     return 1
   fi
+}
+
+restart_service() {
+  # macOS executes a private staged copy because launchd may reject project
+  # directories. Refresh that copy during an explicit restart while retaining
+  # the already-saved service identity, Chrome path and browser profile.
+  case "${OS_NAME}" in
+    Darwin)
+      stop_macos
+	  wait_for_cdp_to_stop || fail "CDP endpoint did not stop within 10 seconds"
+      stage_macos_launcher >/dev/null
+      start_macos
+      ;;
+    Linux) systemctl --user restart "${SERVICE_NAME}" ;;
+    *) fail "unsupported OS: ${OS_NAME}" ;;
+  esac
+  wait_for_cdp || fail "CDP endpoint did not become ready within 15 seconds"
+  status_service
 }
 uninstall_linux() {
   systemctl --user disable --now "${SERVICE_NAME}" >/dev/null 2>&1 || true
@@ -579,7 +631,7 @@ main() {
       status_service
       ;;
     stop) case "${OS_NAME}" in Darwin) stop_macos ;; Linux) stop_linux ;; *) fail "unsupported OS: ${OS_NAME}" ;; esac ;;
-    restart) "${SELF_PATH}" stop; "${SELF_PATH}" start ;;
+    restart) restart_service ;;
     status) status_service ;;
     logs) logs ;;
     uninstall) case "${OS_NAME}" in Darwin) uninstall_macos ;; Linux) uninstall_linux ;; *) fail "unsupported OS: ${OS_NAME}" ;; esac ;;

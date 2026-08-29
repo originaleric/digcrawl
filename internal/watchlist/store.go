@@ -1127,8 +1127,32 @@ WHERE watch_id = ?
   AND status = ?
   AND notified_at >= ?
   AND notified_at < ?
-  AND content_key NOT LIKE '__no_update__:%'`,
+	  AND content_key NOT LIKE '__no_update__:%'
+	  AND content_key NOT LIKE '__login_required__:%'`,
 		watchID, StatusNotified, start, end).Scan(&n)
+	return n > 0, err
+}
+
+// HasNotifiedDelivery reports whether the exact system or content delivery was
+// already sent. System notifications use stable per-day keys so a scheduler
+// retry cannot repeatedly tell a user the same thing.
+func (s *Store) HasNotifiedDelivery(ctx context.Context, watchID, contentKey string) (bool, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(1)
+FROM dc_watchlist_delivery
+WHERE watch_id = ? AND content_key = ? AND status = ?`,
+		watchID, contentKey, StatusNotified).Scan(&n)
+	return n > 0, err
+}
+
+// HasDelivery reports whether an exact delivery has already been recorded,
+// including a retryable or final failure. System notifications must leave
+// retries to the delivery queue rather than sending again in the same run.
+func (s *Store) HasDelivery(ctx context.Context, watchID, contentKey string) (bool, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(1)
+FROM dc_watchlist_delivery
+WHERE watch_id = ? AND content_key = ?`, watchID, contentKey).Scan(&n)
 	return n > 0, err
 }
 

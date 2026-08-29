@@ -10,8 +10,19 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-rod/rod/lib/launcher"
 	"github.com/originaleric/digcrawl/config"
 )
+
+func TestBackgroundLauncherPolicyKeepsAudioMutedAfterExtraArgs(t *testing.T) {
+	args := applyBackgroundLauncherPolicy(launcher.New(), []string{"--mute-audio=false"}).FormatArgs()
+	for _, arg := range args {
+		if arg == "--mute-audio" {
+			return
+		}
+	}
+	t.Fatalf("background browser launch arguments must include --mute-audio: %v", args)
+}
 
 func TestNormalizeLocalBrowserConfigKeepsExplicitChromePath(t *testing.T) {
 	explicit := browserTestExecutablePath(t.TempDir(), "explicit-chrome")

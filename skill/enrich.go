@@ -22,6 +22,9 @@ import (
 
 // EnhanceOptions describes explicit enrichments requested through the Skill.
 type EnhanceOptions struct {
+	// Deprecated: CallID is ignored. It remains only for source compatibility
+	// with existing Go callers; external correlation IDs must not identify
+	// mutable local media state.
 	CallID           string
 	IncludeOCR       bool
 	IncludeASR       bool
@@ -29,6 +32,10 @@ type EnhanceOptions struct {
 	SourceText       string
 	ScreenshotBase64 string
 	ArtifactStore    artifact.Store
+	// LocalVideoPaths are provider-owned local MP4 inputs. The enhancement core
+	// reads them for ASR/frame OCR and returns only extracted content; ownership
+	// and cleanup remain with the provider.
+	LocalVideoPaths []string
 }
 
 // Enhance applies the Skill-owned media/OCR/ASR/video-summary pipeline.
@@ -37,43 +44,85 @@ func Enhance(ctx context.Context, out map[string]any, cfg config.SkillConfig, op
 	if out == nil || (!opts.IncludeOCR && !opts.IncludeASR && !opts.IncludeSummary) {
 		return nil
 	}
-	assetsDir, requiresASR, err := validateEnhancementRequest(out, cfg, opts)
+	needsAssetsDir, requiresASR, err := validateEnhancementRequest(out, cfg, opts)
 	if err != nil {
 		return err
 	}
+	assetsDir := ""
+	if needsAssetsDir {
+		assetsDir, err = newSkillAssetsDir(cfg.Media.Dir)
+		if err != nil {
+			return err
+		}
+	}
+	videoFrameOCR := opts.IncludeOCR && cfg.OCR.VideoFrames.EnabledOrDefault()
 
 	var downloaded []map[string]any
 	var ocrDownloaded []map[string]any
+	localDownloaded := localVideoEntries(opts.LocalVideoPaths)
 	asrAttempted := false
 	if assetsDir != "" && opts.IncludeOCR {
-		if _, err := DownloadAssets(ctx, assetsDir, out, AssetDownloadOptions{
+		downloadOpts := AssetDownloadOptions{
 			MaxBytes:      cfg.Media.MaxBytes,
 			TimeoutSec:    cfg.Media.TimeoutSec,
 			ArtifactStore: opts.ArtifactStore,
 			ImagesOnly:    true,
-		}); err != nil {
+		}
+		if _, err := DownloadAssets(ctx, assetsDir, out, downloadOpts); err != nil {
 			return err
 		}
 		ocrDownloaded = readDownloadedAssets(assetsDir)
 	}
-	if assetsDir != "" && requiresASR {
-		downloaded, asrAttempted, err = downloadAndTranscribeASRCandidates(ctx, out, cfg.ASR, cfg.Media, assetsDir, ocrDownloaded)
+	downloaded = append(downloaded, ocrDownloaded...)
+	downloaded = append(downloaded, localDownloaded...)
+	if assetsDir != "" && requiresASR && len(localDownloaded) == 0 {
+		downloaded, asrAttempted, err = downloadAndTranscribeASRCandidates(ctx, out, cfg.ASR, cfg.Media, assetsDir, ocrDownloaded, opts.ArtifactStore)
 		if err != nil {
 			return err
 		}
-	} else {
-		downloaded = ocrDownloaded
+	} else if requiresASR && len(localDownloaded) > 0 {
+		asrAttempted = true
+		enrichASRFromDownloadedMedia(ctx, out, cfg.ASR, localDownloaded, assetsDir)
+	}
+	if videoFrameOCR && len(downloadedVideoPaths(downloaded, assetsDir)) == 0 {
+		videoDownloaded, downloadErr := downloadVideoFrameCandidate(ctx, out, cfg.Media, assetsDir, opts.ArtifactStore)
+		if downloadErr != nil {
+			return downloadErr
+		}
+		if len(videoDownloaded) > 0 {
+			downloaded = append(downloaded, videoDownloaded...)
+			if _, err := writeAssetsManifest(assetsDir, out, downloaded); err != nil {
+				return err
+			}
+		}
 	}
 
 	if opts.IncludeOCR {
-		ocrOpts := ocr.EnrichOptions{Downloaded: downloaded}
+		var videoFrameRefs []ocr.ImageRef
+		if videoFrameOCR {
+			cleanupVideoFrames := func() {}
+			videoFrameRefs, cleanupVideoFrames, err = ocr.ExtractLocalVideoFrameRefs(ctx, cfg.OCR, downloadedVideoPaths(downloaded, assetsDir))
+			defer cleanupVideoFrames()
+			meta := platformMetadata(out)
+			meta["ocr_video_frame_count"] = len(videoFrameRefs)
+			if err != nil {
+				meta["ocr_video_frames_error"] = err.Error()
+			} else {
+				delete(meta, "ocr_video_frames_error")
+			}
+			out["platform_metadata"] = meta
+		}
+		ocrOpts := ocr.EnrichOptions{Downloaded: downloaded, ExtraImages: videoFrameRefs}
 		if assetsDir != "" {
 			ocrOpts.AssetsDir = assetsDir
 		}
 		if opts.ScreenshotBase64 != "" {
-			ocrOpts.ExtraImages = []ocr.ImageRef{ocr.PNGDataURLImageRef("screenshot", opts.ScreenshotBase64)}
+			ocrOpts.ExtraImages = append(ocrOpts.ExtraImages, ocr.PNGDataURLImageRef("screenshot", opts.ScreenshotBase64))
 		}
 		ocr.EnrichMap(ctx, out, cfg.OCR, ocrOpts)
+		if err := ocr.RequestedFailure(out); err != nil {
+			return err
+		}
 	}
 
 	if requiresASR && !asrAttempted {
@@ -90,16 +139,24 @@ func Enhance(ctx context.Context, out map[string]any, cfg config.SkillConfig, op
 	return nil
 }
 
+// ValidateVideoEnhancementRequest applies the same opt-in checks as Enhance
+// before a video provider acquires local media for an explicit Skill request.
+func ValidateVideoEnhancementRequest(cfg config.SkillConfig, opts EnhanceOptions) error {
+	_, _, err := validateEnhancementRequest(map[string]any{"content_type": "video"}, cfg, opts)
+	return err
+}
+
 // downloadAndTranscribeASRCandidates keeps download and transcription coupled
 // for every ASR call. OCR assets are passed through unchanged, while only
 // audio/video candidates consume the ASR attempt budget.
-func downloadAndTranscribeASRCandidates(ctx context.Context, out map[string]any, asrCfg config.ASRConfig, mediaCfg config.SkillMediaConfig, assetsDir string, initialDownloaded []map[string]any) ([]map[string]any, bool, error) {
+func downloadAndTranscribeASRCandidates(ctx context.Context, out map[string]any, asrCfg config.ASRConfig, mediaCfg config.SkillMediaConfig, assetsDir string, initialDownloaded []map[string]any, artStore artifact.Store) ([]map[string]any, bool, error) {
 	downloaded := append([]map[string]any(nil), initialDownloaded...)
 	hasLocalASRInput := false
 	for candidate := 0; candidate < mediaCfg.MaxASRCandidatesOrDefault(); candidate++ {
 		if _, err := DownloadAssets(ctx, assetsDir, out, AssetDownloadOptions{
 			MaxBytes:          mediaCfg.MaxBytes,
 			TimeoutSec:        mediaCfg.TimeoutSec,
+			ArtifactStore:     artStore,
 			ASRInputOnly:      true,
 			ASRCandidateIndex: candidate,
 		}); err != nil {
@@ -151,53 +208,67 @@ func hasLocalASRMedia(items []map[string]any) bool {
 
 // validateEnhancementRequest enforces explicit Skill configuration before any
 // media download, transcription, or summary-provider work begins.
-func validateEnhancementRequest(out map[string]any, cfg config.SkillConfig, opts EnhanceOptions) (string, bool, error) {
+func validateEnhancementRequest(out map[string]any, cfg config.SkillConfig, opts EnhanceOptions) (bool, bool, error) {
 	if opts.IncludeOCR && !cfg.OCR.EnabledOrDefault() {
-		return "", false, fmt.Errorf("Skill.OCR.Enabled must be true when OCR is requested")
+		return false, false, fmt.Errorf("Skill.OCR.Enabled must be true when OCR is requested")
 	}
 
 	videoSummary := opts.IncludeSummary && isVideo(out)
+	videoFrameOCR := opts.IncludeOCR && isVideo(out) && cfg.OCR.VideoFrames.EnabledOrDefault()
 	requiresASR := opts.IncludeASR || videoSummary
-	if requiresASR {
+	if requiresASR || videoFrameOCR {
 		if !cfg.Media.DownloadMedia {
-			return "", false, fmt.Errorf("Skill.Media.DownloadMedia must be true when ASR or video summary is requested")
+			return false, false, fmt.Errorf("Skill.Media.DownloadMedia must be true when ASR, video summary, or video-frame OCR is requested")
 		}
+	}
+	if requiresASR {
 		if !cfg.ASR.EnabledOrDefault() {
-			return "", false, fmt.Errorf("Skill.ASR.Enabled must be true when ASR or video summary is requested")
+			return false, false, fmt.Errorf("Skill.ASR.Enabled must be true when ASR or video summary is requested")
 		}
 	}
 	if videoSummary {
 		if !cfg.Summary.EnabledOrDefault() {
-			return "", false, fmt.Errorf("Skill.Summary.Enabled must be true when a local video summary is requested")
+			return false, false, fmt.Errorf("Skill.Summary.Enabled must be true when a local video summary is requested")
 		}
 		if strings.TrimSpace(os.ExpandEnv(cfg.Summary.LLM.APIKey)) == "" {
-			return "", false, fmt.Errorf("Skill.Summary.LLM.APIKey is required when a local video summary is requested")
+			return false, false, fmt.Errorf("Skill.Summary.LLM.APIKey is required when a local video summary is requested")
 		}
 	}
 
-	if cfg.Media.DownloadMedia && (opts.IncludeOCR || requiresASR) {
-		assetsDir, err := skillAssetsDir(cfg.Media.Dir, opts.CallID)
-		if err != nil {
-			return "", false, err
+	// Provider-owned local video inputs are consumed directly by ASR and frame
+	// OCR. A Skill directory is only needed when this execution itself acquires
+	// page assets or ASR candidates.
+	needsAssetsDir := cfg.Media.DownloadMedia && (opts.IncludeOCR || (requiresASR && len(localVideoEntries(opts.LocalVideoPaths)) == 0))
+	if needsAssetsDir {
+		if err := validateSkillAssetsRoot(cfg.Media.Dir); err != nil {
+			return false, false, err
 		}
-		return assetsDir, requiresASR, nil
 	}
-	return "", requiresASR, nil
+	return needsAssetsDir, requiresASR, nil
 }
 
-func skillAssetsDir(root, callID string) (string, error) {
+func validateSkillAssetsRoot(root string) error {
 	root = strings.TrimSpace(root)
 	if root == "" {
-		return "", fmt.Errorf("Skill.Media.Dir is required when media download is requested")
+		return fmt.Errorf("Skill.Media.Dir is required when media download is requested")
 	}
 	if !filepath.IsAbs(root) {
-		return "", fmt.Errorf("Skill.Media.Dir must be an absolute path")
+		return fmt.Errorf("Skill.Media.Dir must be an absolute path")
 	}
-	callID = strings.TrimSpace(callID)
-	if callID == "" {
-		return "", fmt.Errorf("skill media call ID is required")
+	return nil
+}
+
+// newSkillAssetsDir creates a private, execution-owned directory. Call IDs are
+// correlation data supplied by a transport and must never identify mutable
+// local media state.
+func newSkillAssetsDir(root string) (string, error) {
+	if err := validateSkillAssetsRoot(root); err != nil {
+		return "", err
 	}
-	return filepath.Join(root, filepath.Base(callID)), nil
+	if err := os.MkdirAll(root, 0o750); err != nil {
+		return "", fmt.Errorf("create Skill.Media.Dir: %w", err)
+	}
+	return os.MkdirTemp(root, "digcrawl-skill-assets-*")
 }
 
 func readDownloadedAssets(assetsDir string) []map[string]any {
@@ -212,6 +283,72 @@ func readDownloadedAssets(assetsDir string) []map[string]any {
 		return nil
 	}
 	return manifest.Downloaded
+}
+
+func downloadedVideoPaths(downloaded []map[string]any, assetsDir string) []string {
+	paths := make([]string, 0, len(downloaded))
+	for _, item := range downloaded {
+		if !strings.EqualFold(stringValue(item["type"]), "video") {
+			continue
+		}
+		path := localMediaPath(item, assetsDir)
+		if path == "" {
+			continue
+		}
+		paths = append(paths, path)
+	}
+	return paths
+}
+
+func localVideoEntries(paths []string) []map[string]any {
+	entries := make([]map[string]any, 0, len(paths))
+	for _, path := range paths {
+		if strings.TrimSpace(path) == "" {
+			continue
+		}
+		entries = append(entries, map[string]any{"type": "video", "absolute_path": path})
+	}
+	return entries
+}
+
+func localMediaPath(item map[string]any, assetsDir string) string {
+	if absolute := strings.TrimSpace(stringValue(item["absolute_path"])); absolute != "" {
+		return filepath.Clean(absolute)
+	}
+	local := strings.TrimSpace(stringValue(item["local"]))
+	if local == "" || assetsDir == "" {
+		return ""
+	}
+	return filepath.Join(assetsDir, filepath.Base(local))
+}
+
+// downloadVideoFrameCandidate reuses the existing bounded single-candidate
+// acquisition path, narrowed to video media so audio cannot consume the frame
+// OCR slot. The original output remains untouched for regular image OCR.
+func downloadVideoFrameCandidate(ctx context.Context, out map[string]any, mediaCfg config.SkillMediaConfig, assetsDir string, artStore artifact.Store) ([]map[string]any, error) {
+	var videos []any
+	for _, item := range extractMediaItems(out) {
+		if strings.EqualFold(stringValue(item["type"]), "video") {
+			videos = append(videos, item)
+		}
+	}
+	if len(videos) == 0 {
+		return nil, nil
+	}
+	videoOut := make(map[string]any, len(out)+1)
+	for key, value := range out {
+		videoOut[key] = value
+	}
+	videoOut["media"] = videos
+	if _, err := DownloadAssets(ctx, assetsDir, videoOut, AssetDownloadOptions{
+		MaxBytes:      mediaCfg.MaxBytes,
+		TimeoutSec:    mediaCfg.TimeoutSec,
+		ArtifactStore: artStore,
+		ASRInputOnly:  true,
+	}); err != nil {
+		return nil, err
+	}
+	return readDownloadedAssets(assetsDir), nil
 }
 
 const mediaDownloadFailedCode = "MEDIA_DOWNLOAD_FAILED"
@@ -328,11 +465,11 @@ func enrichASRFromDownloadedMedia(ctx context.Context, out map[string]any, cfg c
 		if mediaType != "video" && mediaType != "audio" {
 			continue
 		}
-		local := strings.TrimSpace(stringValue(item["local"]))
-		if local == "" || assetsDir == "" {
+		path := localMediaPath(item, assetsDir)
+		if path == "" {
 			continue
 		}
-		res, err := internalasr.Transcribe(ctx, filepath.Join(assetsDir, filepath.Base(local)), cfg, internalasr.Options{})
+		res, err := internalasr.Transcribe(ctx, path, cfg, internalasr.Options{})
 		if err != nil {
 			meta["asr_error"] = err.Error()
 			changed = true
@@ -349,7 +486,7 @@ func enrichASRFromDownloadedMedia(ctx context.Context, out map[string]any, cfg c
 		meta["asr_model"] = res.Model
 		meta["asr_language"] = res.Language
 		meta["asr_duration"] = res.Duration
-		meta["asr_media_local"] = local
+		meta["asr_media_local"] = filepath.Base(path)
 		out["platform_metadata"] = meta
 		return true
 	}

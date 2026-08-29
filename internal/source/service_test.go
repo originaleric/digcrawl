@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/originaleric/digcrawl/config"
@@ -184,6 +185,30 @@ func TestServiceReadsFixedXPost(t *testing.T) {
 	}
 	if items[0].URL != "https://x.com/elonmusk/status/12345" || items[0].ContentKey != "x:12345" || items[0].ContentType != "x_post" || items[0].Author != "elonmusk" {
 		t.Fatalf("unexpected x item: %+v", items[0])
+	}
+}
+
+func TestServiceReadsFixedYouTubeVideo(t *testing.T) {
+	items, err := Service{}.ListLatest(context.Background(), Source{ID: "youtube-video", Platform: "youtube", Type: "youtube_video", URL: "https://youtu.be/dQw4w9WgXcQ?t=42", Name: "Video"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 || items[0].ContentKey != "youtube:dQw4w9WgXcQ" || items[0].URL != "https://www.youtube.com/watch?v=dQw4w9WgXcQ" || items[0].ContentType != "video" {
+		t.Fatalf("unexpected items: %+v", items)
+	}
+}
+
+func TestServiceExtractsYouTubeVideoLinks(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`<a href="https://www.youtube.com/watch?v=dQw4w9WgXcQ&utm_source=a">watch</a><a href="https://www.youtube.com/shorts/dQw4w9WgXcQ">short duplicate</a><a href="https://www.youtube.com/@OpenAI">channel</a>`))
+	}))
+	defer srv.Close()
+	items, err := Service{}.ListLatest(context.Background(), Source{ID: "youtube-channel", Platform: "youtube", Type: "youtube_channel", URL: srv.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 || items[0].ContentKey != "youtube:dQw4w9WgXcQ" || items[0].ContentType != "video" {
+		t.Fatalf("unexpected items: %+v", items)
 	}
 }
 
@@ -748,5 +773,61 @@ func TestToutiaoUserTokenFromURL(t *testing.T) {
 	got := toutiaoUserTokenFromURL("https://www.toutiao.com/c/user/token/abc123=/?source=profile")
 	if got != "abc123=" {
 		t.Fatalf("token = %q", got)
+	}
+}
+
+func TestDiscoveryReadyPatternHonorsToutiaoTabs(t *testing.T) {
+	tests := []struct {
+		name    string
+		rawURL  string
+		want    string
+		notWant string
+	}{
+		{
+			name:    "video tab waits for video links",
+			rawURL:  "https://www.toutiao.com/c/user/token/abc/?tab=video",
+			want:    `/video/[0-9]+/?`,
+			notWant: `/(?:article|group|video|w)/[0-9]+/?`,
+		},
+		{
+			name:    "short video tab waits for video links",
+			rawURL:  "https://www.toutiao.com/c/user/token/abc/?tab=short_video",
+			want:    `/video/[0-9]+/?`,
+			notWant: `/(?:article|group|video|w)/[0-9]+/?`,
+		},
+		{
+			name:    "wtt tab waits for micro post links",
+			rawURL:  "https://www.toutiao.com/c/user/token/abc/?tab=wtt",
+			want:    `/w/[0-9]+/?`,
+			notWant: `/(?:article|group|video|w)/[0-9]+/?`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			item := Source{Platform: "toutiao", Type: "toutiao_author", URL: tt.rawURL}
+			got := discoveryReadyPattern("toutiao", item)
+			if got != tt.want {
+				t.Fatalf("pattern = %q, want %q", got, tt.want)
+			}
+			script := discoveryMetadataScript("toutiao", item)
+			if !strings.Contains(script, tt.want) {
+				t.Fatalf("script does not include target pattern %q: %s", tt.want, script)
+			}
+			if strings.Contains(script, tt.notWant) {
+				t.Fatalf("script should not use generic toutiao pattern for tab-specific source: %s", script)
+			}
+		})
+	}
+}
+
+func TestDiscoveryMetadataScriptUsesStableEarlyExit(t *testing.T) {
+	script := discoveryMetadataScript("toutiao", Source{
+		URL:     "https://www.toutiao.com/c/user/token/abc/?tab=video",
+		Options: map[string]any{"limit": 3},
+	})
+	for _, want := range []string{"stableRounds", "out.ready.length >= 3", "return out"} {
+		if !strings.Contains(script, want) {
+			t.Fatalf("metadata script missing %q: %s", want, script)
+		}
 	}
 }

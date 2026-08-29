@@ -87,23 +87,23 @@ func BrowseEntry(configDomains []string, artStore artifact.Store) registry.Entry
 			if resp.Summary != "" {
 				out["summary"] = resp.Summary
 			}
-			if !strings.HasPrefix(call.ID, "collect_") && !in.IncludeOCR {
+			if !executor.IsCollectExecution(ctx) && !in.IncludeOCR {
 				opts := ocr.EnrichOptions{}
 				if resp.ScreenshotBase != "" {
 					opts.ExtraImages = []ocr.ImageRef{ocr.PNGDataURLImageRef("screenshot", resp.ScreenshotBase)}
 				}
 				ocr.EnrichMap(ctx, out, config.Get().OCR, opts)
 			}
-			if !strings.HasPrefix(call.ID, "collect_") && in.IncludeOCR {
+			if !executor.IsCollectExecution(ctx) && in.IncludeOCR {
 				if err := skill.Enhance(ctx, out, config.Skill(), skill.EnhanceOptions{
-					CallID: call.ID, IncludeOCR: true, ScreenshotBase64: resp.ScreenshotBase, ArtifactStore: artStore,
+					IncludeOCR: true, ScreenshotBase64: resp.ScreenshotBase, ArtifactStore: artStore,
 				}); err != nil {
 					return out, nil, err
 				}
 			}
 			var artifacts []protocol.Artifact
 			if resp.ScreenshotBase != "" {
-				artID := call.ID + "_screenshot"
+				artID := artifact.NewID()
 				if artStore == nil {
 					return out, nil, fmt.Errorf("screenshot artifact store is unavailable")
 				}

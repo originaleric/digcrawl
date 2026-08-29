@@ -16,6 +16,7 @@ Gateway:
     - weibo.post.read
     - kuaishou.video.read
     - zhihu.content.read
+    - youtube.video.read
     - x.post.read
     - reddit.post.read
     - reddit.subreddit.read
@@ -60,6 +61,7 @@ Collector:
     - weibo.post.read
     - kuaishou.video.read
     - zhihu.content.read
+    - youtube.video.read
     - x.post.read
     - reddit.post.read
     - reddit.subreddit.read
@@ -122,6 +124,11 @@ LocalBrowser:
     - zhihu.com
     - www.zhihu.com
     - zhuanlan.zhihu.com
+    - youtube.com
+    - www.youtube.com
+    - m.youtube.com
+    - youtu.be
+    - www.youtu.be
     - x.com
     - twitter.com
     - www.twitter.com
@@ -228,6 +235,21 @@ OCR:
   MaxTokens: 1200
   AppendToMarkdown: true
   AppendToText: false
+  # Optional local-video subtitle OCR. This is disabled by default. When OCR
+  # uses a remote provider, extracted frames are sent to that provider.
+  VideoFrames:
+    Enabled: false
+    # Sample one frame every N seconds, then stop at MaxFrames.
+    IntervalSec: 5
+    MaxFrames: 8
+    # Total frame limit across all videos in one collected item.
+    MaxTotalFrames: 16
+    # Maximum local ffmpeg runtime for one downloaded video.
+    TimeoutSec: 120
+    # Leave empty to use ffmpeg from PATH.
+    FFmpegPath: ""
+    # Leave empty to use a private system temporary directory.
+    TempDir: ""
 
 ASR:
   Enabled: true
@@ -262,6 +284,11 @@ Watchlist:
     Enabled: true
     TickInterval: "5m"
     Jitter: "30s"
+    # Opt in to parallel Watchlist source runs. Omit or set 1 to preserve serial execution.
+    MaxConcurrentRuns: 3
+  Collect:
+    # Opt in to parallel detail processing within each Watchlist source.
+    MaxConcurrentItems: 5
   # Source.Mode:
   #   yaml     - 从下方 Items 和根级 Tasks 读取，适合少量本地配置和兼容旧配置。
   #   database - 从 dc_watchlist_sources 读取，适合长期维护的大清单。

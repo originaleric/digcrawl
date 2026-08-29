@@ -135,9 +135,9 @@ func redditPostReadHandler(configDomains []string, artStore artifact.Store, read
 			return nil, nil, err
 		}
 		out := platform.ApplyFormats(content, in.Format)
-		if !strings.HasPrefix(call.ID, "collect_") && (in.IncludeOCR || in.IncludeASR || in.IncludeSummary) {
+		if !executor.IsCollectExecution(ctx) && (in.IncludeOCR || in.IncludeASR || in.IncludeSummary) {
 			if err := skill.Enhance(ctx, out, config.Skill(), skill.EnhanceOptions{
-				CallID: call.ID, IncludeOCR: in.IncludeOCR, IncludeASR: in.IncludeASR,
+				IncludeOCR: in.IncludeOCR, IncludeASR: in.IncludeASR,
 				IncludeSummary: in.IncludeSummary, SourceText: content.Text, ScreenshotBase64: content.ScreenshotBase64, ArtifactStore: artStore,
 			}); err != nil {
 				return out, nil, err
@@ -145,7 +145,7 @@ func redditPostReadHandler(configDomains []string, artStore artifact.Store, read
 		}
 		var artifacts []protocol.Artifact
 		if content.ScreenshotBase64 != "" {
-			artID := call.ID + "_screenshot"
+			artID := artifact.NewID()
 			if artStore == nil {
 				return out, nil, fmt.Errorf("screenshot artifact store is unavailable")
 			}

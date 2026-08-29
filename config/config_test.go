@@ -1,12 +1,16 @@
 package config
 
 import (
+	"context"
+	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -63,6 +67,175 @@ func TestSkillMediaMaxASRCandidatesOrDefault(t *testing.T) {
 	if got := (SkillMediaConfig{MaxASRCandidates: 3}).MaxASRCandidatesOrDefault(); got != 3 {
 		t.Fatalf("configured ASR candidates=%d want 3", got)
 	}
+}
+
+func TestSkillMediaRetainDownloadedVideoDefaultsOff(t *testing.T) {
+	if (SkillMediaConfig{}).RetainDownloadedVideo {
+		t.Fatal("downloaded videos must be cleaned up unless the user explicitly opts in")
+	}
+}
+
+func TestUpdateDefaultSkillMediaPreservesIndependentProfileSettings(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	skillMu.Lock()
+	original := defaultCfg
+	skillMu.Unlock()
+	t.Cleanup(func() {
+		skillMu.Lock()
+		defaultCfg = original
+		skillMu.Unlock()
+	})
+	path := DefaultSkillProfilePath()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("Skill:\n  Media:\n    RetainDownloadedVideo: true\n    MaxBytes: 64\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	maxBytes := int64(128)
+	updated, err := UpdateDefaultSkillMedia(nil, &maxBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !updated.Skill.Media.RetainDownloadedVideo || updated.Skill.Media.MaxBytes != maxBytes {
+		t.Fatalf("live Skill snapshot lost an independently persisted setting: %+v", updated.Skill.Media)
+	}
+	persisted, err := Validate(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !persisted.Skill.Media.RetainDownloadedVideo || persisted.Skill.Media.MaxBytes != maxBytes {
+		t.Fatalf("profile lost an independently persisted setting: %+v", persisted.Skill.Media)
+	}
+}
+
+func TestSkillProfileLockSerializesSeparateProcesses(t *testing.T) {
+	dir := t.TempDir()
+	profile := filepath.Join(dir, "digcrawl-skill.yaml")
+	firstAcquired := filepath.Join(dir, "first-acquired")
+	secondAcquired := filepath.Join(dir, "second-acquired")
+	releaseFirst := filepath.Join(dir, "release-first")
+
+	first := skillProfileLockHelper(t, profile, firstAcquired, releaseFirst)
+	if err := first.Start(); err != nil {
+		t.Fatal(err)
+	}
+	if err := waitForFile(firstAcquired, time.Second); err != nil {
+		t.Fatalf("first process did not acquire profile lock: %v", err)
+	}
+
+	second := skillProfileLockHelper(t, profile, secondAcquired, "")
+	if err := second.Start(); err != nil {
+		t.Fatal(err)
+	}
+	if err := waitForFile(secondAcquired, 150*time.Millisecond); err == nil {
+		t.Fatal("second process acquired the profile lock before the first released it")
+	}
+	if err := os.WriteFile(releaseFirst, []byte("release"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := first.Wait(); err != nil {
+		t.Fatalf("first lock helper failed: %v", err)
+	}
+	if err := second.Wait(); err != nil {
+		t.Fatalf("second lock helper failed: %v", err)
+	}
+	if _, err := os.Stat(secondAcquired); err != nil {
+		t.Fatalf("second process never acquired profile lock after release: %v", err)
+	}
+}
+
+func TestSkillProfileLockProcessHelper(t *testing.T) {
+	if os.Getenv("DIGCRAWL_TEST_PROFILE_LOCK_HELPER") != "1" {
+		return
+	}
+	unlock, err := lockSkillProfile(context.Background(), os.Getenv("DIGCRAWL_TEST_PROFILE_LOCK_PATH"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unlock()
+	if err := os.WriteFile(os.Getenv("DIGCRAWL_TEST_PROFILE_LOCK_ACQUIRED"), []byte("locked"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	release := os.Getenv("DIGCRAWL_TEST_PROFILE_LOCK_RELEASE")
+	if release == "" {
+		return
+	}
+	if err := waitForFile(release, 5*time.Second); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSkillProfileLockHonorsContextDeadline(t *testing.T) {
+	dir := t.TempDir()
+	profile := filepath.Join(dir, "digcrawl-skill.yaml")
+	acquired := filepath.Join(dir, "first-acquired")
+	release := filepath.Join(dir, "release-first")
+
+	first := skillProfileLockHelper(t, profile, acquired, release)
+	if err := first.Start(); err != nil {
+		t.Fatal(err)
+	}
+	if err := waitForFile(acquired, time.Second); err != nil {
+		t.Fatalf("first process did not acquire profile lock: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	if _, err := lockSkillProfile(ctx, profile); err == nil || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("contended profile lock error=%v, want context deadline", err)
+	} else {
+		var coded interface {
+			ToolErrorCode() string
+			ToolErrorDetails() map[string]any
+		}
+		if !errors.As(err, &coded) || coded.ToolErrorCode() != "SKILL_PROFILE_BUSY" || coded.ToolErrorDetails()["retryable"] != true {
+			t.Fatalf("contended profile lock must report a retryable busy error: %v", err)
+		}
+	}
+	if err := os.WriteFile(release, []byte("release"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := first.Wait(); err != nil {
+		t.Fatalf("first lock helper failed: %v", err)
+	}
+}
+
+func TestSkillMutationLockHonorsContextDeadline(t *testing.T) {
+	release, err := lockSkillMutation(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	if _, err := lockSkillMutation(ctx); err == nil || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("contended in-process mutation lock error=%v, want context deadline", err)
+	}
+}
+
+func skillProfileLockHelper(t *testing.T, profile, acquired, release string) *exec.Cmd {
+	t.Helper()
+	cmd := exec.Command(os.Args[0], "-test.run=^TestSkillProfileLockProcessHelper$")
+	cmd.Env = append(os.Environ(),
+		"DIGCRAWL_TEST_PROFILE_LOCK_HELPER=1",
+		"DIGCRAWL_TEST_PROFILE_LOCK_PATH="+profile,
+		"DIGCRAWL_TEST_PROFILE_LOCK_ACQUIRED="+acquired,
+		"DIGCRAWL_TEST_PROFILE_LOCK_RELEASE="+release,
+	)
+	return cmd
+}
+
+func waitForFile(path string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(path); err == nil {
+			return nil
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	_, err := os.Stat(path)
+	return err
 }
 
 func TestDefaultConfigPathsUseXDGDirectory(t *testing.T) {
@@ -273,6 +446,7 @@ func TestDefaultAllowedToolsIncludeSocialAndDomesticProviders(t *testing.T) {
 		"weibo.post.read",
 		"kuaishou.video.read",
 		"zhihu.content.read",
+		"youtube.video.read",
 	} {
 		if !stringSliceContains(cfg.Gateway.AllowedTools, tool) {
 			t.Fatalf("gateway allowed tools missing %s", tool)
@@ -302,6 +476,11 @@ func TestDefaultAllowedToolsIncludeSocialAndDomesticProviders(t *testing.T) {
 		"zhihu.com",
 		"www.zhihu.com",
 		"zhuanlan.zhihu.com",
+		"youtube.com",
+		"www.youtube.com",
+		"m.youtube.com",
+		"youtu.be",
+		"www.youtu.be",
 	} {
 		if !stringSliceContains(cfg.LocalBrowser.AllowedDomains, domain) {
 			t.Fatalf("local browser allowed domains missing %s", domain)
@@ -321,7 +500,7 @@ func TestDigCrawlSkillExampleUsesReadOnlyToolProfile(t *testing.T) {
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		t.Fatal(err)
 	}
-	for _, tool := range []string{"gateway.ping", "skill.asr.enable", "browser.browse", "wechat.article.read", "feed.read"} {
+	for _, tool := range []string{"gateway.ping", "skill.asr.enable", "skill.media.configure", "browser.browse", "wechat.article.read", "feed.read"} {
 		if !stringSliceContains(cfg.Gateway.AllowedTools, tool) {
 			t.Fatalf("skill profile missing %s", tool)
 		}
@@ -348,6 +527,9 @@ func TestDigCrawlSkillExampleUsesReadOnlyToolProfile(t *testing.T) {
 	}
 	if cfg.Skill.Media.DownloadMedia {
 		t.Fatal("skill profile media download should require explicit local opt-in")
+	}
+	if cfg.Skill.Media.RetainDownloadedVideo {
+		t.Fatal("skill profile should clean up downloaded video unless the user opts in")
 	}
 	if !examplePathIsPortableAbsolute(cfg.Skill.Media.Dir) {
 		t.Fatal("skill profile media directory should be absolute")
@@ -518,6 +700,42 @@ func TestOCRConfigHelpers(t *testing.T) {
 	if (OCRConfig{}).AppendToTextOrDefault() {
 		t.Fatal("AppendToText should default to false")
 	}
+	if (VideoFrameOCRConfig{}).EnabledOrDefault() {
+		t.Fatal("video frame OCR should default to disabled")
+	}
+	if got := (VideoFrameOCRConfig{}).IntervalSecOrDefault(); got != 5 {
+		t.Fatalf("video frame interval=%d", got)
+	}
+	if got := (VideoFrameOCRConfig{}).MaxFramesOrDefault(); got != 8 {
+		t.Fatalf("video frame max=%d", got)
+	}
+	if got := (VideoFrameOCRConfig{}).MaxTotalFramesOrDefault(); got != 16 {
+		t.Fatalf("video frame total max=%d", got)
+	}
+	if got := (VideoFrameOCRConfig{}).TimeoutSecOrDefault(); got != 120 {
+		t.Fatalf("video frame timeout=%d", got)
+	}
+	if got := (VideoFrameOCRConfig{}).FFmpegPathOrDefault(); got != "ffmpeg" {
+		t.Fatalf("video frame ffmpeg=%q", got)
+	}
+	if !(VideoFrameOCRConfig{Enabled: &enabled}).EnabledOrDefault() {
+		t.Fatal("explicit video frame OCR should be enabled")
+	}
+}
+
+func TestValidateAppliesVideoFrameOCRDefaults(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(path, []byte("OCR:\n  Enabled: true\n  VideoFrames:\n    Enabled: true\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Validate(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.OCR.VideoFrames.EnabledOrDefault() || cfg.OCR.VideoFrames.IntervalSec != 5 || cfg.OCR.VideoFrames.MaxFrames != 8 || cfg.OCR.VideoFrames.MaxTotalFrames != 16 || cfg.OCR.VideoFrames.TimeoutSec != 120 {
+		t.Fatalf("video frame defaults=%+v", cfg.OCR.VideoFrames)
+	}
 }
 
 func TestASRConfigProviderAwareModelDefault(t *testing.T) {
@@ -591,6 +809,9 @@ Watchlist:
   Scheduler:
     TickInterval: 2m
     Jitter: 10s
+    MaxConcurrentRuns: 3
+  Collect:
+    MaxConcurrentItems: 5
 Tasks:
   - ID: reddit-ai-watch
     Name: Reddit AI
@@ -621,6 +842,12 @@ Tasks:
 	if got := cfg.Watchlist.Scheduler.JitterOrDefault(); got != "10s" {
 		t.Fatalf("Jitter=%q", got)
 	}
+	if got := cfg.Watchlist.Scheduler.MaxConcurrentRunsOrDefault(); got != 3 {
+		t.Fatalf("MaxConcurrentRuns=%d", got)
+	}
+	if got := cfg.Watchlist.Collect.MaxConcurrentItemsOrDefault(); got != 5 {
+		t.Fatalf("MaxConcurrentItems=%d", got)
+	}
 	if got := cfg.Watchlist.PersistenceDriverOrDefault(); got != "sqlite" {
 		t.Fatalf("Watchlist persistence driver=%q", got)
 	}
@@ -633,6 +860,16 @@ Tasks:
 	task := cfg.Tasks[0]
 	if task.ID != "reddit-ai-watch" || task.Schedule.Mode != "daily" || task.Schedule.At != "09:00" || task.Source.Options["sort"] != "new" {
 		t.Fatalf("task not parsed: %+v", task)
+	}
+}
+
+func TestWatchlistConcurrencyDefaultsPreserveSerialExecution(t *testing.T) {
+	var watchlist WatchlistConfig
+	if got := watchlist.Scheduler.MaxConcurrentRunsOrDefault(); got != 1 {
+		t.Fatalf("MaxConcurrentRuns default=%d want 1", got)
+	}
+	if got := watchlist.Collect.MaxConcurrentItemsOrDefault(); got != 1 {
+		t.Fatalf("MaxConcurrentItems default=%d want 1", got)
 	}
 }
 

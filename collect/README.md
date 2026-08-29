@@ -67,7 +67,7 @@ collect-inbox/
 | `DownloadMedia` | 下载 `media[]` 到 `.assets/`（公众号需 `include_media`） |
 | `IndexEnabled` | `index`/`both` 模式下可显式关闭 index.json |
 
-如启用全局 `OCR.Enabled`，Collect 会在导出时对图片做 OCR：下载媒体时优先读取 `.assets/` 本地图片，未下载媒体时使用远程图片 URL。OCR 结果写入 JSON 的 `platform_metadata.ocr_results`，并可按 `OCR.AppendToMarkdown` 追加到 Markdown。`OCR.Provider=openai_compatible` 时，本地 assets 会转换为 data URL 后调用视觉模型的 `/chat/completions` 接口。
+如启用全局 `OCR.Enabled`，Collect 会在导出时对图片做 OCR：下载媒体时优先读取 `.assets/` 本地图片，未下载媒体时使用远程图片 URL。OCR 结果写入 JSON 的 `platform_metadata.ocr_results`，并可按 `OCR.AppendToMarkdown` 追加到 Markdown。`OCR.Provider=openai_compatible` 时，本地 assets 会转换为 data URL 后调用视觉模型的 `/chat/completions` 接口。若同时显式开启 `OCR.VideoFrames.Enabled` 和 `DownloadMedia`，本地视频会按受限帧数抽取画面文字；这与 ASR 独立，适用于只有 BGM 但带字幕的视频。无文字帧不会增加 `ocr_count` 或追加空 OCR 段，临时 JPEG 也不会写入导出结果。
 
 浏览器域名白名单见 `LocalBrowser.AllowedDomains`。若本机 Chrome/Chromium headless 启动失败，可按根目录 `README.md` / `USAGE.md` 中的 Playwright `chrome-headless-shell` 方案配置 `LocalBrowser.ChromePath` 与 `LocalBrowser.ExtraArgs`。
 

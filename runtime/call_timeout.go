@@ -25,15 +25,39 @@ func RecommendedCallTimeout(cfg *config.Config, call *protocol.ToolCall) time.Du
 	skillASRSeconds := 1800
 	directASRSeconds := 1800
 	summarySeconds := 60
+	ocrSeconds := config.OCRConfig{}.TimeoutSecOrDefault()
+	maxOCRImages := config.OCRConfig{}.MaxImagesOrDefault()
+	videoFrameSeconds := config.VideoFrameOCRConfig{}.TimeoutSecOrDefault()
+	maxVideoFrames := config.VideoFrameOCRConfig{}.MaxTotalFramesOrDefault()
+	skillOCREnabled := false
+	videoFrameOCREnabled := false
 	if cfg != nil {
+		var skillCfg config.SkillConfig
+		if cfg == config.Get() {
+			// The standard Skill profile can be changed by a local configuration
+			// tool while MCP workers are being dispatched. Read its mutable
+			// section through the synchronized snapshot accessor so the timeout
+			// matches one coherent media configuration.
+			skillCfg = config.Skill()
+		} else {
+			// Collect and focused tests inject an execution-local config that is
+			// immutable for that execution.
+			skillCfg = cfg.Skill
+		}
 		if cfg.LocalBrowser.TotalTimeoutSec > 0 {
 			browserSeconds = cfg.LocalBrowser.TotalTimeoutSec
 		}
-		mediaSeconds = cfg.Skill.Media.TimeoutSecOrDefault()
-		maxASRCandidates = cfg.Skill.Media.MaxASRCandidatesOrDefault()
-		skillASRSeconds = cfg.Skill.ASR.MaxTimeoutSecOrDefault()
+		mediaSeconds = skillCfg.Media.TimeoutSecOrDefault()
+		maxASRCandidates = skillCfg.Media.MaxASRCandidatesOrDefault()
+		skillASRSeconds = skillCfg.ASR.MaxTimeoutSecOrDefault()
 		directASRSeconds = cfg.ASR.MaxTimeoutSecOrDefault()
-		summarySeconds = cfg.Skill.Summary.TimeoutSecOrDefault()
+		summarySeconds = skillCfg.Summary.TimeoutSecOrDefault()
+		ocrSeconds = skillCfg.OCR.TimeoutSecOrDefault()
+		maxOCRImages = skillCfg.OCR.MaxImagesOrDefault()
+		videoFrameSeconds = skillCfg.OCR.VideoFrames.TimeoutSecOrDefault()
+		maxVideoFrames = skillCfg.OCR.VideoFrames.MaxTotalFramesOrDefault()
+		skillOCREnabled = skillCfg.OCR.EnabledOrDefault()
+		videoFrameOCREnabled = skillOCREnabled && skillCfg.OCR.VideoFrames.EnabledOrDefault()
 	}
 
 	if call != nil && call.Tool == "asr.transcribe" {
@@ -47,6 +71,8 @@ func RecommendedCallTimeout(cfg *config.Config, call *protocol.ToolCall) time.Du
 
 	seconds := browserSeconds + runtimeCallOverheadSeconds
 	var input struct {
+		IncludeMedia   bool `json:"include_media"`
+		IncludeOCR     bool `json:"include_ocr"`
 		IncludeASR     bool `json:"include_asr"`
 		IncludeSummary bool `json:"include_summary"`
 	}
@@ -59,9 +85,20 @@ func RecommendedCallTimeout(cfg *config.Config, call *protocol.ToolCall) time.Du
 	// sooner because they never enter that phase.
 	if input.IncludeASR || input.IncludeSummary {
 		seconds += maxASRCandidates * (mediaSeconds + skillASRSeconds)
+	} else if input.IncludeMedia {
+		seconds += mediaSeconds
 	}
 	if input.IncludeSummary {
 		seconds += summarySeconds
+	}
+	if input.IncludeOCR && skillOCREnabled {
+		// Image OCR is sequential and bounded by MaxImages. Video-frame OCR
+		// additionally acquires one bounded local video candidate, extracts a
+		// bounded frame set, then recognizes each frame with the same provider.
+		seconds += maxOCRImages * ocrSeconds
+		if videoFrameOCREnabled {
+			seconds += mediaSeconds + videoFrameSeconds + maxVideoFrames*ocrSeconds
+		}
 	}
 	return time.Duration(seconds) * time.Second
 }

@@ -76,25 +76,50 @@ func (c *Client) Call(ctx context.Context, call protocol.ToolCall) (protocol.Too
 
 // FetchArtifact 请求 GET /artifacts/{id} 下载 Artifact 内容。
 func (c *Client) FetchArtifact(ctx context.Context, id string) ([]byte, string, error) {
+	var data bytes.Buffer
+	contentType, err := c.fetchArtifactTo(ctx, id, &data, 32<<20)
+	if err != nil {
+		return nil, "", err
+	}
+	return data.Bytes(), contentType, nil
+}
+
+// FetchArtifactTo streams an artifact to dst. Use it for media rather than
+// buffering a large video in the client process.
+func (c *Client) FetchArtifactTo(ctx context.Context, id string, dst io.Writer) (string, error) {
+	return c.fetchArtifactTo(ctx, id, dst, 0)
+}
+
+func (c *Client) fetchArtifactTo(ctx context.Context, id string, dst io.Writer, maxBytes int64) (string, error) {
+	if dst == nil {
+		return "", fmt.Errorf("artifact destination is required")
+	}
 	id = strings.TrimPrefix(id, "digcrawl-artifact://")
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.BaseURL+"/artifacts/"+id, nil)
 	if err != nil {
-		return nil, "", err
+		return "", err
 	}
 	c.applyAuth(req)
 	resp, err := c.HTTPClient.Do(req)
 	if err != nil {
-		return nil, "", err
+		return "", err
 	}
 	defer resp.Body.Close()
-	data, err := io.ReadAll(io.LimitReader(resp.Body, 32<<20))
-	if err != nil {
-		return nil, "", err
-	}
 	if resp.StatusCode >= 400 {
-		return nil, "", fmt.Errorf("artifact http %d", resp.StatusCode)
+		return "", fmt.Errorf("artifact http %d", resp.StatusCode)
 	}
-	return data, resp.Header.Get("Content-Type"), nil
+	reader := io.Reader(resp.Body)
+	if maxBytes > 0 {
+		reader = io.LimitReader(resp.Body, maxBytes+1)
+	}
+	written, err := io.Copy(dst, reader)
+	if err != nil {
+		return "", err
+	}
+	if maxBytes > 0 && written > maxBytes {
+		return "", fmt.Errorf("artifact exceeds %d byte client buffer limit; use FetchArtifactTo", maxBytes)
+	}
+	return resp.Header.Get("Content-Type"), nil
 }
 
 func (c *Client) getJSON(ctx context.Context, path string, out any) error {

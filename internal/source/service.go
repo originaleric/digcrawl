@@ -29,6 +29,7 @@ import (
 	weiboplatform "github.com/originaleric/digcrawl/internal/platform/weibo"
 	xplatform "github.com/originaleric/digcrawl/internal/platform/x"
 	xhsplatform "github.com/originaleric/digcrawl/internal/platform/xiaohongshu"
+	youtubeplatform "github.com/originaleric/digcrawl/internal/platform/youtube"
 	zhihuplatform "github.com/originaleric/digcrawl/internal/platform/zhihu"
 )
 
@@ -83,6 +84,8 @@ func (r Service) ListLatest(ctx context.Context, item Source) ([]Item, error) {
 		return r.readKuaishou(ctx, item)
 	case platform == "zhihu":
 		return r.readZhihu(ctx, item)
+	case platform == "youtube" || platform == "youtube.com":
+		return r.readYouTube(ctx, item)
 	case platform == "reddit":
 		return r.readReddit(ctx, item)
 	case platform == "x" || platform == "twitter":
@@ -1043,6 +1046,48 @@ func (r Service) readZhihuUserList(ctx context.Context, item Source) ([]Item, er
 	return r.readHTMLLinks(ctx, item, "zhihu")
 }
 
+func (r Service) readYouTube(ctx context.Context, item Source) ([]Item, error) {
+	switch inferYouTubeWatchlistType(item) {
+	case "youtube_video", "video", "short", "shorts", "watch":
+		return feedItemFromYouTubeVideo(item)
+	case "youtube_channel", "channel", "user", "profile", "author", "list":
+		return r.readYouTubeChannelList(ctx, item)
+	default:
+		if youtubeplatform.IsVideoURL(item.URL) {
+			return feedItemFromYouTubeVideo(item)
+		}
+		return r.readYouTubeChannelList(ctx, item)
+	}
+}
+
+func inferYouTubeWatchlistType(item Source) string {
+	if typ := strings.ToLower(strings.TrimSpace(item.Type)); typ != "" {
+		return typ
+	}
+	if youtubeplatform.IsVideoURL(item.URL) {
+		return "youtube_video"
+	}
+	return "youtube_channel"
+}
+
+func feedItemFromYouTubeVideo(item Source) ([]Item, error) {
+	norm, err := youtubeplatform.NormalizeURL(item.URL)
+	if err != nil {
+		return nil, err
+	}
+	if norm.PlatformID == "" || norm.ContentKind != youtubeplatform.ContentType {
+		return nil, fmt.Errorf("YouTube video URL is required")
+	}
+	link := firstNonEmpty(norm.CanonicalURL, item.URL)
+	key := "youtube:" + norm.PlatformID
+	return []Item{{ID: key, ContentKey: key, URL: link, CanonicalURL: link, Title: item.Name, ContentType: youtubeplatform.ContentType, Raw: map[string]any{"platform_id": norm.PlatformID, "source_url": item.URL}}}, nil
+}
+
+func (r Service) readYouTubeChannelList(ctx context.Context, item Source) ([]Item, error) {
+	item = withBrowserListDefaults(item, `a[href*="/watch?v="], a[href*="/shorts/"]`, "body")
+	return r.readHTMLLinks(ctx, item, "youtube")
+}
+
 func inferXWatchlistType(item Source) string {
 	typ := strings.ToLower(strings.TrimSpace(item.Type))
 	if typ != "" {
@@ -1322,17 +1367,14 @@ func (r Service) readHTMLLinks(ctx context.Context, item Source, platform string
 		if out, err := r.readHTMLLinksBrowser(ctx, item, platform, base); err == nil {
 			return out, nil
 		} else if staticErr != nil {
-			if platform == "toutiao" {
-				if accessErr := r.toutiaoAuthorAccessError(ctx, item.URL); accessErr != nil {
-					return nil, accessErr
-				}
+			accessErr := r.toutiaoAccessProbeError(ctx, item.URL, platform)
+			if accessErr != nil {
+				return nil, fmt.Errorf("%v; browser fallback: %w; access probe: %v", staticErr, err, accessErr)
 			}
 			return nil, fmt.Errorf("%v; browser fallback: %w", staticErr, err)
 		} else {
-			if platform == "toutiao" {
-				if accessErr := r.toutiaoAuthorAccessError(ctx, item.URL); accessErr != nil {
-					return nil, accessErr
-				}
+			if accessErr := r.toutiaoAccessProbeError(ctx, item.URL, platform); accessErr != nil {
+				return nil, fmt.Errorf("browser fallback: %w; access probe: %v", err, accessErr)
 			}
 			return nil, err
 		}
@@ -1346,6 +1388,13 @@ func (r Service) readHTMLLinks(ctx context.Context, item Source, platform string
 		return nil, staticErr
 	}
 	return nil, fmt.Errorf("CONTENT_NOT_FOUND: no %s content links found", platform)
+}
+
+func (r Service) toutiaoAccessProbeError(ctx context.Context, rawURL, platform string) error {
+	if platform != "toutiao" {
+		return nil
+	}
+	return r.toutiaoAuthorAccessError(ctx, rawURL)
 }
 
 func (r Service) readSocialHTMLLinks(ctx context.Context, item Source, platform, waitSelector, contentSelector string) ([]Item, error) {
@@ -1473,7 +1522,7 @@ func (r Service) readHTMLLinksBrowser(ctx context.Context, item Source, platform
 		WaitSelector:    waitSelector,
 		ContentSelector: contentSelector,
 		UseCookieDomain: browserCookieDomain(platform, item.URL, item.Options),
-		MetadataScript:  discoveryMetadataScript(),
+		MetadataScript:  discoveryMetadataScript(platform, item),
 	})
 	if err != nil {
 		return nil, err
@@ -1505,13 +1554,82 @@ func discoveryCandidatesFromBrowser(resp *browser.BrowserBrowseResponse) []strin
 	return out
 }
 
-func discoveryMetadataScript() string {
-	return `() => {
-  const hrefs = Array.from(document.querySelectorAll('a[href]')).map(a => a.href).filter(Boolean);
-  const scripts = Array.from(document.scripts).map(s => s.textContent || s.src || '').join('\n').slice(0, 200000);
-  const text = (document.body && document.body.innerText || '').slice(0, 100000);
-  return { hrefs, scripts, text, url: String(location.href || '') };
-}`
+func discoveryMetadataScript(platform string, item Source) string {
+	pattern, _ := json.Marshal(discoveryReadyPattern(platform, item))
+	minCandidates := optionInt(item.Options, "limit")
+	if minCandidates <= 0 {
+		minCandidates = 2
+	}
+	return fmt.Sprintf(`async () => {
+  const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+  const targetRegex = new RegExp(%s, 'i');
+  const uniq = (items) => [...new Set(items.map(v => String(v || '').trim()).filter(Boolean))];
+  const collect = () => {
+    const hrefs = Array.from(document.querySelectorAll('a[href]')).map(a => a.href).filter(Boolean);
+    const scripts = Array.from(document.scripts).map(s => s.textContent || s.src || '').join('\n').slice(0, 200000);
+    const text = (document.body && document.body.innerText || '').slice(0, 100000);
+    const ready = uniq(hrefs.filter(href => targetRegex.test(href)));
+    return { hrefs, scripts, text, url: String(location.href || ''), ready };
+  };
+  let out = collect();
+  let lastSignature = out.ready.join('|');
+  let stableRounds = 0;
+  for (let i = 0; i < 8; i++) {
+    window.scrollTo(0, document.body ? document.body.scrollHeight : 0);
+    await sleep(1500);
+    out = collect();
+    const signature = out.ready.join('|');
+    if (out.ready.length >= %d && signature === lastSignature) {
+      stableRounds += 1;
+      if (i >= 1 && stableRounds >= 1) return out;
+    } else {
+      stableRounds = 0;
+      lastSignature = signature;
+    }
+  }
+  return out;
+}`, string(pattern), minCandidates)
+}
+
+func discoveryReadyPattern(platform string, item Source) string {
+	switch strings.ToLower(strings.TrimSpace(platform)) {
+	case "toutiao":
+		tab := toutiaoTabFromURL(item.URL)
+		switch tab {
+		case "video", "short_video":
+			return `/video/[0-9]+/?`
+		case "wtt":
+			return `/w/[0-9]+/?`
+		case "article":
+			return `/(?:article|group)/[0-9]+/?`
+		default:
+			return `/(?:article|group|video|w)/[0-9]+/?`
+		}
+	case "bilibili":
+		return `/video/(?:BV[0-9A-Za-z]+|av[0-9]+)/?`
+	case "x", "twitter":
+		return `/[A-Za-z0-9_]{1,32}/status/[0-9]+/?`
+	case "kuaishou", "ks":
+		return `/(?:short-video|photo)/[0-9A-Za-z_-]+/?`
+	case "zhihu":
+		return `/(?:question/[0-9]+/answer/[0-9]+|p/[0-9A-Za-z_-]+|zvideo/[0-9]+)/?`
+	case "youtube", "youtube.com":
+		return `/(?:watch\?v=|shorts/)[0-9A-Za-z_-]+`
+	case "instagram":
+		return `/(?:p|reel)/[0-9A-Za-z_-]+/?`
+	case "threads":
+		return `/@[A-Za-z0-9._]+/post/[0-9A-Za-z_-]+/?`
+	default:
+		return `/(?:article|group|video|w)/[0-9]+/?|/[A-Za-z0-9_]{1,32}/status/[0-9]+/?|/video/(?:BV[0-9A-Za-z]+|av[0-9]+)/?|/(?:detail|status)/[0-9A-Za-z]+/?|/(?:short-video|photo)/[0-9A-Za-z_-]+/?|/question/[0-9]+/answer/[0-9]+/?|/p/[0-9A-Za-z_-]+/?|/reel/[0-9A-Za-z_-]+/?|/@[A-Za-z0-9._]+/post/[0-9A-Za-z_-]+/?|/zvideo/[0-9]+/?`
+	}
+}
+
+func toutiaoTabFromURL(rawURL string) string {
+	u, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil {
+		return ""
+	}
+	return strings.ToLower(strings.TrimSpace(u.Query().Get("tab")))
 }
 
 func browserFallbackEnabled(opts map[string]any) bool {
@@ -1562,6 +1680,8 @@ func browserCookieDomain(platform, rawURL string, opts map[string]any) string {
 		return "www.kuaishou.com"
 	case "zhihu":
 		return "www.zhihu.com"
+	case "youtube", "youtube.com":
+		return youtubeplatform.CookieDomain
 	case "threads":
 		if socialLocalSessionAllowed(platform, opts) {
 			return threadsplatform.CookieDomain
@@ -1793,6 +1913,12 @@ func discoveredLinkItem(ctx context.Context, platform, link, title string) Item 
 			key = id
 			canonical = firstNonEmpty(norm.CanonicalURL, link)
 		}
+	case "youtube", "youtube.com":
+		if norm, err := youtubeplatform.NormalizeURL(link); err == nil && norm.PlatformID != "" && norm.ContentKind == youtubeplatform.ContentType {
+			id = "youtube:" + norm.PlatformID
+			key = id
+			canonical = firstNonEmpty(norm.CanonicalURL, link)
+		}
 	case "xiaohongshu", "xhs":
 		if norm, err := xhsplatform.NormalizeURL(ctx, link); err == nil && norm.PlatformID != "" {
 			id = "xiaohongshu:" + norm.PlatformID
@@ -1863,6 +1989,8 @@ func platformLink(platform string, base *url.URL, link string) bool {
 		return (strings.Contains(host, "kuaishou.com")) && (strings.Contains(path, "/short-video/") || strings.Contains(path, "/photo/"))
 	case "zhihu":
 		return (host == "www.zhihu.com" || host == "zhihu.com" || host == "zhuanlan.zhihu.com") && (strings.Contains(path, "/question/") || strings.Contains(path, "/p/") || strings.Contains(path, "/zvideo/"))
+	case "youtube", "youtube.com":
+		return youtubeplatform.IsVideoURL(link)
 	case "xiaohongshu", "xhs":
 		if host == "xhslink.com" || host == "www.xhslink.com" {
 			return true
@@ -1897,6 +2025,9 @@ func contentTypeFor(platform, link string) string {
 		return "video"
 	}
 	if platform == "bilibili" || strings.Contains(link, "bilibili.com/video/") {
+		return "video"
+	}
+	if platform == "youtube" || platform == "youtube.com" || strings.Contains(link, "youtube.com/watch") || strings.Contains(link, "youtube.com/shorts/") || strings.Contains(link, "youtu.be/") {
 		return "video"
 	}
 	if platform == "kuaishou" || strings.Contains(link, "kuaishou.com/short-video/") || strings.Contains(link, "kuaishou.com/photo/") {

@@ -17,7 +17,7 @@ source/list discover -> collect detail -> normalize -> media/OCR/ASR enrich -> s
 | 能力 | 说明 |
 |------|------|
 | 单 URL 采集 | `digcrawl collect <url>` 输出 Markdown、HTML、JSON，并可下载媒体 |
-| 多平台 provider | 微信公众号、小红书、抖音、头条文章/视频、X、Reddit、Threads、Instagram、B站、微博、快手、知乎、RSS/Atom、普通网页 |
+| 多平台 provider | 微信公众号、小红书、抖音、头条文章/视频、X、Reddit、Threads、Instagram、B站、微博、快手、知乎、YouTube、RSS/Atom、普通网页 |
 | Watchlist | 定期扫描来源页、列表页、RSS、subreddit/user 等，发现新增内容后采集详情 |
 | 定时任务 | `watchlist serve` 读取 `Tasks` 和 watchlist source 周期，支持 interval/daily |
 | 持久化清单 | Watchlist source 可来自 YAML、数据库或 mixed，数据库支持 SQLite/MySQL |
@@ -43,6 +43,7 @@ source/list discover -> collect detail -> normalize -> media/OCR/ASR enrich -> s
 | 微博 | post API-first，浏览器兜底 | `weibo_user` API-first，失败后 HTML/browser fallback |
 | 快手 | Web GraphQL API-first，本机 Cookie/browser 兜底 | `kuaishou_user` API-first，失败后 HTML/browser fallback |
 | 知乎 | 浏览器读取 | `zhihu_user` browser/html fallback，平台 selector 等待动态内容 |
+| YouTube | 浏览器读取页面元数据与公开字幕轨 | `youtube_channel` 发现视频和 Shorts；不导出临时播放流 URL |
 | RSS/Atom | Feed service | Feed service |
 
 本机浏览器路径底层统一走 `internal/browser.BrowserBrowse`。头条、新增平台和列表 fallback 复用同一套 Chrome/Chromium 配置、Cookie store、allowed domain 和登录态；差别在于头条详情 provider 已有更完整的多策略 fallback，新平台详情 provider 后续会逐步补齐。Threads/Instagram 默认是 `auth_mode=public`，不读取本机 Cookie；只有全局 `Social.<Platform>.AuthMode=local_session` 和 source options `auth_mode=local_session` 同时开启时才复用登录态。
@@ -57,7 +58,7 @@ digcrawl config validate --config "$HOME/.config/digcrawl/digcrawl-skill.yaml"
 digcrawl doctor --config "$HOME/.config/digcrawl/digcrawl-skill.yaml"
 ```
 
-macOS / Linux 默认目录为 `$XDG_CONFIG_HOME/digcrawl/`（XDG 未设置时为 `~/.config/digcrawl/`），Windows 为 `%APPDATA%\DigCrawl\`。`init` 不会覆盖已有文件，只有传入 `--force` 才会替换。也可以复制 [`config/digcrawl-skill.example.yaml`](../config/digcrawl-skill.example.yaml) 到任意用户目录自行维护；不论哪种方式，MCP 注册始终使用二进制与 profile 的绝对路径：
+macOS / Linux 默认目录为 `$XDG_CONFIG_HOME/digcrawl/`（XDG 未设置时为 `~/.config/digcrawl/`），Windows 为 `%APPDATA%\DigCrawl\`。`init` 同时生成 profile 同级的跨平台绝对 `Skill.Media.Dir`，因此无需在文档或 host 中写死用户名路径。`init` 不会覆盖已有文件，只有传入 `--force` 才会替换。也可以复制 [`config/digcrawl-skill.example.yaml`](../config/digcrawl-skill.example.yaml) 到任意用户目录自行维护；不论哪种方式，MCP 注册始终使用二进制与 profile 的绝对路径：
 
 ```bash
 digcrawl mcp --config /absolute/path/to/digcrawl-skill.yaml
@@ -65,7 +66,7 @@ digcrawl mcp --config /absolute/path/to/digcrawl-skill.yaml
 
 Codex、Claude Code、WorkBuddy 等宿主只需按各自格式登记这条 stdio 命令，DigCrawl 不会自动改写宿主配置。Homebrew tap 发布后可使用 `brew install --cask originaleric/tap/digcrawl`，它仍基于同一 GitHub Release。
 
-Skill 默认只读取链接；归档、Watchlist、浏览器交互和任意本地文件转写仍不暴露。图片文字和视觉分析由 Codex、Claude Code 等宿主读取 DigCrawl 返回的页面截图附件完成：平台工具使用 `include_media` 与 `include_screenshot`，但不使用本地 `include_ocr`。`media` URL 是来源引用，若没有 MCP 图片附件，宿主不得声称已识别该图片。视频转写仍是显式本地能力，平台读取工具接受 `include_asr` 与 `include_media`，Skill 在自己的领域内执行与 Collect 对齐的“媒体下载 → ASR”处理，不调用 `collect.Service`。用户同意调用 `skill.asr.enable` 时，DigCrawl 会先检查 ffmpeg 与当前 ASR provider；缺失依赖时不会写入 opt-in 状态，宿主应保留错误并提示用户完成本地配置。视频摘要始终由宿主基于返回的 Markdown 和成功的 `asr_text` 完成；默认 profile 仅保留 `Skill.Media` 与 `Skill.ASR`，不包含 OCR、Summary 或模型 API Key，也不使用 DigFlow。`Gateway.AllowedDomains` 留空时允许任意 `http/https` 目标；配置后作为可选的访问收紧策略。用户明确请求截图时，返回当前视口图片；`Gateway.ArtifactMaxInlineBytes` 控制 MCP 附件上限，默认 `10485760`（10 MiB）。Cookie、artifact、下载媒体和登录态始终保留在用户本机。遇到小红书、抖音、头条、Threads 或 Instagram 的 `LOGIN_REQUIRED` 时，先经用户同意再运行 `digcrawl browser login --platform <platform>`；它会打开 DigCrawl 独立的有头登录窗口，不读取日常浏览器 profile，完成登录后在终端按 Enter 保存 Cookie。
+Skill 默认只读取链接；归档、Watchlist、浏览器交互和任意本地文件转写仍不暴露。图片文字和视觉分析由 Codex、Claude Code 等宿主读取 DigCrawl 返回的页面截图附件完成：平台工具使用 `include_media` 与 `include_screenshot`，但不使用本地 `include_ocr`。`media` URL 是来源引用，若没有 MCP 图片附件，宿主不得声称已识别该图片。视频 ASR 与抽帧 OCR 是显式本地能力：Provider 下载受限临时 MP4，通用 core 仅接收该本地文件并返回理解结果，不感知平台、artifact 或 Collect；默认处理完成即清理。用户明确说“保存影片”“处理后删除影片”或明确要求调整单次下载上限时，宿主调用 `skill.media.configure` 覆写现有 `RetainDownloadedVideo` 或 `MaxBytes`，而不是直接编辑 YAML；文件保留时写入 `Skill.Media.Dir`，视频结果的 `platform_metadata.retained_media_relative_path` 则提供相对此目录的定位路径，绝不返回本机绝对路径。通用 Skill 媒体获取会在该目录内为每次执行创建私有子目录；外部 call ID 只用于请求关联，不能命名或覆盖本地媒体、固定下载文件或 manifest。Collect 的文件导出保持独立，不是这些 core 的输入前提。用户同意调用 `skill.asr.enable` 时，DigCrawl 会先检查 ffmpeg 与当前 ASR provider；缺失依赖时不会写入 opt-in 状态，宿主应保留错误并提示用户完成本地配置。视频摘要始终由宿主基于返回的 Markdown 和成功的 `asr_text` 完成；默认 profile 仅保留 `Skill.Media` 与 `Skill.ASR`，不包含 OCR、Summary 或模型 API Key，也不使用 DigFlow。`Gateway.AllowedDomains` 留空时允许任意 `http/https` 目标；配置后作为可选的访问收紧策略。用户明确请求截图时，返回当前视口图片；`Gateway.ArtifactMaxInlineBytes` 控制 MCP 附件上限，默认 `10485760`（10 MiB）。Cookie、artifact、下载媒体和登录态始终保留在用户本机。遇到小红书、抖音、头条、Threads 或 Instagram 的 `LOGIN_REQUIRED` 时，先经用户同意再运行 `digcrawl browser login --platform <platform>`；它会打开 DigCrawl 独立的有头登录窗口，不读取日常浏览器 profile，完成登录后在终端按 Enter 保存 Cookie。
 
 ## 4. 常用命令
 
@@ -83,6 +84,7 @@ go build -o digcollect ./cmd/digcollect
 ./digcrawl collect "https://www.toutiao.com/article/..." --format md,json
 ./digcrawl collect "https://www.toutiao.com/video/..." --format md,json
 ./digcrawl collect "https://www.bilibili.com/video/BV..." --format md,json
+./digcrawl collect "https://www.youtube.com/watch?v=dQw4w9WgXcQ" --format md,json
 ./digcrawl collect "https://m.weibo.cn/detail/..." --format md,json
 ```
 
@@ -141,6 +143,7 @@ douyin_user, douyin_video,
 xiaohongshu_user, xiaohongshu_note,
 wechat_list, wechat_article,
 bilibili_user, bilibili_video,
+youtube_channel, youtube_video,
 weibo_user, weibo_post,
 kuaishou_user, kuaishou_video,
 zhihu_user, zhihu_answer, zhihu_article, zhihu_zvideo
@@ -172,7 +175,7 @@ curl -H "Authorization: Bearer $DIGCRAWL_GATEWAY_TOKEN" \
 
 ## 6. 定时与通知
 
-`watchlist serve` 会按 `Watchlist.Scheduler.TickInterval` 扫描到期任务。任务可以使用 interval 或 daily：
+`watchlist serve` 会按 `Watchlist.Scheduler.TickInterval` 扫描到期任务。默认串行执行；如需显式启用并行，可设置 `Watchlist.Scheduler.MaxConcurrentRuns`（来源任务并发数）与 `Watchlist.Collect.MaxConcurrentItems`（单个来源内的条目并发数）。两项未设置或设置为 `1` 时均保持串行。并发采集仍会保留唯一输出路径、串行更新 index.json，并复用 Collect 的按平台限流。任务可以使用 interval 或 daily：
 
 ```yaml
 Tasks:

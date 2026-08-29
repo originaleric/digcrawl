@@ -3,15 +3,20 @@ package collect
 import (
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/originaleric/digcrawl/config"
+	coremedia "github.com/originaleric/digcrawl/internal/media"
 	"github.com/originaleric/digcrawl/internal/testutil"
 	"github.com/originaleric/digcrawl/protocol"
+	"github.com/originaleric/digcrawl/runtime/artifact"
 )
 
 func TestFallbackMediaItemsFromMarkdown(t *testing.T) {
@@ -22,6 +27,66 @@ func TestFallbackMediaItemsFromMarkdown(t *testing.T) {
 	items := fallbackMediaItems(out)
 	if len(items) != 2 {
 		t.Fatalf("expected 2 fallback items, got %d", len(items))
+	}
+}
+
+func TestDownloadAssetsCopiesMediaArtifact(t *testing.T) {
+	store, err := artifact.NewDiskStore(t.TempDir(), time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Put(context.Background(), "youtube-video", "video/mp4", "video.mp4", []byte("video")); err != nil {
+		t.Fatal(err)
+	}
+	assets := t.TempDir()
+	saved, err := DownloadAssets(context.Background(), assets, map[string]any{
+		"media": []any{map[string]any{"type": "video", "artifact_id": "youtube-video"}},
+	}, AssetDownloadOptions{ArtifactStore: store, MaxBytes: 16})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(saved) != 2 {
+		t.Fatalf("saved=%v", saved)
+	}
+	data, err := os.ReadFile(filepath.Join(assets, "001.mp4"))
+	if err != nil || string(data) != "video" {
+		t.Fatalf("artifact media=%q err=%v", data, err)
+	}
+}
+
+func TestDownloadFilePrefersCompatibleImageFormatsOnlyForOCRAssets(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/image":
+			if got, want := r.Header.Get("Accept"), "image/jpeg,image/png,image/webp,image/*;q=0.8,*/*;q=0.5"; got != want {
+				t.Fatalf("image Accept=%q want %q", got, want)
+			}
+			w.Header().Set("Content-Type", "image/jpeg")
+			_, _ = w.Write([]byte("jpeg"))
+		case "/video":
+			if got := r.Header.Get("Accept"); got != "" {
+				t.Fatalf("video Accept=%q; image preference must not affect video downloads", got)
+			}
+			w.Header().Set("Content-Type", "video/mp4")
+			_, _ = w.Write([]byte("mp4"))
+		}
+	}))
+	defer server.Close()
+	for _, tc := range []struct{ path, mediaType, want string }{
+		{path: "/image", mediaType: "image", want: "jpeg"},
+		{path: "/video", mediaType: "video", want: "mp4"},
+	} {
+		t.Run(tc.mediaType, func(t *testing.T) {
+			dest := filepath.Join(t.TempDir(), "asset")
+			_, err := coremedia.DownloadFile(context.Background(), server.Client(), server.URL+tc.path, dest, 1024, "", tc.mediaType)
+			if err != nil {
+				t.Fatal(err)
+			}
+			data, err := os.ReadFile(dest)
+			if err != nil || string(data) != tc.want {
+				t.Fatalf("downloaded=%q err=%v", data, err)
+			}
+		})
 	}
 }
 
@@ -125,6 +190,18 @@ func TestRefererForWechatDownload(t *testing.T) {
 	}
 	if got := refererForDownload(out); got != "https://mp.weixin.qq.com/" {
 		t.Fatalf("referer=%q", got)
+	}
+}
+
+func TestDownloadedVideoPathsStayInsideAssetsDirectory(t *testing.T) {
+	assetsDir := t.TempDir()
+	paths := downloadedVideoPaths([]map[string]any{
+		{"type": "video", "local": "001.mp4"},
+		{"type": "video", "local": "../../outside.mp4"},
+		{"type": "image", "local": "cover.jpg"},
+	}, assetsDir)
+	if got, want := paths, []string{filepath.Join(assetsDir, "001.mp4"), filepath.Join(assetsDir, "outside.mp4")}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("video paths=%q want=%q", got, want)
 	}
 }
 

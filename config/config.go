@@ -1,6 +1,7 @@
 package config
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -44,17 +45,44 @@ type SkillConfig struct {
 
 // SkillMediaConfig controls media acquisition for explicit Skill OCR/ASR requests.
 type SkillMediaConfig struct {
-	DownloadMedia    bool   `yaml:"DownloadMedia" json:"DownloadMedia,omitempty"`
-	Dir              string `yaml:"Dir" json:"Dir,omitempty"`
-	MaxBytes         int64  `yaml:"MaxBytes" json:"MaxBytes,omitempty"`
-	TimeoutSec       int    `yaml:"TimeoutSec" json:"TimeoutSec,omitempty"`
-	MaxASRCandidates int    `yaml:"MaxASRCandidates" json:"MaxASRCandidates,omitempty"`
+	DownloadMedia bool `yaml:"DownloadMedia" json:"DownloadMedia,omitempty"`
+	// RetainDownloadedVideo keeps a provider-downloaded MP4 after explicit
+	// video ASR/OCR. It is opt-in; the default lifecycle is temporary download
+	// followed by cleanup after the provider finishes enrichment.
+	RetainDownloadedVideo bool   `yaml:"RetainDownloadedVideo" json:"RetainDownloadedVideo,omitempty"`
+	Dir                   string `yaml:"Dir" json:"Dir,omitempty"`
+	MaxBytes              int64  `yaml:"MaxBytes" json:"MaxBytes,omitempty"`
+	TimeoutSec            int    `yaml:"TimeoutSec" json:"TimeoutSec,omitempty"`
+	MaxASRCandidates      int    `yaml:"MaxASRCandidates" json:"MaxASRCandidates,omitempty"`
 }
 
 const (
 	DefaultSkillMediaTimeoutSec  = 120
 	DefaultSkillMaxASRCandidates = 2
 )
+
+// skillProfileBusyError keeps a bounded lock wait actionable across every
+// transport without making the persistence layer depend on protocol types.
+// Runtime recognizes these optional methods when it maps handler errors.
+type skillProfileBusyError struct {
+	cause error
+}
+
+func (e skillProfileBusyError) Error() string {
+	return "Skill profile is busy; retry after another local configuration update finishes: " + e.cause.Error()
+}
+
+func (e skillProfileBusyError) Unwrap() error { return e.cause }
+
+func (e skillProfileBusyError) ToolErrorCode() string { return "SKILL_PROFILE_BUSY" }
+
+func (e skillProfileBusyError) ToolErrorMessage() string {
+	return "Skill profile is being updated by another local process; retry shortly"
+}
+
+func (e skillProfileBusyError) ToolErrorDetails() map[string]any {
+	return map[string]any{"component": "skill_profile", "reason": "lock_contended", "retryable": true}
+}
 
 // TimeoutSecOrDefault returns the download budget for explicit Skill media.
 func (c SkillMediaConfig) TimeoutSecOrDefault() int {
@@ -253,20 +281,82 @@ func (c SocialPlatformConfig) AllowsLocalSession() bool {
 	return c.AuthModeOrDefault() == "local_session"
 }
 
-// OCRConfig controls optional image OCR enrichment.
+// OCRConfig controls optional image and local-video-frame OCR enrichment.
 type OCRConfig struct {
-	Enabled          *bool  `yaml:"Enabled" json:"Enabled,omitempty"`
-	Provider         string `yaml:"Provider" json:"Provider,omitempty"` // openai_compatible | stub
-	APIKey           string `yaml:"APIKey" json:"APIKey,omitempty"`
-	BaseURL          string `yaml:"BaseURL" json:"BaseURL,omitempty"`
-	Model            string `yaml:"Model" json:"Model,omitempty"`
-	Prompt           string `yaml:"Prompt" json:"Prompt,omitempty"`
-	TimeoutSec       int    `yaml:"TimeoutSec" json:"TimeoutSec,omitempty"`
-	MaxImages        int    `yaml:"MaxImages" json:"MaxImages,omitempty"`
-	MaxImageBytes    int64  `yaml:"MaxImageBytes" json:"MaxImageBytes,omitempty"`
-	MaxTokens        int    `yaml:"MaxTokens" json:"MaxTokens,omitempty"`
-	AppendToMarkdown *bool  `yaml:"AppendToMarkdown" json:"AppendToMarkdown,omitempty"`
-	AppendToText     *bool  `yaml:"AppendToText" json:"AppendToText,omitempty"`
+	Enabled          *bool               `yaml:"Enabled" json:"Enabled,omitempty"`
+	Provider         string              `yaml:"Provider" json:"Provider,omitempty"` // openai_compatible | stub
+	APIKey           string              `yaml:"APIKey" json:"APIKey,omitempty"`
+	BaseURL          string              `yaml:"BaseURL" json:"BaseURL,omitempty"`
+	Model            string              `yaml:"Model" json:"Model,omitempty"`
+	Prompt           string              `yaml:"Prompt" json:"Prompt,omitempty"`
+	TimeoutSec       int                 `yaml:"TimeoutSec" json:"TimeoutSec,omitempty"`
+	MaxImages        int                 `yaml:"MaxImages" json:"MaxImages,omitempty"`
+	MaxImageBytes    int64               `yaml:"MaxImageBytes" json:"MaxImageBytes,omitempty"`
+	MaxTokens        int                 `yaml:"MaxTokens" json:"MaxTokens,omitempty"`
+	AppendToMarkdown *bool               `yaml:"AppendToMarkdown" json:"AppendToMarkdown,omitempty"`
+	AppendToText     *bool               `yaml:"AppendToText" json:"AppendToText,omitempty"`
+	VideoFrames      VideoFrameOCRConfig `yaml:"VideoFrames" json:"VideoFrames,omitempty"`
+}
+
+// VideoFrameOCRConfig controls the explicit, bounded extraction of local video
+// frames for OCR. It is disabled by default because a remote OCR provider may
+// receive the extracted frames.
+type VideoFrameOCRConfig struct {
+	Enabled        *bool  `yaml:"Enabled" json:"Enabled,omitempty"`
+	IntervalSec    int    `yaml:"IntervalSec" json:"IntervalSec,omitempty"`
+	MaxFrames      int    `yaml:"MaxFrames" json:"MaxFrames,omitempty"`
+	MaxTotalFrames int    `yaml:"MaxTotalFrames" json:"MaxTotalFrames,omitempty"`
+	TimeoutSec     int    `yaml:"TimeoutSec" json:"TimeoutSec,omitempty"`
+	FFmpegPath     string `yaml:"FFmpegPath" json:"FFmpegPath,omitempty"`
+	TempDir        string `yaml:"TempDir" json:"TempDir,omitempty"`
+}
+
+// EnabledOrDefault reports whether local video frame OCR is explicitly enabled.
+func (c VideoFrameOCRConfig) EnabledOrDefault() bool {
+	return c.Enabled != nil && *c.Enabled
+}
+
+// IntervalSecOrDefault returns the spacing between extracted video frames.
+func (c VideoFrameOCRConfig) IntervalSecOrDefault() int {
+	if c.IntervalSec > 0 {
+		return c.IntervalSec
+	}
+	return 5
+}
+
+// MaxFramesOrDefault bounds the number of frames sent to the OCR provider for
+// one video.
+func (c VideoFrameOCRConfig) MaxFramesOrDefault() int {
+	if c.MaxFrames > 0 {
+		return c.MaxFrames
+	}
+	return 8
+}
+
+// MaxTotalFramesOrDefault bounds all video frames from one collected content
+// item, preventing a media-heavy page from multiplying local and remote work.
+func (c VideoFrameOCRConfig) MaxTotalFramesOrDefault() int {
+	if c.MaxTotalFrames > 0 {
+		return c.MaxTotalFrames
+	}
+	return 16
+}
+
+// TimeoutSecOrDefault returns the per-video time budget for local frame
+// extraction. OCR provider requests retain their own OCR.TimeoutSec budget.
+func (c VideoFrameOCRConfig) TimeoutSecOrDefault() int {
+	if c.TimeoutSec > 0 {
+		return c.TimeoutSec
+	}
+	return 120
+}
+
+// FFmpegPathOrDefault returns the executable used to extract video frames.
+func (c VideoFrameOCRConfig) FFmpegPathOrDefault() string {
+	if strings.TrimSpace(c.FFmpegPath) != "" {
+		return strings.TrimSpace(c.FFmpegPath)
+	}
+	return "ffmpeg"
 }
 
 // EnabledOrDefault reports whether OCR enrichment is enabled.
@@ -516,6 +606,7 @@ type WatchlistConfig struct {
 	DryRun           *bool                      `yaml:"DryRun" json:"DryRun,omitempty"`
 	DefaultInterval  string                     `yaml:"DefaultInterval" json:"DefaultInterval,omitempty"`
 	Scheduler        SchedulerConfig            `yaml:"Scheduler" json:"Scheduler,omitempty"`
+	Collect          WatchlistCollectConfig     `yaml:"Collect" json:"Collect,omitempty"`
 	Source           WatchlistSourceConfig      `yaml:"Source" json:"Source,omitempty"`
 	NotifyOnFirstRun *bool                      `yaml:"NotifyOnFirstRun" json:"NotifyOnFirstRun,omitempty"`
 	MaxItemsPerRun   int                        `yaml:"MaxItemsPerRun" json:"MaxItemsPerRun,omitempty"`
@@ -556,9 +647,10 @@ func (c WatchlistSourceConfig) ModeOrDefault() string {
 
 // SchedulerConfig controls the in-process periodic scheduler.
 type SchedulerConfig struct {
-	Enabled      *bool  `yaml:"Enabled" json:"Enabled,omitempty"`
-	TickInterval string `yaml:"TickInterval" json:"TickInterval,omitempty"`
-	Jitter       string `yaml:"Jitter" json:"Jitter,omitempty"`
+	Enabled           *bool  `yaml:"Enabled" json:"Enabled,omitempty"`
+	TickInterval      string `yaml:"TickInterval" json:"TickInterval,omitempty"`
+	Jitter            string `yaml:"Jitter" json:"Jitter,omitempty"`
+	MaxConcurrentRuns int    `yaml:"MaxConcurrentRuns" json:"MaxConcurrentRuns,omitempty"`
 }
 
 func (c SchedulerConfig) EnabledOrDefault() bool {
@@ -577,6 +669,29 @@ func (c SchedulerConfig) TickIntervalOrDefault() string {
 
 func (c SchedulerConfig) JitterOrDefault() string {
 	return strings.TrimSpace(c.Jitter)
+}
+
+// MaxConcurrentRunsOrDefault limits simultaneously active Watchlist source
+// runs. One preserves the historical sequential scheduler behavior.
+func (c SchedulerConfig) MaxConcurrentRunsOrDefault() int {
+	if c.MaxConcurrentRuns > 0 {
+		return c.MaxConcurrentRuns
+	}
+	return 1
+}
+
+// WatchlistCollectConfig controls per-source processing after discovery.
+type WatchlistCollectConfig struct {
+	MaxConcurrentItems int `yaml:"MaxConcurrentItems" json:"MaxConcurrentItems,omitempty"`
+}
+
+// MaxConcurrentItemsOrDefault limits simultaneous detail collection, summary,
+// and delivery work within one Watchlist source. One preserves prior behavior.
+func (c WatchlistCollectConfig) MaxConcurrentItemsOrDefault() int {
+	if c.MaxConcurrentItems > 0 {
+		return c.MaxConcurrentItems
+	}
+	return 1
 }
 
 // WatchlistItem is one monitored source.
@@ -1138,6 +1253,10 @@ var (
 	defaultCfg Config
 	once       sync.Once
 	skillMu    sync.RWMutex
+	// skillMutationMu serializes writers before they reach the cross-process
+	// profile lock. A channel is used instead of sync.Mutex so request contexts
+	// can abandon a contended local write without blocking a worker forever.
+	skillMutationMu = make(chan struct{}, 1)
 )
 
 func init() {
@@ -1162,6 +1281,7 @@ func init() {
 					"weibo.post.read",
 					"kuaishou.video.read",
 					"zhihu.content.read",
+					"youtube.video.read",
 					"x.post.read",
 					"reddit.post.read",
 					"reddit.subreddit.read",
@@ -1202,6 +1322,7 @@ func init() {
 					"weibo.post.read",
 					"kuaishou.video.read",
 					"zhihu.content.read",
+					"youtube.video.read",
 					"x.post.read",
 					"reddit.post.read",
 					"reddit.subreddit.read",
@@ -1246,6 +1367,7 @@ func init() {
 					"weibo.com", "www.weibo.com", "m.weibo.cn",
 					"kuaishou.com", "www.kuaishou.com", "v.kuaishou.com",
 					"zhihu.com", "www.zhihu.com", "zhuanlan.zhihu.com",
+					"youtube.com", "www.youtube.com", "m.youtube.com", "youtu.be", "www.youtu.be",
 					"x.com", "twitter.com", "www.twitter.com",
 					"reddit.com", "www.reddit.com", "old.reddit.com", "new.reddit.com", "redd.it",
 					"threads.net", "www.threads.net", "threads.com", "www.threads.com",
@@ -1320,6 +1442,12 @@ func init() {
 				MaxImageBytes:    5 * 1024 * 1024,
 				MaxTokens:        1200,
 				AppendToMarkdown: &enabled,
+				VideoFrames: VideoFrameOCRConfig{
+					IntervalSec:    5,
+					MaxFrames:      8,
+					MaxTotalFrames: 16,
+					TimeoutSec:     120,
+				},
 			},
 			ASR: ASRConfig{
 				Provider:        "api",
@@ -1335,7 +1463,8 @@ func init() {
 			},
 			Watchlist: WatchlistConfig{
 				DefaultInterval:  "6h",
-				Scheduler:        SchedulerConfig{TickInterval: "5m"},
+				Scheduler:        SchedulerConfig{TickInterval: "5m", MaxConcurrentRuns: 1},
+				Collect:          WatchlistCollectConfig{MaxConcurrentItems: 1},
 				Source:           WatchlistSourceConfig{Mode: "yaml"},
 				MaxItemsPerRun:   20,
 				LockTTL:          "30m",
@@ -1998,6 +2127,18 @@ func mergeDefaults(cfg *Config) {
 	if cfg.OCR.AppendToText == nil {
 		cfg.OCR.AppendToText = defaultCfg.OCR.AppendToText
 	}
+	if cfg.OCR.VideoFrames.IntervalSec == 0 {
+		cfg.OCR.VideoFrames.IntervalSec = defaultCfg.OCR.VideoFrames.IntervalSec
+	}
+	if cfg.OCR.VideoFrames.MaxFrames == 0 {
+		cfg.OCR.VideoFrames.MaxFrames = defaultCfg.OCR.VideoFrames.MaxFrames
+	}
+	if cfg.OCR.VideoFrames.MaxTotalFrames == 0 {
+		cfg.OCR.VideoFrames.MaxTotalFrames = defaultCfg.OCR.VideoFrames.MaxTotalFrames
+	}
+	if cfg.OCR.VideoFrames.TimeoutSec == 0 {
+		cfg.OCR.VideoFrames.TimeoutSec = defaultCfg.OCR.VideoFrames.TimeoutSec
+	}
 	if cfg.ASR.Enabled == nil {
 		cfg.ASR.Enabled = defaultCfg.ASR.Enabled
 	}
@@ -2158,53 +2299,156 @@ func Save(path string, cfg *Config) error {
 // the active process configuration with that profile. It deliberately leaves
 // the chosen ASR provider and every credential untouched.
 func EnableDefaultSkillASR() (*Config, error) {
+	return EnableDefaultSkillASRContext(context.Background())
+}
+
+// EnableDefaultSkillASRContext is EnableDefaultSkillASR with a caller-owned
+// deadline. MCP configuration writes use it so a competing profile update
+// cannot outlive the request that initiated it.
+func EnableDefaultSkillASRContext(ctx context.Context) (*Config, error) {
 	path := DefaultSkillProfilePath()
-	// Stage the update before writing. defaultCfg is also the configuration
-	// used by the current MCP runtime, so changing it before a failed write
-	// would leave this session claiming an opt-in that was not persisted.
-	skillMu.Lock()
-	defer skillMu.Unlock()
-	staged := defaultCfg.Skill
-	staged.Media.DownloadMedia = true
-	if strings.TrimSpace(staged.Media.Dir) == "" {
-		staged.Media.Dir = filepath.Join(DefaultConfigDir(), "media")
-	}
-	enabled := true
-	staged.ASR.Enabled = &enabled
-	if err := updateSkillASROptIn(path, staged.Media.Dir); err != nil {
+	// Keep the active process in sync only after the profile write succeeds.
+	// updateSkillASROptIn serializes the whole read-modify-write sequence with
+	// other MCP processes that own the same standard profile.
+	release, err := lockSkillMutation(ctx)
+	if err != nil {
 		return nil, err
 	}
-	defaultCfg.Skill = staged
+	defer release()
+	persisted, err := updateSkillASROptIn(ctx, path, filepath.Join(filepath.Dir(path), "media"))
+	if err != nil {
+		return nil, err
+	}
+	skillMu.Lock()
+	defaultCfg.Skill = persisted
 	result := defaultCfg
+	skillMu.Unlock()
 	return &result, nil
+}
+
+// UpdateDefaultSkillMedia changes only user-controlled media retention and
+// download-size settings in the standard Skill profile. It intentionally does
+// not enable media download or ASR: those are separate capability opt-ins
+// which require readiness checks in EnableDefaultSkillASR.
+func UpdateDefaultSkillMedia(retainDownloadedVideo *bool, maxBytes *int64) (*Config, error) {
+	return UpdateDefaultSkillMediaContext(context.Background(), retainDownloadedVideo, maxBytes)
+}
+
+// UpdateDefaultSkillMediaContext is UpdateDefaultSkillMedia with a
+// caller-owned deadline. It keeps the existing non-context API compatible
+// while allowing request transports to cancel a contended profile lock.
+func UpdateDefaultSkillMediaContext(ctx context.Context, retainDownloadedVideo *bool, maxBytes *int64) (*Config, error) {
+	if retainDownloadedVideo == nil && maxBytes == nil {
+		return nil, fmt.Errorf("at least one Skill.Media setting is required")
+	}
+	if maxBytes != nil && *maxBytes <= 0 {
+		return nil, fmt.Errorf("Skill.Media.MaxBytes must be positive")
+	}
+
+	path := DefaultSkillProfilePath()
+	release, err := lockSkillMutation(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+
+	persisted, err := updateDefaultSkillMedia(ctx, path, filepath.Join(filepath.Dir(path), "media"), retainDownloadedVideo, maxBytes)
+	if err != nil {
+		return nil, err
+	}
+	// The persisted snapshot also contains another MCP process's settings
+	// written immediately before this update. Assigning it rather than a
+	// locally staged copy prevents this process from reverting that state.
+	skillMu.Lock()
+	defaultCfg.Skill = persisted
+	result := defaultCfg
+	skillMu.Unlock()
+	return &result, nil
+}
+
+func lockSkillMutation(ctx context.Context) (func(), error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	select {
+	case skillMutationMu <- struct{}{}:
+		return func() { <-skillMutationMu }, nil
+	case <-ctx.Done():
+		return nil, skillProfileBusyError{cause: ctx.Err()}
+	}
 }
 
 // updateSkillASROptIn changes only the opt-in keys owned by this operation.
 // In particular, it must not serialize the merged runtime config: that could
 // rewrite unrelated user choices or persist values injected at runtime.
-func updateSkillASROptIn(path, mediaDir string) error {
+func updateSkillASROptIn(ctx context.Context, path, mediaDir string) (SkillConfig, error) {
+	return updateSkillProfile(ctx, path, func(root *yaml.Node) {
+		setYAMLBool(root, []string{"Skill", "Media", "DownloadMedia"}, true)
+		setYAMLBool(root, []string{"Skill", "ASR", "Enabled"}, true)
+		if strings.TrimSpace(yamlString(root, []string{"Skill", "Media", "Dir"})) == "" {
+			setYAMLString(root, []string{"Skill", "Media", "Dir"}, mediaDir)
+		}
+	})
+}
+
+// updateDefaultSkillMedia preserves all YAML nodes outside the existing
+// Skill.Media settings owned by the host-facing configuration tool.
+func updateDefaultSkillMedia(ctx context.Context, path, mediaDir string, retainDownloadedVideo *bool, maxBytes *int64) (SkillConfig, error) {
+	return updateSkillProfile(ctx, path, func(root *yaml.Node) {
+		if retainDownloadedVideo != nil {
+			setYAMLBool(root, []string{"Skill", "Media", "RetainDownloadedVideo"}, *retainDownloadedVideo)
+		}
+		if maxBytes != nil {
+			setYAMLInt(root, []string{"Skill", "Media", "MaxBytes"}, *maxBytes)
+		}
+		if strings.TrimSpace(yamlString(root, []string{"Skill", "Media", "Dir"})) == "" {
+			setYAMLString(root, []string{"Skill", "Media", "Dir"}, mediaDir)
+		}
+	})
+}
+
+// updateSkillProfile is the single persistence boundary for standard Skill
+// profile mutations. The profile-specific advisory lock covers both the read
+// and atomic replacement, so two MCP processes cannot lose independent
+// changes by serializing stale YAML documents.
+func updateSkillProfile(ctx context.Context, path string, mutate func(root *yaml.Node)) (SkillConfig, error) {
+	unlock, err := lockSkillProfile(ctx, path)
+	if err != nil {
+		return SkillConfig{}, err
+	}
+	defer unlock()
+
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return err
+		return SkillConfig{}, err
 	}
 	var document yaml.Node
 	if err := yaml.Unmarshal(data, &document); err != nil {
-		return err
+		return SkillConfig{}, err
 	}
 	if len(document.Content) != 1 || document.Content[0].Kind != yaml.MappingNode {
-		return fmt.Errorf("Skill profile must contain a YAML mapping")
+		return SkillConfig{}, fmt.Errorf("Skill profile must contain a YAML mapping")
 	}
 	root := document.Content[0]
-	setYAMLBool(root, []string{"Skill", "Media", "DownloadMedia"}, true)
-	setYAMLBool(root, []string{"Skill", "ASR", "Enabled"}, true)
-	if strings.TrimSpace(yamlString(root, []string{"Skill", "Media", "Dir"})) == "" {
-		setYAMLString(root, []string{"Skill", "Media", "Dir"}, mediaDir)
-	}
+	mutate(root)
 	updated, err := yaml.Marshal(&document)
 	if err != nil {
-		return err
+		return SkillConfig{}, err
 	}
-	return writeConfigAtomically(path, updated)
+	if err := writeConfigAtomically(path, updated); err != nil {
+		return SkillConfig{}, err
+	}
+
+	// Rebuild from the document written while holding the process-wide lock.
+	// This makes the caller's live snapshot contain both its requested field
+	// and any independent field already persisted by another MCP process.
+	var persisted Config
+	if err := yaml.Unmarshal(updated, &persisted); err != nil {
+		return SkillConfig{}, err
+	}
+	persisted.SourcePath = normalizedConfigPath(path)
+	normalizeSkillASRPaths(&persisted)
+	return persisted.Skill, nil
 }
 
 func setYAMLBool(root *yaml.Node, path []string, value bool) {
@@ -2213,6 +2457,10 @@ func setYAMLBool(root *yaml.Node, path []string, value bool) {
 
 func setYAMLString(root *yaml.Node, path []string, value string) {
 	setYAMLScalar(root, path, "!!str", value)
+}
+
+func setYAMLInt(root *yaml.Node, path []string, value int64) {
+	setYAMLScalar(root, path, "!!int", fmt.Sprintf("%d", value))
 }
 
 func setYAMLScalar(root *yaml.Node, path []string, tag, value string) {

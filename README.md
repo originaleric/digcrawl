@@ -63,6 +63,8 @@ Add the same local MCP command to the Agent you use:
 
 After configuration, simply give your Agent a supported URL and ask it to read, summarize, compare, quote, or—when explicitly requested—transcribe it. The Agent uses DigCrawl locally and preserves structured outcomes such as login required, captcha, or rate limiting.
 
+For explicit local-video preferences, say “keep downloaded videos”, “clean up downloaded videos after processing”, or “set the video download limit to 512 MiB”. The Skill updates only the user-owned media retention or size setting through its local configuration tool; it does not require a platform-specific path or edit the profile in chat.
+
 The Skill does not include API keys or expose browser cookies. See the [Agent Skill](./.agents/skills/digcrawl/) for routing behavior and [Use with AI Agents](#use-with-ai-agents) for security details.
 
 ## Quick Start
@@ -101,7 +103,6 @@ Developers who want to build from source need Go 1.26.1+; see the [development i
 | --- | --- | --- |
 | Archive a single page | Extract a page or post into portable Markdown, HTML, JSON, and optional media assets. | `digcrawl collect <url>` |
 | Collect a queue of URLs | Process a file or local inbox and retain an index or database record. | `digcrawl collect --file urls.txt` |
-| Import a WeChat Channels chat card | Start a user-authorized macOS local bridge, then import metadata for the currently open video. | `digcrawl wechat-channels bridge start --yes` |
 | Monitor new content | Discover new items from feeds, lists, profiles, or pages, then collect and notify on a schedule. | `digcrawl watchlist run --once` |
 | Give an AI agent reading tools | Run a local MCP server with the official Skill and platform-aware tool routing. | `digcrawl mcp --config <profile>` |
 | Integrate a host application | Use HTTP Gateway, Collector, stdio, or the Go SDK. | [transport docs](./transport/README.md) |
@@ -112,7 +113,7 @@ DigCrawl treats crawling as a stable pipeline—**crawl, collect, normalize, exp
 
 | Source group | Supported sources |
 | --- | --- |
-| Social content | WeChat Official Accounts, WeChat Channels chat cards (with a local bridge), Xiaohongshu, Douyin, Toutiao, X, Reddit, Threads, Instagram, Bilibili, Weibo, Kuaishou, and Zhihu |
+| Social content | WeChat Official Accounts, WeChat Channels chat cards (with a local bridge), Xiaohongshu, Douyin, Toutiao, X, Reddit, Threads, Instagram, Bilibili, Weibo, Kuaishou, Zhihu, and YouTube |
 | Syndication and discovery | RSS, Atom, sitemap, platform lists, profile pages, and supported content feeds |
 | The open web | Any `http` or `https` page through the generic browser reader |
 
@@ -130,21 +131,17 @@ Collect one URL or a batch:
 ./digcrawl collect inbox --watch
 ```
 
-When a WeChat Channels card has no stable public URL, start the local bridge. It launches WeChat; open and play the forwarded card, then import the active card from a second terminal:
-
-```bash
-./digcrawl wechat-channels bridge start --yes
-./digcrawl wechat-channels import
-```
-
-On macOS, `bridge start` asks for explicit confirmation (or requires `--yes`), creates a per-user local CA, and temporarily enables a PAC: only `*.qq.com` is sent to the loopback bridge; the bridge then uses the original manual HTTP/HTTPS/SOCKS proxy for its outbound hop, while every other request keeps that same manual proxy path. It MITMs only `qq.com` and keeps only the current video's `object_id`, `object_nonce_id`, title, description, author, publication time, and cover URL in memory—never cookies, request headers, media URLs, or response payloads. An authenticated manual proxy is refused rather than reading or requesting credentials. Ctrl-C or `bridge stop` both make the owning bridge process clean up its PAC, local server, and exact certificate. The import endpoint requires a capability token from protected local bridge state; when using a custom `--state-dir`, pass the same directory to import as `--bridge-state-dir`. An already enabled PAC or proxy auto-discovery is never overwritten. Import still previews metadata before saving and never downloads media or starts ASR.
-
 Run a watchlist once, or keep its scheduler running locally:
 
 ```bash
 ./digcrawl watchlist run --once --config config/config.yaml
 ./digcrawl watchlist serve --config config/config.yaml
 ```
+
+Watchlist execution is serial by default. To opt in to bounded parallel source
+runs and item processing, configure Watchlist.Scheduler.MaxConcurrentRuns and
+Watchlist.Collect.MaxConcurrentItems; shared collection output paths,
+index.json, and per-platform request spacing remain protected.
 
 Typical output is organized for both humans and downstream programs:
 
@@ -192,8 +189,14 @@ Read the [runtime documentation](./runtime/README.md) before exposing a Gateway 
 
 | Date | Highlight | Why it matters |
 | --- | --- | --- |
+| 2026-08-29 | Added opt-in Watchlist source/item concurrency with safe collection coordination. | Discovery and processing can use bounded goroutines while content keys, output paths, index.json, and platform request spacing remain controlled. |
+| 2026-08-26 | Added explicit Skill video-retention preferences and safe profile updates. | Agents can retain or clean up downloaded videos and set a download cap without editing YAML; concurrent local profile writes are serialized and cancellable. |
+| 2026-08-26 | Finalized execution isolation and external-ID boundaries for video understanding. | Each Skill media operation owns a distinct workspace; external call IDs correlate requests only and cannot overwrite local media or manifests. |
+| 2026-08-26 | Decoupled downloaded-video understanding for YouTube, Skill, and Collect. | Providers own download/cleanup; ASR and frame OCR accept only a local video path and return content. MP4 retention is explicit opt-in and Collect export remains a separate delivery path. |
+| 2026-08-25 | Added public YouTube video/Shorts reading, caption enrichment, and Watchlist discovery. | URLs are normalized and player identity is verified before content is accepted. |
+| 2026-08-24 | Video-frame OCR was production-validated with an OpenAI-compatible vision provider. | Downloaded local videos can yield burned-in subtitle and on-screen text even when ASR has no usable speech; blank frames remain normal empty results rather than provider failures. |
 | 2026-08-17 | Browser recovery, CDP service management, and local ASR startup were rebuilt around explicit lifecycle and cache state. | Browser profiles are not relaunched before they are released; Playwright cache paths are discovered dynamically; existing local ASR models and upgraded runners remain usable across restarts. |
-| 2026-08 | OCR uses DigCrawl’s OpenAI-compatible vision client and remains opt-in. | Image enrichment stays independent of DigFlow and does not require a bundled key. |
+| 2026-08 | OCR uses DigCrawl’s OpenAI-compatible vision client and remains opt-in. | Image enrichment stays independent of DigFlow and does not require a bundled key; downloaded local videos can additionally use explicit, bounded frame OCR for burned-in subtitles. |
 | 2026-07 | ASR supports API-compatible and local `faster-whisper` providers. | Video and audio collections can include explicit, locally controlled transcripts. |
 | 2026-07 | Watchlists gained persistent sources, task scheduling, summaries, and notifications. | Sources can be monitored repeatedly instead of collected only once. |
 | 2026-07 | Reddit, RSS/Atom, Bilibili, Weibo, Kuaishou, Zhihu, Threads, and Instagram support expanded. | More source types share the same normalized collection pipeline. |

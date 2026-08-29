@@ -17,6 +17,7 @@ import (
 	"golang.org/x/net/html"
 
 	"github.com/originaleric/digcrawl/config"
+	coremedia "github.com/originaleric/digcrawl/internal/media"
 	"github.com/originaleric/digcrawl/runtime/artifact"
 )
 
@@ -88,6 +89,24 @@ func DownloadAssets(ctx context.Context, assetsDir string, out map[string]any, o
 				}
 				asrCandidateIndex++
 			}
+			artifactID, _ := item["artifact_id"].(string)
+			artifactID = strings.TrimSpace(artifactID)
+			if artifactID != "" {
+				name, err := copyMediaArtifact(ctx, opts.ArtifactStore, artifactID, assetsDir, mediaType, i, opts.MaxBytes)
+				if err != nil {
+					manifest = append(manifest, map[string]any{"type": mediaType, "artifact_id": artifactID, "error": err.Error()})
+					if opts.ASRInputOnly {
+						break
+					}
+					continue
+				}
+				saved = append(saved, filepath.Join(assetsDir, name))
+				manifest = append(manifest, map[string]any{"type": mediaType, "artifact_id": artifactID, "local": name})
+				if opts.ASRInputOnly {
+					break
+				}
+				continue
+			}
 			rawURL, _ := item["url"].(string)
 			rawURL = strings.TrimSpace(rawURL)
 			if rawURL == "" || !strings.HasPrefix(rawURL, "http") {
@@ -108,7 +127,7 @@ func DownloadAssets(ctx context.Context, assetsDir string, out map[string]any, o
 			}
 			name := assetFilename(rawURL, mediaType, i)
 			dest := filepath.Join(assetsDir, name)
-			contentType, err := downloadFile(ctx, client, rawURL, dest, opts.MaxBytes, referer)
+			contentType, err := coremedia.DownloadFile(ctx, client, rawURL, dest, opts.MaxBytes, referer, mediaType)
 			if err != nil {
 				manifest = append(manifest, map[string]any{
 					"type": item["type"], "url": rawURL, "error": err.Error(),
@@ -202,6 +221,26 @@ func copyScreenshotArtifact(store artifact.Store, out map[string]any, assetsDir 
 	}
 	out["screenshot_local"] = filepath.Base(dest)
 	return dest, nil
+}
+
+func copyMediaArtifact(ctx context.Context, store artifact.Store, artifactID, assetsDir, mediaType string, index int, maxBytes int64) (string, error) {
+	if store == nil {
+		return "", fmt.Errorf("artifact store is unavailable")
+	}
+	if maxBytes <= 0 {
+		maxBytes = DefaultSkillMediaMaxBytes
+	}
+	name := assetFilename("", mediaType, index)
+	dest := filepath.Join(assetsDir, name)
+	contentType, err := coremedia.CopyArtifactToFile(ctx, store, artifactID, dest, maxBytes)
+	if err != nil {
+		return "", err
+	}
+	finalName, _, err := normalizeDownloadedAssetName(name, dest, "", mediaType, contentType)
+	if err != nil {
+		return "", err
+	}
+	return finalName, nil
 }
 
 // RewriteMarkdownAssets replaces remote image URLs in markdown with local asset paths.
@@ -463,42 +502,6 @@ func knownExtensionFromURL(rawURL string) string {
 		}
 	}
 	return ""
-}
-
-func downloadFile(ctx context.Context, client *http.Client, rawURL, dest string, maxBytes int64, referer string) (string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
-	if err != nil {
-		return "", err
-	}
-	if referer != "" {
-		req.Header.Set("Referer", referer)
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", fmt.Errorf("http %d", resp.StatusCode)
-	}
-	if resp.ContentLength > maxBytes {
-		return "", fmt.Errorf("content length %d exceeds max %d", resp.ContentLength, maxBytes)
-	}
-	f, err := os.Create(dest)
-	if err != nil {
-		return "", err
-	}
-	defer f.Close()
-	limited := io.LimitReader(resp.Body, maxBytes+1)
-	n, err := io.Copy(f, limited)
-	if err != nil {
-		return "", err
-	}
-	if n > maxBytes {
-		_ = os.Remove(dest)
-		return "", fmt.Errorf("download exceeds max bytes %d", maxBytes)
-	}
-	return resp.Header.Get("Content-Type"), nil
 }
 
 func writeAssetsManifest(assetsDir string, out map[string]any, downloaded []map[string]any) ([]string, error) {

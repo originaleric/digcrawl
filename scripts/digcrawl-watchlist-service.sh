@@ -167,13 +167,27 @@ build_binary() {
     return
   fi
   mkdir -p "$(dirname "${BIN_PATH}")"
+  mkdir -p "${DIGCRAWL_BUILD_GOCACHE}" "${DIGCRAWL_BUILD_GOMODCACHE}"
   local go_bin
+  local build_log
   go_bin="${GO:-go}"
   local build_args=()
   if [[ -n "${DIGCRAWL_BUILD_TAGS}" ]]; then
     build_args+=("-tags" "${DIGCRAWL_BUILD_TAGS}")
   fi
-  GOCACHE="${DIGCRAWL_BUILD_GOCACHE}" GOMODCACHE="${DIGCRAWL_BUILD_GOMODCACHE}" "${go_bin}" build "${build_args[@]}" -o "${BIN_PATH}" ./cmd/digcrawl
+  build_log="$(mktemp "${DIGCRAWL_BUILD_GOCACHE%/}/digcrawl-build.XXXXXX")" || fail "failed to create Go build log"
+  if ! GOCACHE="${DIGCRAWL_BUILD_GOCACHE}" GOMODCACHE="${DIGCRAWL_BUILD_GOMODCACHE}" "${go_bin}" build "${build_args[@]}" -o "${BIN_PATH}" ./cmd/digcrawl >"${build_log}" 2>&1; then
+    cat "${build_log}" >&2
+    rm -f "${build_log}"
+    fail "failed to build digcrawl binary: ${BIN_PATH}"
+  fi
+
+  # Apple's compiler wrappers can emit this diagnostic when their optional
+  # xcrun lookup cache cannot be persisted. A successful `go build` has
+  # produced a valid binary, so retain every other diagnostic but omit this
+  # misleading non-fatal line from normal installation output.
+  awk '!/^(cc|clang|ar): error: couldn\x27t create cache file .+\/xcrun_db-[^\x27]+\x27 \(errno=Operation not permitted\)$/' "${build_log}" >&2
+  rm -f "${build_log}"
   [[ -x "${BIN_PATH}" ]] || fail "failed to build digcrawl binary: ${BIN_PATH}"
 }
 
@@ -361,7 +375,27 @@ stop_macos() {
 }
 
 mac_service_pid() {
-  launchctl print "gui/${UID}/${SERVICE_LABEL}" 2>/dev/null | awk -F'= ' '/pid =/ {print $2; exit}'
+  launchctl print "gui/${UID}/${SERVICE_LABEL}" 2>/dev/null | awk -F'= ' '/^[[:space:]]*pid =/ {print $2; exit}'
+}
+
+mac_service_state() {
+  launchctl print "gui/${UID}/${SERVICE_LABEL}" 2>/dev/null | awk -F'= ' '/^[[:space:]]*state =/ {print $2; exit}'
+}
+
+wait_for_mac_service_running() {
+  local attempt
+  local pid
+  local state
+  for ((attempt = 0; attempt < 5; attempt++)); do
+    pid="$(mac_service_pid)"
+    state="$(mac_service_state)"
+    if [[ "${state}" == "running" && -n "${pid}" ]]; then
+      printf '%s\n' "${pid}"
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
 }
 
 restart_macos() {
@@ -373,10 +407,9 @@ restart_macos() {
   if launchctl print "gui/${UID}/${SERVICE_LABEL}" >/dev/null 2>&1; then
     old_pid="$(mac_service_pid)"
     if launchctl kickstart -k "gui/${UID}/${SERVICE_LABEL}" >/dev/null 2>&1; then
-      sleep 1
-      new_pid="$(mac_service_pid)"
+      new_pid="$(wait_for_mac_service_running)" || fail "restart did not leave ${SERVICE_LABEL} running; inspect logs or try: launchctl kickstart -k gui/$(id -u)/${SERVICE_LABEL}"
       if [[ -n "${old_pid}" && "${new_pid}" == "${old_pid}" ]]; then
-        fail "restart did not replace ${SERVICE_LABEL}; pid is still ${old_pid}"
+        fail "restart did not replace ${SERVICE_LABEL}; it may still be running the previous binary. Try: launchctl kickstart -k gui/$(id -u)/${SERVICE_LABEL}"
       fi
       echo "restarted ${SERVICE_LABEL}"
       return
@@ -385,10 +418,9 @@ restart_macos() {
   fi
   stop_macos
   start_macos
-  sleep 1
-  new_pid="$(mac_service_pid)"
+  new_pid="$(wait_for_mac_service_running)" || fail "restart did not leave ${SERVICE_LABEL} running; inspect logs or try running this command in a local terminal: launchctl kickstart -k gui/$(id -u)/${SERVICE_LABEL}"
   if [[ -n "${old_pid}" && "${new_pid}" == "${old_pid}" ]]; then
-    fail "restart did not replace ${SERVICE_LABEL}; pid is still ${old_pid}. Try running this command in a local terminal: launchctl kickstart -k gui/$(id -u)/${SERVICE_LABEL}"
+    fail "restart did not replace ${SERVICE_LABEL}; it may still be running the previous binary. Try running this command in a local terminal: launchctl kickstart -k gui/$(id -u)/${SERVICE_LABEL}"
   fi
 }
 

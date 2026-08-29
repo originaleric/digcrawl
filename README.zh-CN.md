@@ -63,6 +63,8 @@ digcrawl mcp --config "$HOME/.config/digcrawl/digcrawl-skill.yaml"
 
 配置完成后，只需把支持的 URL 发给 Agent，并要求它读取、总结、比较、引用，或在明确请求时转写视频。Agent 会在本机调用 DigCrawl，并保留需要登录、验证码、频控等结构化结果。
 
+如需调整本地视频偏好，可以直接对 Agent 说“保存影片”“处理后删除影片”或“将视频下载上限调到 512 MiB”。Skill 会通过本机配置工具仅更新用户 profile 中既有的保留或大小设置，不需要指定平台路径，也不会在对话中直接编辑 profile。保留成功后，视频工具会在 `platform_metadata.retained_media_relative_path` 中返回相对媒体目录的路径，避免暴露本机绝对路径。
+
 Skill 不包含 API Key，也不会暴露浏览器 Cookie。路由规则详见 [Agent Skill](./.agents/skills/digcrawl/)；安全细节详见[在 AI Agent 中使用](#在-ai-agent-中使用)。
 
 ## 快速开始
@@ -101,7 +103,6 @@ macOS 与 Linux 默认将 profile 保存在 `$XDG_CONFIG_HOME/digcrawl/`；未�
 | --- | --- | --- |
 | 归档单个页面 | 将文章或帖子提取为可移植的 Markdown、HTML、JSON 和可选媒体 assets。 | `digcrawl collect <url>` |
 | 批量采集 URL | 处理 URL 文件或本地收件箱，并保留索引或数据库记录。 | `digcrawl collect --file urls.txt` |
-| 导入微信视频号聊天卡片 | 启动用户已授权的 macOS 本地桥接，再导入当前正在播放的单条视频元数据。 | `digcrawl wechat-channels bridge start --yes` |
 | 监控新增内容 | 从 feed、列表、主页或页面发现新增内容，再按计划采集和通知。 | `digcrawl watchlist run --once` |
 | 为 AI Agent 提供阅读能力 | 以官方 Skill 和平台感知路由运行本地 MCP 服务。 | `digcrawl mcp --config <profile>` |
 | 集成到宿主应用 | 使用 HTTP Gateway、Collector、stdio 或 Go SDK。 | [Transport 文档](./transport/README.md) |
@@ -112,7 +113,7 @@ DigCrawl 将采集视为稳定的 **crawl / collect / normalize / export** 管�
 
 | 来源类别 | 已支持来源 |
 | --- | --- |
-| 社交内容 | 微信公众号、微信视频号聊天卡片（需本机桥接）、小红书、抖音、今日头条、X、Reddit、Threads、Instagram、B站、微博、快手、知乎 |
+| 社交内容 | 微信公众号、微信视频号聊天卡片（需本机桥接）、小红书、抖音、今日头条、X、Reddit、Threads、Instagram、B站、微博、快手、知乎、YouTube |
 | 订阅与发现 | RSS、Atom、sitemap、平台列表、主页和已支持的内容 feed |
 | 通用网页 | 任意 `http` 或 `https` 页面，可由通用浏览器读取工具处理 |
 
@@ -130,21 +131,17 @@ URL 模式、登录行为与平台边界请查看[使用说明](./USAGE.md)。
 ./digcrawl collect inbox --watch
 ```
 
-微信视频号没有稳定的单条公开 URL 时，启动本地桥接。它会唤起微信；在微信桌面端打开并播放转发来的卡片后，再从第二个终端导入当前卡片：
-
-```bash
-./digcrawl wechat-channels bridge start --yes
-./digcrawl wechat-channels import
-```
-
-在 macOS 上，`bridge start` 会要求显式确认（或需要 `--yes`），创建仅当前用户可见的本地 CA，并临时启用 PAC：只有 `*.qq.com` 会进入 loopback 桥接；桥接的出站流量继续使用原 HTTP/HTTPS/SOCKS 手动代理，其余请求也维持该原路径；仅对 `qq.com` 做 TLS 解密。它只在内存保存当前视频的 `object_id`、`object_nonce_id`、标题、描述、作者、发布时间和封面 URL，不保存 Cookie、请求头、媒体 URL 或响应正文。带认证的手动代理会被明确拒绝，不会读取或要求用户输入凭据。Ctrl-C 或 `bridge stop` 都会由运行中的桥接进程完成同一份 PAC、服务与证书清理；已启用的既有 PAC 或自动代理发现不会被覆盖。导入接口受本地状态中的能力令牌保护；若启动时传了 `--state-dir`，导入时传同一 `--bridge-state-dir`。导入仍会先预览再保存，且不会下载媒体或启动 ASR。
-
 执行一轮 Watchlist，或在本机常驻运行调度器：
 
 ```bash
 ./digcrawl watchlist run --once --config config/config.yaml
 ./digcrawl watchlist serve --config config/config.yaml
 ```
+
+Watchlist 默认串行执行。如需显式启用有界并发，可配置
+Watchlist.Scheduler.MaxConcurrentRuns 与
+Watchlist.Collect.MaxConcurrentItems；内容 key、Collect 输出路径、
+index.json 和按平台请求间隔仍会受到统一保护。
 
 典型输出目录同时适合人工查看和下游程序消费：
 
@@ -192,8 +189,14 @@ DigCrawl 在用户机器上运行，并将访问边界保持可见：
 
 | 时间 | 更新 | 对使用者的意义 |
 | --- | --- | --- |
+| 2026-08-29 | 新增可选的 Watchlist 来源/条目并发与安全采集协调。 | 发现和处理可使用有界 goroutine；内容去重、输出路径、index.json 与平台请求间隔仍受保护。 |
+| 2026-08-26 | 新增显式的 Skill 视频保留偏好与安全 profile 更新。 | Agent 可在用户明确要求时保存或清理下载影片、调整上限，无需编辑 YAML；本地并发 profile 写入会串行化且可取消。 |
+| 2026-08-26 | 收口视频理解的执行隔离与外部 ID 边界。 | Skill 媒体目录每次执行独立；外部 call ID 仅关联请求，不能覆盖本地媒体或 manifest。 |
+| 2026-08-26 | 解耦 YouTube、Skill 与 Collect 的下载视频理解。 | Provider 管理下载与清理；ASR/抽帧 OCR 只接收本地视频路径并返回内容。MP4 保留必须显式 opt-in，Collect 导出保持独立交付路径。 |
+| 2026-08-25 | 新增公开视频/Shorts 的 YouTube 读取、字幕富化与 Watchlist 发现。 | URL 会归一化，且仅在播放器身份确认后接受内容；不会导出会过期的播放 URL。 |
+| 2026-08-24 | 完成 OpenAI-compatible 视觉 provider 下的视频抽帧 OCR 生产验证。 | 已下载本地视频即使没有可用语音，也可提取内嵌字幕和画面文字；无文字帧会作为正常空结果处理，不再被误报为 provider 失败。 |
 | 2026-08-17 | 重建浏览器恢复、CDP 服务管理与本地 ASR 启动的状态边界。 | 浏览器 profile 未释放前不会被重启；Playwright 缓存路径可动态发现；已有本地 ASR 模型和升级后的 runner 可跨重启继续使用。 |
-| 2026-08 | OCR 收敛为 DigCrawl 自己的 OpenAI-compatible 视觉客户端，并保持显式启用。 | 图片富化不依赖 DigFlow，也不要求仓库内置密钥。 |
+| 2026-08 | OCR 收敛为 DigCrawl 自己的 OpenAI-compatible 视觉客户端，并保持显式启用。 | 图片富化不依赖 DigFlow，也不要求仓库内置密钥；已下载的本地视频可额外显式开启有上限的抽帧 OCR，用于识别内嵌字幕。 |
 | 2026-07 | ASR 支持 API-compatible 与本地 `faster-whisper` provider。 | 视频和音频采集可按需包含本地可控的转写结果。 |
 | 2026-07 | Watchlist 增加持久化来源、任务调度、摘要和通知。 | 来源可持续监控，而非仅一次性采集。 |
 | 2026-07 | 扩展 Reddit、RSS/Atom、B站、微博、快手、知乎、Threads 和 Instagram 支持。 | 更多来源复用同一套规范化采集管线。 |

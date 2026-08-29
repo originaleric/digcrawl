@@ -116,7 +116,7 @@ function Test-CdpReady {
 
 function Test-ServiceCdpReady {
     if (-not (Test-CdpReady)) { return $false }
-    return @((Get-ManagedChromeProcesses)).Count -gt 0
+    return @((Get-MutedManagedChromeProcesses)).Count -gt 0
 }
 
 function Wait-CdpStopped {
@@ -222,18 +222,16 @@ function Get-ManagedChromeProcesses {
     }
 }
 
-function Run-Foreground {
-    Validate-Config
-    if (Test-CdpReady) {
-        if (-not (Test-ServiceCdpReady)) {
-            Fail "CDP port $Port is occupied by a browser that does not use this service profile"
-        }
-        Write-Output "CDP browser with this service profile is already available at $(Get-CdpUrl); monitoring it"
-        while (Test-ServiceCdpReady) { Start-Sleep -Seconds 5 }
-    }
-    Ensure-Directories
-    $chrome = Get-ChromePath
-    $arguments = @(
+function Get-MutedManagedChromeProcesses {
+    # A reachable browser with the right port/profile is not sufficient: the
+    # dedicated service owns the process and must preserve its no-audio
+    # contract across upgrades and restarts.
+    $mutePattern = '(?<!\S)"?--mute-audio"?(?=\s|$)'
+    Get-ManagedChromeProcesses | Where-Object { $_.CommandLine -match $mutePattern }
+}
+
+function Get-ChromeLaunchArguments {
+    @(
         '--headless=new',
         '--remote-debugging-address=127.0.0.1',
         "--remote-debugging-port=$Port",
@@ -241,8 +239,26 @@ function Run-Foreground {
         '--no-first-run',
         '--no-default-browser-check',
         '--disable-gpu',
+        '--mute-audio',
         'about:blank'
     )
+}
+
+function Run-Foreground {
+    Validate-Config
+    if (Test-CdpReady) {
+        if (-not (Test-ServiceCdpReady)) {
+	    if (@(Get-ManagedChromeProcesses).Count -gt 0) {
+	        Fail 'managed CDP browser is missing --mute-audio; run restart'
+	    }
+            Fail "CDP port $Port is occupied by a browser that does not use this service profile"
+        }
+        Write-Output "CDP browser with this service profile is already available at $(Get-CdpUrl); monitoring it"
+        while (Test-ServiceCdpReady) { Start-Sleep -Seconds 5 }
+    }
+    Ensure-Directories
+    $chrome = Get-ChromePath
+	$arguments = Get-ChromeLaunchArguments
     $stdout = Join-Path $LogDir 'chrome.stdout.log'
     $stderr = Join-Path $LogDir 'chrome.stderr.log'
     # Native PowerShell invocation preserves every array item as one process
@@ -296,12 +312,27 @@ function Stop-Service {
     Get-ManagedChromeProcesses | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 }
 
+function Restart-ManagedService {
+    # Keep restart on the same lifecycle boundary as install: task stop and
+    # Chrome termination are asynchronous, so a replacement must not race the
+    # old process for its CDP port or persistent profile.
+    Stop-Service
+    if (-not (Wait-CdpStopped)) {
+        Fail "CDP endpoint did not stop within 10 seconds"
+    }
+    Start-Service
+}
+
 function Show-Status {
     if (Test-ServiceCdpReady) {
         Write-Output "OK   CDP endpoint: $(Get-CdpUrl)"
         return
     }
     if (Test-CdpReady) {
+	if (@(Get-ManagedChromeProcesses).Count -gt 0) {
+	    Write-Output 'FAIL CDP browser is missing --mute-audio; run restart'
+	    exit 1
+	}
         Write-Output "FAIL CDP endpoint is occupied by a browser outside this service profile: $(Get-CdpUrl)"
         exit 1
     }
@@ -334,7 +365,7 @@ switch ($Command) {
     'install' { Install-Service; Show-Status }
     'start' { Start-Service; Show-Status }
     'stop' { Stop-Service }
-    'restart' { Stop-Service; Start-Service }
+    'restart' { Restart-ManagedService }
     'status' { Show-Status }
     'logs' { Show-Logs }
     'uninstall' { Stop-Service; Unregister-ScheduledTask -TaskName $ServiceName -Confirm:$false -ErrorAction SilentlyContinue; Remove-Item -LiteralPath $ServiceConfigPath -Force -ErrorAction SilentlyContinue; Remove-ActiveServiceIfCurrent }

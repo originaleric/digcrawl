@@ -162,7 +162,7 @@ go install ./cmd/digcollect
 | `Headless` | 是否无头模式 |
 | `CookieStoreDir` | 按域名持久化 Cookie，便于登录态采集 |
 | `CDPMode` / `CDPPort` | 启动浏览器时开启 CDP 调试端口 |
-| `CDPConnectExisting` | 连接已有 CDP 浏览器（如手动启动的 Chrome） |
+| `CDPConnectExisting` | 连接已有 CDP 浏览器（如手动启动的 Chrome）；该进程由用户管理，需自行以 `--mute-audio` 启动，或使用下方专用服务 |
 | `UserDataDir` | 持久化浏览器 profile 根目录 |
 | `ProxyURL` | 浏览器代理地址，页面 fetch/API fallback 共用 |
 | `ExtraArgs` | 额外 Chromium 启动参数；适合配置 `--single-process`、`--no-zygote`、禁用 crashpad 等 headless 兼容参数 |
@@ -183,7 +183,7 @@ Windows 使用 PowerShell 与当前用户的 Task Scheduler：
 .\scripts\digcrawl-cdp-browser-service.ps1 status
 ```
 
-Bash 脚本在 macOS 使用用户级 `launchd`、在 Linux 使用 `systemd --user`；PowerShell 脚本在 Windows 使用 Task Scheduler。三者都会在异常退出后重启，Chrome 只监听 `127.0.0.1`，并使用持久 profile。安装时会把已经验证的 Chrome 可执行路径与端口/profile 配置保存到服务定义，避免后台服务因没有交互式 `PATH` 而找不到浏览器；若主动移动自定义浏览器路径，重新执行一次 `install` 即可更新该定义。macOS 还会将启动脚本的私有副本写入 `~/Library/Application Support/DigCrawl/bin`，避免 LaunchAgent 被系统拒绝执行 `Documents` 等受保护目录中的项目脚本。默认端口为 `9323`，通过 `DIGCRAWL_CDP_PORT`、`DIGCRAWL_CDP_USER_DATA_DIR`、`DIGCRAWL_CDP_LOG_DIR` 和 `DIGCRAWL_CHROME_PATH` 覆盖。Skill profile 对应配置为：
+Bash 脚本在 macOS 使用用户级 `launchd`、在 Linux 使用 `systemd --user`；PowerShell 脚本在 Windows 使用 Task Scheduler。三者都会在异常退出后重启，Chrome 只监听 `127.0.0.1`，并使用持久 profile，且以 `--mute-audio` 启动，避免采集页自动播放时从用户设备发声。安装时会把已经验证的 Chrome 可执行路径与端口/profile 配置保存到服务定义，避免后台服务因没有交互式 `PATH` 而找不到浏览器；若主动移动自定义浏览器路径，重新执行一次 `install` 即可更新该定义。macOS 还会将启动脚本的私有副本写入 `~/Library/Application Support/DigCrawl/bin`，避免 LaunchAgent 被系统拒绝执行 `Documents` 等受保护目录中的项目脚本。默认端口为 `9323`，通过 `DIGCRAWL_CDP_PORT`、`DIGCRAWL_CDP_USER_DATA_DIR`、`DIGCRAWL_CDP_LOG_DIR` 和 `DIGCRAWL_CHROME_PATH` 覆盖。Skill profile 对应配置为：
 
 ```yaml
 LocalBrowser:
@@ -194,7 +194,7 @@ LocalBrowser:
 
 这些均为**当前用户**的服务：macOS 与 Windows 会在该用户登录后运行；Linux 的 `systemd --user` 若需在无人登录、重启后仍启动，需由管理员或该用户执行 `loginctl enable-linger <user>`。CDP 只绑定回环地址，但它仍允许同一台机器上能访问该端口的本地进程控制专用浏览器；不要在不受信任的多用户主机上复用这个 profile。
 
-服务安装会把服务身份、端口、profile、日志目录和 Chrome 路径写入当前用户的私有状态目录，并记录“活动服务”。因此安装了自定义服务后，后续的 `start`、`status`、`logs`、`restart`、`uninstall` **不必再次传环境变量**。这些管理命令始终使用保存的运行配置，避免 shell 中残留的端口/profile 变量与已安装服务定义不一致；要修改运行配置请重新执行 `install`。安装和状态检查同时验证 CDP 响应与 Chrome 的 `--remote-debugging-port`、`--user-data-dir`：端口被其他 profile 占用时会明确失败，绝不会把对方的登录会话当成 DigCrawl 专用浏览器。macOS 使用 `DIGCRAWL_CDP_BROWSER_SERVICE_LABEL`，Linux/Windows 使用 `DIGCRAWL_CDP_BROWSER_SERVICE_NAME`；如需在多服务之间切换，可仅为该次命令显式传入对应身份。服务身份只接受字母、数字、`.`、`_`、`-`（Windows 额外允许空格），避免服务文件路径歧义。旧版本已安装的服务仍可按原默认值管理；重新执行一次 `install` 即可迁移到持久状态。
+服务安装会把服务身份、端口、profile、日志目录和 Chrome 路径写入当前用户的私有状态目录，并记录“活动服务”。因此安装了自定义服务后，后续的 `start`、`status`、`logs`、`restart`、`uninstall` **不必再次传环境变量**。这些管理命令始终使用保存的运行配置，避免 shell 中残留的端口/profile 变量与已安装服务定义不一致；要修改运行配置请重新执行 `install`。macOS 的 `restart` 会同步当前脚本到 launchd 私有副本；`status` 会提示该副本落后于源码，或运行中的服务缺少 `--mute-audio`。安装和状态检查同时验证 CDP 响应与 Chrome 的 `--remote-debugging-port`、`--user-data-dir`：端口被其他 profile 占用时会明确失败，绝不会把对方的登录会话当成 DigCrawl 专用浏览器。macOS 使用 `DIGCRAWL_CDP_BROWSER_SERVICE_LABEL`，Linux/Windows 使用 `DIGCRAWL_CDP_BROWSER_SERVICE_NAME`；如需在多服务之间切换，可仅为该次命令显式传入对应身份。服务身份只接受字母、数字、`.`、`_`、`-`（Windows 额外允许空格），避免服务文件路径歧义。旧版本已安装的服务仍可按原默认值管理；重新执行一次 `install` 即可迁移到持久状态。
 
 ### Platform（平台读取）
 
@@ -278,7 +278,29 @@ Platform:
 | `AppendToMarkdown` | 是否把 OCR 文本追加到 Markdown，默认 `true` |
 | `AppendToText` | 是否把 OCR 文本追加到纯文本，默认 `false` |
 
-OCR 启用后会在平台工具、通用浏览器读取和 Collect 导出中统一生效。结果写入 `platform_metadata.ocr_results`，并记录 `ocr_count`、provider、model、图片来源和错误诊断。直接平台/浏览器调用会把截图作为显式 OCR 候选；Collect 下载媒体时会优先对本地 `.assets/` 图片做 OCR，未下载媒体时会使用远程图片 URL。OpenAI-compatible Provider 对本地图片和截图会转换为 data URL，再调用 `/chat/completions`。
+OCR 启用后会在平台工具、通用浏览器读取和 Collect 导出中统一生效。结果写入 `platform_metadata.ocr_results`，并记录 `ocr_count`、provider、model、图片来源和错误诊断。直接平台/浏览器调用会把截图作为显式 OCR 候选；Collect 下载媒体时会优先对本地 `.assets/` 图片做 OCR，未下载媒体时会使用远程图片 URL。OpenAI-compatible Provider 对本地图片和截图会转换为 data URL，再调用 `/chat/completions`。合法响应但没有可读文字的图片或视频帧会保留为正常空结果：不计入 `ocr_count`、不追加空的 `## OCR` 段；HTTP 失败、响应无法解析或响应缺少 `choices` 仍会记录为错误。
+
+对于只有 BGM 或没有可用语音的视频，可以显式开启本地视频抽帧 OCR。Collect 在 `Collect.DownloadMedia=true` 时会处理其导出的视频；直接平台读取（如 `youtube.video.read`）则需同时显式请求 `include_ocr=true`、启用 `Skill.Media.DownloadMedia` 和 `Skill.OCR.VideoFrames.Enabled`。Provider 仅负责下载受限本地 MP4，并把文件路径传给既有 ASR/抽帧 OCR core；这些 core 只输入视频、输出识别结果，不感知平台、artifact 或 transport。直接读取默认在识别后删除 MP4；用户明确要求保留时，宿主调用 `skill.media.configure` 设置 `retain_downloaded_video=true`，文件保留在既有 `Skill.Media.Dir` 下。成功结果会在 `platform_metadata.retained_media_relative_path` 给出相对此目录的路径，宿主据此定位文件，且不得把本机绝对路径返回到对话。`digcrawl init --profile skill` 会为该字段生成 profile 同级的跨平台绝对目录；不需要、也不应在文档中写死某个用户名路径。用户也可通过同一工具设置 `max_bytes` 调整每次下载上限。通用 Skill 媒体获取会在该目录内为每次执行创建私有子目录；外部 call ID 仅关联请求，不能参与目录或 manifest 命名。Collect 的 MP4 导出是独立交付路径，不参与 ASR/OCR 的输入契约。DigCrawl 以固定间隔调用本机 `ffmpeg` 抽取 JPEG，再交给已配置的 OCR provider；临时帧在识别后删除，不会写入 `.assets/` 或 OCR 结果。它不替代 ASR：`ASR.Enabled=true` 处理音频，`OCR.VideoFrames.Enabled=true` 处理内嵌文字；两者均开启时各自执行，任一失败不会阻止另一项。`MaxFrames` 与 `TimeoutSec` 分别是每个视频的抽帧数量和 ffmpeg 运行上限；`MaxTotalFrames` 则是单条内容的硬总量预留上限，按媒体出现顺序分配，失败或没有可抽帧的视频也会占用其预留份额，以防异常媒体绕过限制。`OCR.MaxImages` 只限制文章图片与截图，两类预算互不抢占。若 provider 是远程服务，抽出的帧会发送给它，因此默认关闭。
+
+```yaml
+OCR:
+  Enabled: true
+  Provider: openai_compatible
+  APIKey: "<vision-api-key>"
+  # 示例：智谱 OpenAI-compatible 视觉模型；也可替换为其他兼容端点和模型。
+  BaseURL: "https://open.bigmodel.cn/api/paas/v4"
+  Model: "glm-5v-turbo"
+  VideoFrames:
+    Enabled: true
+    IntervalSec: 5
+    MaxFrames: 8
+    MaxTotalFrames: 16
+    TimeoutSec: 120
+    # 可选；为空时从 PATH 使用 ffmpeg。
+    FFmpegPath: "ffmpeg"
+```
+
+请将 `APIKey` 仅写入本地私有配置，不要提交到仓库。`zhipu_ocr` 不是 DigCrawl 的 provider 名称；如使用智谱，请保持 `Provider: openai_compatible`，并选择支持 Chat Completions 图像输入的视觉模型。
 
 ### ASR（视频语音转写）
 
@@ -366,6 +388,13 @@ Watchlist 用于按配置定期检查指定来源的新增内容，复用 Collec
 | `Enabled` | 是否启用内置调度器，默认 `true` |
 | `TickInterval` | 到期扫描频率，默认 `5m` |
 | `Jitter` | 每轮执行前随机抖动，避免多实例同时触发 |
+| `MaxConcurrentRuns` | 同时执行的 Watchlist 来源任务数；默认 `1` 保持串行，设置大于 `1` 时显式启用并行 |
+
+`Watchlist.Collect` 字段：
+
+| 字段 | 说明 |
+|------|------|
+| `MaxConcurrentItems` | 单个来源内同时进行详情采集、摘要与投递的条目数；默认 `1` 保持串行。Collect 会保留唯一输出路径、串行更新 index.json，并按平台统一限流。 |
 
 `Tasks` 是新的通用定时任务描述，推荐新配置优先使用 `Tasks`，旧 `Watchlist.Items` 继续兼容。当前已落地的任务类型：
 
@@ -376,9 +405,9 @@ Watchlist 用于按配置定期检查指定来源的新增内容，复用 Collec
 
 `Tasks[].Schedule.Mode` 当前支持 `interval` 和 `daily`。`interval` 使用 `Every` 的 Go duration，例如 `6h`、`24h`、`30m`；`daily` 使用本机时区的 `At: "HH:MM"`，例如每天上午 9 点写 `At: "09:00"`。调度状态写入通用 `dc_tasks_runtime` / `dc_task_runs` / `dc_task_locks` / `dc_task_events`：任务完成后会按当前 schedule 更新 `next_run_at` 并判断是否到期。
 
-Watchlist 的来源发现由 `internal/source.Service` 统一承载，当前覆盖 RSS/Atom、sitemap、HTML 链接发现、今日头条固定文章/作者页/视频列表页、X/Twitter 单帖/用户页链接发现、抖音作品/用户页链接发现、小红书笔记/用户页链接发现、微信公众号文章/列表页链接发现、Reddit listing/comment 来源，以及 B站、微博、快手、知乎的主页/列表页链接发现。Watchlist 只负责调度、去重、详情采集、摘要和通知，因此后续新增渠道应优先接入 `internal/source`，再由 Watchlist、Tasks 或其他 domain 复用。
+Watchlist 的来源发现由 `internal/source.Service` 统一承载，当前覆盖 RSS/Atom、sitemap、HTML 链接发现、今日头条固定文章/作者页/视频列表页、X/Twitter 单帖/用户页链接发现、抖音作品/用户页链接发现、小红书笔记/用户页链接发现、微信公众号文章/列表页链接发现、Reddit listing/comment 来源，以及 B站、微博、快手、知乎、YouTube 的主页/列表页链接发现。Watchlist 只负责调度、去重、详情采集、摘要和通知，因此后续新增渠道应优先接入 `internal/source`，再由 Watchlist、Tasks 或其他 domain 复用。
 
-推荐维护来源页或列表页 source，例如 `rss`、`sitemap`、`reddit_subreddit`、`reddit_user`、`toutiao_author`、`x_user`、`douyin_user`、`xiaohongshu_user`、`wechat_list`、`bilibili_user`、`weibo_user`、`kuaishou_user`、`zhihu_user`、`web_list`。`toutiao_article`、`toutiao_video`、`x_post`、`douyin_video`、`xiaohongshu_note`、`wechat_article`、`reddit_post_comments`、`bilibili_video`、`weibo_post`、`kuaishou_video`、`zhihu_answer`、`zhihu_article`、`zhihu_zvideo` 属于详情页或评论变更监控，适合单次归档、评论更新或互动状态检查，不适合作为“新增 po 文”主来源。
+推荐维护来源页或列表页 source，例如 `rss`、`sitemap`、`reddit_subreddit`、`reddit_user`、`toutiao_author`、`x_user`、`douyin_user`、`xiaohongshu_user`、`wechat_list`、`bilibili_user`、`weibo_user`、`kuaishou_user`、`zhihu_user`、`youtube_channel`、`web_list`。`toutiao_article`、`toutiao_video`、`x_post`、`douyin_video`、`xiaohongshu_note`、`wechat_article`、`reddit_post_comments`、`bilibili_video`、`weibo_post`、`kuaishou_video`、`zhihu_answer`、`zhihu_article`、`zhihu_zvideo`、`youtube_video` 属于详情页或评论变更监控，适合单次归档、评论更新或互动状态检查，不适合作为“新增 po 文”主来源。
 
 上线前可以先做 discover-only 验证，只检查来源页能否发现内容，不写入 `dc_watchlist_items`，也不会触发 collect、summary 或 notify：
 
@@ -410,6 +439,14 @@ Threads 已支持：
 
 - `threads_post` / `post` / `thread`：固定 Threads 帖子 URL 监控，例如 `https://www.threads.com/@zuck/post/...` 或旧 `threads.net` 链接。该模式复用 `threads.post.read`，并统一归一到当前 `threads.com` canonical URL。
 - `threads_user` / `user` / `profile`：用户主页列表发现，抽取 `/@user/post/...` 链接，发现结果使用 `threads:<post_id>` 去重。默认 `auth_mode=public`，不读取本机 Cookie；需要登录态时必须同时设置全局 `Social.Threads.AuthMode=local_session` 和 source options `auth_mode=local_session`。
+
+YouTube 已支持：
+
+- `youtube_video` / `video`：固定公开视频或 Shorts URL 监控，例如 `https://www.youtube.com/watch?v=...`、`https://youtu.be/...`、`https://www.youtube.com/shorts/...`；统一归一为 `https://www.youtube.com/watch?v=<video_id>`。
+- `youtube_channel` / `channel`：频道页或列表页链接发现，抽取公开视频与 Shorts 的链接，并按 `youtube:<video_id>` 去重。
+- `youtube.video.read` 通过本地浏览器读取标题、简介、频道、发布时间、封面和可公开取得的字幕轨。显式 ASR 或视频帧 OCR 请求时，YouTube provider 需要本机 `yt-dlp` 与 `ffmpeg`，下载并合并自适应流为受限本地 MP4，再直接调用通用 ASR 与视频抽帧 OCR。默认完成后删除 MP4；用户明确要求保留时，host agent 调用 `skill.media.configure` 的 `retain_downloaded_video=true`，保留到 `Skill.Media.Dir`，并从返回的 `platform_metadata.retained_media_relative_path` 定位该文件。`include_media=true` 仅返回公开视频封面等媒体元数据，不承诺通过 stdio MCP 交付大 MP4。不会导出会过期的播放流 URL；没有公开字幕时仍返回页面元数据与简介。
+
+YouTube 下载最高选择 360p，优先保证音轨、下载时延与抽帧效率；直接 Skill 理解受 `Skill.Media.MaxBytes` 限制，Collect 导出受 `Collect.MaxMediaBytes` 限制。较长视频需要在相应 profile 中提高既有预算；`yt-dlp` 必须预先安装并位于 `PATH`，例如 macOS 可使用 `brew install yt-dlp`。
 
 Instagram 已支持：
 
@@ -493,6 +530,9 @@ Watchlist:
     Enabled: true
     TickInterval: "5m"
     Jitter: "30s"
+    MaxConcurrentRuns: 3
+  Collect:
+    MaxConcurrentItems: 5
   NotifyOnFirstRun: false
   MaxItemsPerRun: 20
   LockTTL: "30m"
@@ -903,7 +943,7 @@ digcrawl collector --server http://127.0.0.1:8790 --token dev
 
 ### Agent Skill 最小 profile
 
-使用仓库级 `digcrawl` Skill 时，优先通过 `digcrawl init --profile skill` 创建用户目录中的最小 profile；也可复制 `config/digcrawl-skill.example.yaml` 自行维护。宿主配置只保存二进制和 profile 的绝对路径，DigCrawl 不会自动修改它。图片文字和页面视觉理解优先由宿主 Agent 读取 MCP 返回的截图附件；`media` URL 只作来源引用。宿主也负责基于 Markdown、图片观察和 `asr_text` 完成总结。仅视频转写使用本地 `Skill.ASR`，用户明确请求时才需启用 `Skill.Media.DownloadMedia`、配置媒体目录和 ASR 依赖；`skill.asr.enable` 会在写入这两个 opt-in 开关前检查 ffmpeg 与当前 provider，缺失依赖时不会写入配置。默认 Skill profile 不包含 OCR 或 LLM API Key，也不使用 DigFlow。
+使用仓库级 `digcrawl` Skill 时，优先通过 `digcrawl init --profile skill` 创建用户目录中的最小 profile；也可复制 `config/digcrawl-skill.example.yaml` 自行维护。`init` 会生成 profile 同级、跨平台的绝对 `Skill.Media.Dir`，宿主配置只保存二进制和 profile 的绝对路径。图片文字和页面视觉理解优先由宿主 Agent 读取 MCP 返回的截图附件；`media` URL 只作来源引用。宿主也负责基于 Markdown、图片观察和 `asr_text` 完成总结。仅视频转写使用本地 `Skill.ASR`，用户明确请求时才需启用 `Skill.Media.DownloadMedia`、配置媒体目录和 ASR 依赖；下载的 MP4 默认只在本次理解期间存在。用户说“保存影片”“处理后删除影片”或明确调整下载上限时，host agent 应调用 `skill.media.configure`，仅覆写既有的保留开关或 `max_bytes`，而不是编辑 YAML；工具结果会返回实际媒体目录。保留成功的视频在视频工具结果的 `platform_metadata.retained_media_relative_path` 中以相对路径返回，宿主以该目录解析它，不能要求或显示绝对路径。配置写入会同时受同进程准入和跨进程 profile 锁保护；若另一项本地配置更新尚未完成，请根据可重试的 `SKILL_PROFILE_BUSY` 稍后重试。`skill.asr.enable` 会在写入两个基础 opt-in 开关前检查 ffmpeg 与当前 provider，缺失依赖时不会写入配置。默认 Skill profile 不包含 OCR 或 LLM API Key，也不使用 DigFlow。
 
 ---
 
@@ -937,6 +977,7 @@ Collect 在**无云端宿主**的情况下，把链接抓取并导出到本地�
 | 微博 | `weibo.com`、`m.weibo.cn` 等 | `weibo.post.read` |
 | 快手 | `kuaishou.com`、`v.kuaishou.com` 等 | `kuaishou.video.read` |
 | 知乎 | `zhihu.com`、`zhuanlan.zhihu.com` 等 | `zhihu.content.read` |
+| YouTube 视频 / Shorts | `youtube.com/watch`、`youtube.com/shorts`、`youtu.be` | `youtube.video.read` |
 | RSS / Atom | `.rss`、`.atom`、`.xml`、`/feed`、`/rss` | `feed.read` |
 | 任意网页 | 其他 `http(s)` URL | `browser.browse`（通用网页） |
 
@@ -953,6 +994,7 @@ digcrawl collect "https://www.bilibili.com/video/BVxxxx"
 digcrawl collect "https://m.weibo.cn/detail/xxxx"
 digcrawl collect "https://www.kuaishou.com/short-video/xxxx"
 digcrawl collect "https://www.zhihu.com/question/123/answer/456"
+digcrawl collect "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
 digcrawl collect "https://example.com/article" --format md,html,json --out ./my-output
 ```
 
@@ -1076,6 +1118,7 @@ collect-inbox/
 | `weibo.post.read` | 微博详情页 |
 | `kuaishou.video.read` | 快手视频页 |
 | `zhihu.content.read` | 知乎回答 / 专栏文章 / 视频 |
+| `youtube.video.read` | YouTube 视频 / Shorts 与公开字幕 |
 
 ### 浏览器（browser）
 
@@ -1252,7 +1295,6 @@ ExtraArgs:
 - 仓库：<https://github.com/originaleric/digcrawl>
 - 示例配置：[`config/config.yaml`](config/config.yaml)
 - Collect 模块：[`collect/README.md`](collect/README.md)
-- 更新记录：[`updates/`](updates/)
 
 ---
 
