@@ -138,6 +138,11 @@ Run a watchlist once, or keep its scheduler running locally:
 ./digcrawl watchlist serve --config config/config.yaml
 ```
 
+Watchlist execution is serial by default. To opt in to bounded parallel source
+runs and item processing, configure Watchlist.Scheduler.MaxConcurrentRuns and
+Watchlist.Collect.MaxConcurrentItems; shared collection output paths,
+index.json, and per-platform request spacing remain protected.
+
 Typical output is organized for both humans and downstream programs:
 
 ```text
@@ -184,6 +189,7 @@ Read the [runtime documentation](./runtime/README.md) before exposing a Gateway 
 
 | Date | Highlight | Why it matters |
 | --- | --- | --- |
+| 2026-08-29 | Added opt-in Watchlist source/item concurrency with safe collection coordination. | Discovery and processing can use bounded goroutines while content keys, output paths, index.json, and platform request spacing remain controlled. |
 | 2026-08-26 | Added explicit Skill video-retention preferences and safe profile updates. | Agents can retain or clean up downloaded videos and set a download cap without editing YAML; concurrent local profile writes are serialized and cancellable. |
 | 2026-08-26 | Finalized execution isolation and external-ID boundaries for video understanding. | Each Skill media operation owns a distinct workspace; external call IDs correlate requests only and cannot overwrite local media or manifests. |
 | 2026-08-26 | Decoupled downloaded-video understanding for YouTube, Skill, and Collect. | Providers own download/cleanup; ASR and frame OCR accept only a local video path and return content. MP4 retention is explicit opt-in and Collect export remains a separate delivery path. |

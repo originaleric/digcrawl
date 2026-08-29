@@ -284,6 +284,11 @@ Watchlist:
     Enabled: true
     TickInterval: "5m"
     Jitter: "30s"
+    # Opt in to parallel Watchlist source runs. Omit or set 1 to preserve serial execution.
+    MaxConcurrentRuns: 3
+  Collect:
+    # Opt in to parallel detail processing within each Watchlist source.
+    MaxConcurrentItems: 5
   # Source.Mode:
   #   yaml     - 从下方 Items 和根级 Tasks 读取，适合少量本地配置和兼容旧配置。
   #   database - 从 dc_watchlist_sources 读取，适合长期维护的大清单。

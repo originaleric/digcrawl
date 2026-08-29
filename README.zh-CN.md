@@ -138,6 +138,11 @@ URL 模式、登录行为与平台边界请查看[使用说明](./USAGE.md)。
 ./digcrawl watchlist serve --config config/config.yaml
 ```
 
+Watchlist 默认串行执行。如需显式启用有界并发，可配置
+Watchlist.Scheduler.MaxConcurrentRuns 与
+Watchlist.Collect.MaxConcurrentItems；内容 key、Collect 输出路径、
+index.json 和按平台请求间隔仍会受到统一保护。
+
 典型输出目录同时适合人工查看和下游程序消费：
 
 ```text
@@ -184,6 +189,7 @@ DigCrawl 在用户机器上运行，并将访问边界保持可见：
 
 | 时间 | 更新 | 对使用者的意义 |
 | --- | --- | --- |
+| 2026-08-29 | 新增可选的 Watchlist 来源/条目并发与安全采集协调。 | 发现和处理可使用有界 goroutine；内容去重、输出路径、index.json 与平台请求间隔仍受保护。 |
 | 2026-08-26 | 新增显式的 Skill 视频保留偏好与安全 profile 更新。 | Agent 可在用户明确要求时保存或清理下载影片、调整上限，无需编辑 YAML；本地并发 profile 写入会串行化且可取消。 |
 | 2026-08-26 | 收口视频理解的执行隔离与外部 ID 边界。 | Skill 媒体目录每次执行独立；外部 call ID 仅关联请求，不能覆盖本地媒体或 manifest。 |
 | 2026-08-26 | 解耦 YouTube、Skill 与 Collect 的下载视频理解。 | Provider 管理下载与清理；ASR/抽帧 OCR 只接收本地视频路径并返回内容。MP4 保留必须显式 opt-in，Collect 导出保持独立交付路径。 |

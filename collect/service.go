@@ -3,8 +3,9 @@ package collect
 import (
 	"context"
 	"fmt"
-	"math/rand"
+	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/originaleric/digcrawl/collect/store"
@@ -19,6 +20,16 @@ type Service struct {
 	rt        *runtime.Runtime
 	artifacts artifact.Store
 	collectDB store.Store
+
+	// Output paths and index.json are shared, mutable filesystem state. Keep
+	// only path reservation and index updates serialized; media download, OCR,
+	// and ASR may proceed concurrently after a path has been reserved.
+	outputMu           sync.Mutex
+	reservedOutputPath map[string]struct{}
+	indexMu            sync.Mutex
+
+	rateMu      sync.Mutex
+	nextAllowed map[string]time.Time
 }
 
 // NewService builds a collect service with platform and browser tools.
@@ -65,26 +76,55 @@ func (s *Service) outputRoot(outDir string) string {
 	return outDir
 }
 
-func (s *Service) throttle(platform string) {
+func (s *Service) platformRateLimit(platform string) time.Duration {
 	ms := s.cfg.Collect.RateLimitMs
 	if s.cfg.Collect.PlatformRateLimits != nil {
-		if v, ok := s.cfg.Collect.PlatformRateLimits[platform]; ok && v > 0 {
+		if v, ok := s.cfg.Collect.PlatformRateLimits[strings.ToLower(strings.TrimSpace(platform))]; ok && v > 0 {
 			ms = v
 		}
 	}
 	if ms <= 0 {
-		return
+		return 0
 	}
-	jitter := ms / 5
-	if jitter < 1 {
-		jitter = 1
+	return time.Duration(ms) * time.Millisecond
+}
+
+func (s *Service) reservePlatformSlot(platform string, now time.Time) time.Time {
+	interval := s.platformRateLimit(platform)
+	if interval <= 0 {
+		return now
 	}
-	delta := rand.Intn(jitter*2+1) - jitter
-	sleepMs := ms + delta
-	if sleepMs < 0 {
-		sleepMs = ms
+	key := strings.ToLower(strings.TrimSpace(platform))
+	if key == "" {
+		key = "default"
 	}
-	time.Sleep(time.Duration(sleepMs) * time.Millisecond)
+	s.rateMu.Lock()
+	defer s.rateMu.Unlock()
+	if s.nextAllowed == nil {
+		s.nextAllowed = make(map[string]time.Time)
+	}
+	slot := s.nextAllowed[key]
+	if slot.Before(now) {
+		slot = now
+	}
+	s.nextAllowed[key] = slot.Add(interval)
+	return slot
+}
+
+func (s *Service) waitForPlatformRateLimit(ctx context.Context, platform string) error {
+	slot := s.reservePlatformSlot(platform, time.Now())
+	delay := time.Until(slot)
+	if delay <= 0 {
+		return nil
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 func (s *Service) collectTimeoutMs() int {
@@ -121,6 +161,9 @@ func (s *Service) CollectURLWithOptions(ctx context.Context, url string, formats
 	if err != nil {
 		return ExportResult{}, err
 	}
+	if err := s.waitForPlatformRateLimit(ctx, match.Platform); err != nil {
+		return ExportResult{}, err
+	}
 
 	out, _, err := Run(ctx, s.rt, RunOptions{
 		URL:             url,
@@ -134,7 +177,7 @@ func (s *Service) CollectURLWithOptions(ctx context.Context, url string, formats
 		return ExportResult{}, err
 	}
 
-	result, err := Export(ctx, out, s.exportOpts(root, formats))
+	result, err := s.export(ctx, out, root, formats)
 	if err != nil {
 		return ExportResult{}, err
 	}
@@ -145,8 +188,58 @@ func (s *Service) CollectURLWithOptions(ctx context.Context, url string, formats
 	return result, nil
 }
 
+func (s *Service) export(ctx context.Context, out map[string]any, root string, formats []string) (ExportResult, error) {
+	opts, paths, err := prepareExport(out, s.exportOpts(root, formats))
+	if err != nil {
+		return ExportResult{}, err
+	}
+	paths, release, err := s.reserveOutputPaths(paths, opts.Formats)
+	if err != nil {
+		return ExportResult{}, err
+	}
+	defer release()
+	return exportToPaths(ctx, out, opts, paths)
+}
+
+func (s *Service) reserveOutputPaths(paths OutputPaths, formats []string) (OutputPaths, func(), error) {
+	s.outputMu.Lock()
+	defer s.outputMu.Unlock()
+	if s.reservedOutputPath == nil {
+		s.reservedOutputPath = make(map[string]struct{})
+	}
+	for i := 0; i < 1000; i++ {
+		try := paths
+		if i > 0 {
+			suffix := fmt.Sprintf("_%d", i)
+			base := paths.BaseName + suffix
+			try = OutputPaths{
+				Dir:      paths.Dir,
+				BaseName: base,
+				Markdown: filepath.Join(paths.Dir, base+".md"),
+				HTML:     filepath.Join(paths.Dir, base+".html"),
+				JSON:     filepath.Join(paths.Dir, base+".json"),
+				Assets:   filepath.Join(paths.Dir, base+".assets"),
+			}
+		}
+		key := try.Dir + "\x00" + try.BaseName
+		if _, reserved := s.reservedOutputPath[key]; reserved || anyTargetExists(try, formats) {
+			continue
+		}
+		s.reservedOutputPath[key] = struct{}{}
+		release := func() {
+			s.outputMu.Lock()
+			delete(s.reservedOutputPath, key)
+			s.outputMu.Unlock()
+		}
+		return try, release, nil
+	}
+	return OutputPaths{}, nil, fmt.Errorf("too many concurrent exports for %q", paths.BaseName)
+}
+
 func (s *Service) persistCollect(ctx context.Context, url string, match Match, out map[string]any, result *ExportResult, root string) error {
 	if s.cfg.Collect.UseIndexJSON() {
+		s.indexMu.Lock()
+		defer s.indexMu.Unlock()
 		entry := EntryFromExport(url, match.Platform, out, result.Paths, result.Written)
 		if err := UpsertEntry(root, entry); err != nil {
 			return err
@@ -170,15 +263,7 @@ func (s *Service) CollectFile(ctx context.Context, path string, formats []string
 	}
 	var results []ExportResult
 	var firstErr error
-	for i, line := range lines {
-		if i > 0 {
-			match, err := Detect(line)
-			if err == nil {
-				s.throttle(match.Platform)
-			} else {
-				s.throttle("")
-			}
-		}
+	for _, line := range lines {
 		r, err := s.CollectURL(ctx, line, formats, outDir)
 		if err != nil {
 			if firstErr == nil {

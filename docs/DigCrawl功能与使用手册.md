@@ -175,7 +175,7 @@ curl -H "Authorization: Bearer $DIGCRAWL_GATEWAY_TOKEN" \
 
 ## 6. 定时与通知
 
-`watchlist serve` 会按 `Watchlist.Scheduler.TickInterval` 扫描到期任务。任务可以使用 interval 或 daily：
+`watchlist serve` 会按 `Watchlist.Scheduler.TickInterval` 扫描到期任务。默认串行执行；如需显式启用并行，可设置 `Watchlist.Scheduler.MaxConcurrentRuns`（来源任务并发数）与 `Watchlist.Collect.MaxConcurrentItems`（单个来源内的条目并发数）。两项未设置或设置为 `1` 时均保持串行。并发采集仍会保留唯一输出路径、串行更新 index.json，并复用 Collect 的按平台限流。任务可以使用 interval 或 daily：
 
 ```yaml
 Tasks:

@@ -606,6 +606,7 @@ type WatchlistConfig struct {
 	DryRun           *bool                      `yaml:"DryRun" json:"DryRun,omitempty"`
 	DefaultInterval  string                     `yaml:"DefaultInterval" json:"DefaultInterval,omitempty"`
 	Scheduler        SchedulerConfig            `yaml:"Scheduler" json:"Scheduler,omitempty"`
+	Collect          WatchlistCollectConfig     `yaml:"Collect" json:"Collect,omitempty"`
 	Source           WatchlistSourceConfig      `yaml:"Source" json:"Source,omitempty"`
 	NotifyOnFirstRun *bool                      `yaml:"NotifyOnFirstRun" json:"NotifyOnFirstRun,omitempty"`
 	MaxItemsPerRun   int                        `yaml:"MaxItemsPerRun" json:"MaxItemsPerRun,omitempty"`
@@ -646,9 +647,10 @@ func (c WatchlistSourceConfig) ModeOrDefault() string {
 
 // SchedulerConfig controls the in-process periodic scheduler.
 type SchedulerConfig struct {
-	Enabled      *bool  `yaml:"Enabled" json:"Enabled,omitempty"`
-	TickInterval string `yaml:"TickInterval" json:"TickInterval,omitempty"`
-	Jitter       string `yaml:"Jitter" json:"Jitter,omitempty"`
+	Enabled           *bool  `yaml:"Enabled" json:"Enabled,omitempty"`
+	TickInterval      string `yaml:"TickInterval" json:"TickInterval,omitempty"`
+	Jitter            string `yaml:"Jitter" json:"Jitter,omitempty"`
+	MaxConcurrentRuns int    `yaml:"MaxConcurrentRuns" json:"MaxConcurrentRuns,omitempty"`
 }
 
 func (c SchedulerConfig) EnabledOrDefault() bool {
@@ -667,6 +669,29 @@ func (c SchedulerConfig) TickIntervalOrDefault() string {
 
 func (c SchedulerConfig) JitterOrDefault() string {
 	return strings.TrimSpace(c.Jitter)
+}
+
+// MaxConcurrentRunsOrDefault limits simultaneously active Watchlist source
+// runs. One preserves the historical sequential scheduler behavior.
+func (c SchedulerConfig) MaxConcurrentRunsOrDefault() int {
+	if c.MaxConcurrentRuns > 0 {
+		return c.MaxConcurrentRuns
+	}
+	return 1
+}
+
+// WatchlistCollectConfig controls per-source processing after discovery.
+type WatchlistCollectConfig struct {
+	MaxConcurrentItems int `yaml:"MaxConcurrentItems" json:"MaxConcurrentItems,omitempty"`
+}
+
+// MaxConcurrentItemsOrDefault limits simultaneous detail collection, summary,
+// and delivery work within one Watchlist source. One preserves prior behavior.
+func (c WatchlistCollectConfig) MaxConcurrentItemsOrDefault() int {
+	if c.MaxConcurrentItems > 0 {
+		return c.MaxConcurrentItems
+	}
+	return 1
 }
 
 // WatchlistItem is one monitored source.
@@ -1438,7 +1463,8 @@ func init() {
 			},
 			Watchlist: WatchlistConfig{
 				DefaultInterval:  "6h",
-				Scheduler:        SchedulerConfig{TickInterval: "5m"},
+				Scheduler:        SchedulerConfig{TickInterval: "5m", MaxConcurrentRuns: 1},
+				Collect:          WatchlistCollectConfig{MaxConcurrentItems: 1},
 				Source:           WatchlistSourceConfig{Mode: "yaml"},
 				MaxItemsPerRun:   20,
 				LockTTL:          "30m",

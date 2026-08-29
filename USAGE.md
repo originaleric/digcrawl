@@ -375,6 +375,13 @@ Watchlist 用于按配置定期检查指定来源的新增内容，复用 Collec
 | `Enabled` | 是否启用内置调度器，默认 `true` |
 | `TickInterval` | 到期扫描频率，默认 `5m` |
 | `Jitter` | 每轮执行前随机抖动，避免多实例同时触发 |
+| `MaxConcurrentRuns` | 同时执行的 Watchlist 来源任务数；默认 `1` 保持串行，设置大于 `1` 时显式启用并行 |
+
+`Watchlist.Collect` 字段：
+
+| 字段 | 说明 |
+|------|------|
+| `MaxConcurrentItems` | 单个来源内同时进行详情采集、摘要与投递的条目数；默认 `1` 保持串行。Collect 会保留唯一输出路径、串行更新 index.json，并按平台统一限流。 |
 
 `Tasks` 是新的通用定时任务描述，推荐新配置优先使用 `Tasks`，旧 `Watchlist.Items` 继续兼容。当前已落地的任务类型：
 
@@ -510,6 +517,9 @@ Watchlist:
     Enabled: true
     TickInterval: "5m"
     Jitter: "30s"
+    MaxConcurrentRuns: 3
+  Collect:
+    MaxConcurrentItems: 5
   NotifyOnFirstRun: false
   MaxItemsPerRun: 20
   LockTTL: "30m"

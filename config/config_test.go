@@ -809,6 +809,9 @@ Watchlist:
   Scheduler:
     TickInterval: 2m
     Jitter: 10s
+    MaxConcurrentRuns: 3
+  Collect:
+    MaxConcurrentItems: 5
 Tasks:
   - ID: reddit-ai-watch
     Name: Reddit AI
@@ -839,6 +842,12 @@ Tasks:
 	if got := cfg.Watchlist.Scheduler.JitterOrDefault(); got != "10s" {
 		t.Fatalf("Jitter=%q", got)
 	}
+	if got := cfg.Watchlist.Scheduler.MaxConcurrentRunsOrDefault(); got != 3 {
+		t.Fatalf("MaxConcurrentRuns=%d", got)
+	}
+	if got := cfg.Watchlist.Collect.MaxConcurrentItemsOrDefault(); got != 5 {
+		t.Fatalf("MaxConcurrentItems=%d", got)
+	}
 	if got := cfg.Watchlist.PersistenceDriverOrDefault(); got != "sqlite" {
 		t.Fatalf("Watchlist persistence driver=%q", got)
 	}
@@ -851,6 +860,16 @@ Tasks:
 	task := cfg.Tasks[0]
 	if task.ID != "reddit-ai-watch" || task.Schedule.Mode != "daily" || task.Schedule.At != "09:00" || task.Source.Options["sort"] != "new" {
 		t.Fatalf("task not parsed: %+v", task)
+	}
+}
+
+func TestWatchlistConcurrencyDefaultsPreserveSerialExecution(t *testing.T) {
+	var watchlist WatchlistConfig
+	if got := watchlist.Scheduler.MaxConcurrentRunsOrDefault(); got != 1 {
+		t.Fatalf("MaxConcurrentRuns default=%d want 1", got)
+	}
+	if got := watchlist.Collect.MaxConcurrentItemsOrDefault(); got != 1 {
+		t.Fatalf("MaxConcurrentItems default=%d want 1", got)
 	}
 }
 

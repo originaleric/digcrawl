@@ -76,10 +76,7 @@ func (b *Inbox) ProcessOnce(ctx context.Context, svc *Service, formats []string,
 
 	var results []ExportResult
 	var firstErr error
-	for i, f := range files {
-		if i > 0 {
-			svc.throttle("")
-		}
+	for _, f := range files {
 		rs, err := svc.CollectFile(ctx, f, formats, outDir)
 		if err != nil {
 			if firstErr == nil {

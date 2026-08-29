@@ -37,20 +37,35 @@ type ExportResult struct {
 
 // Export writes collect output to Markdown / HTML / JSON, downloads media, and updates assets manifest.
 func Export(ctx context.Context, out map[string]any, opts ExportOptions) (ExportResult, error) {
+	opts, paths, err := prepareExport(out, opts)
+	if err != nil {
+		return ExportResult{}, err
+	}
+	return exportToPaths(ctx, out, opts, paths)
+}
+
+// prepareExport normalizes output options and finds a currently unused path.
+// Callers that coordinate concurrent exports may reserve the returned path
+// before invoking exportToPaths.
+func prepareExport(out map[string]any, opts ExportOptions) (ExportOptions, OutputPaths, error) {
 	if opts.Now.IsZero() {
 		opts.Now = time.Now()
 	}
-	formats := normalizeExportFormats(opts.Formats)
+	opts.Formats = normalizeExportFormats(opts.Formats)
 	title, _ := out["title"].(string)
 	paths, err := BuildOutputPaths(opts.OutputDir, title, opts.Now)
 	if err != nil {
-		return ExportResult{}, err
+		return opts, OutputPaths{}, err
 	}
-	paths, err = UniquePaths(paths, formats)
+	paths, err = UniquePaths(paths, opts.Formats)
 	if err != nil {
-		return ExportResult{}, err
+		return opts, OutputPaths{}, err
 	}
+	return opts, paths, nil
+}
 
+func exportToPaths(ctx context.Context, out map[string]any, opts ExportOptions, paths OutputPaths) (ExportResult, error) {
+	formats := opts.Formats
 	if opts.OCR.EnabledOrDefault() && !opts.DownloadMedia {
 		ocr.EnrichMap(ctx, out, opts.OCR, ocr.EnrichOptions{})
 	}

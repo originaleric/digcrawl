@@ -7,6 +7,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -48,6 +49,19 @@ type Service struct {
 	summarizer summary.Provider
 	notifier   notify.Notifier
 	owner      string
+}
+
+type pendingFeed struct {
+	feed FeedItem
+	key  string
+}
+
+type itemResult struct {
+	collected  int
+	summarized int
+	notified   int
+	activity   int
+	errors     []string
 }
 
 func NewService(cfg *config.Config) (*Service, error) {
@@ -360,12 +374,12 @@ func isFeishuAppChannel(ch config.FeishuChannel) bool {
 }
 
 func (s *Service) RunOnce(ctx context.Context) ([]RunSummary, error) {
-	var summaries []RunSummary
-	var firstErr error
 	rawItems, err := s.configuredItems(ctx)
 	if err != nil {
 		return nil, err
 	}
+	items := make([]WatchItem, 0, len(rawItems))
+	var firstErr error
 	for _, raw := range rawItems {
 		item, err := s.normalizeItem(raw)
 		if err != nil {
@@ -377,11 +391,13 @@ func (s *Service) RunOnce(ctx context.Context) ([]RunSummary, error) {
 		if !item.Enabled {
 			continue
 		}
-		sum, err := s.RunItem(ctx, item)
-		summaries = append(summaries, sum)
-		if err != nil && firstErr == nil {
-			firstErr = err
-		}
+		items = append(items, item)
+	}
+	summaries, runErr := runBounded(s.cfg.Watchlist.Scheduler.MaxConcurrentRunsOrDefault(), items, func(item WatchItem) (RunSummary, error) {
+		return s.RunItem(ctx, item)
+	})
+	if firstErr == nil {
+		firstErr = runErr
 	}
 	return summaries, firstErr
 }
@@ -448,8 +464,12 @@ func (s *Service) RunDue(ctx context.Context, now time.Time) ([]RunSummary, erro
 	if now.IsZero() {
 		now = time.Now()
 	}
-	var summaries []RunSummary
 	var firstErr error
+	type scheduledItem struct {
+		item WatchItem
+		def  TaskDefinition
+	}
+	var dueItems []scheduledItem
 	activeTaskIDs := []string{}
 	rawItems, err := s.configuredItems(ctx)
 	if err != nil {
@@ -484,14 +504,60 @@ func (s *Service) RunDue(ctx context.Context, now time.Time) ([]RunSummary, erro
 		if !due {
 			continue
 		}
-		sum, err := s.runScheduledTask(ctx, item, def)
-		summaries = append(summaries, sum)
-		if err != nil && firstErr == nil {
-			firstErr = err
-		}
+		dueItems = append(dueItems, scheduledItem{item: item, def: def})
+	}
+	summaries, runErr := runBounded(s.cfg.Watchlist.Scheduler.MaxConcurrentRunsOrDefault(), dueItems, func(due scheduledItem) (RunSummary, error) {
+		return s.runScheduledTask(ctx, due.item, due.def)
+	})
+	if firstErr == nil {
+		firstErr = runErr
 	}
 	if err := s.store.DisableMissingTaskDefinitions(ctx, "watchlist.collect", activeTaskIDs, now); err != nil && firstErr == nil {
 		firstErr = err
+	}
+	return summaries, firstErr
+}
+
+// runBounded runs Watchlist items with a fixed worker bound while returning
+// summaries in input order. A bound of one preserves the previous behavior.
+func runBounded[T any](limit int, items []T, run func(T) (RunSummary, error)) ([]RunSummary, error) {
+	if len(items) == 0 {
+		return nil, nil
+	}
+	if limit <= 0 {
+		limit = 1
+	}
+	if limit > len(items) {
+		limit = len(items)
+	}
+	type result struct {
+		summary RunSummary
+		err     error
+	}
+	results := make([]result, len(items))
+	jobs := make(chan int)
+	var workers sync.WaitGroup
+	for range limit {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			for index := range jobs {
+				results[index].summary, results[index].err = run(items[index])
+			}
+		}()
+	}
+	for index := range items {
+		jobs <- index
+	}
+	close(jobs)
+	workers.Wait()
+	summaries := make([]RunSummary, len(items))
+	var firstErr error
+	for index, result := range results {
+		summaries[index] = result.summary
+		if firstErr == nil && result.err != nil {
+			firstErr = result.err
+		}
 	}
 	return summaries, firstErr
 }
@@ -553,13 +619,19 @@ func (s *Service) RunItem(ctx context.Context, item WatchItem) (RunSummary, erro
 		feeds = feeds[:limit]
 	}
 	sum.Discovered = len(feeds)
+	var pending []pendingFeed
+	seenContentKeys := make(map[string]struct{}, len(feeds))
 	for _, feed := range feeds {
 		key := watchlist.ContentKey(feed)
+		if _, seen := seenContentKeys[key]; seen {
+			continue
+		}
 		isNew, err := s.store.UpsertDiscovered(ctx, item.ID, feed, baseline)
 		if err != nil {
 			sum.Errors = append(sum.Errors, err.Error())
 			continue
 		}
+		seenContentKeys[key] = struct{}{}
 		if baseline {
 			continue
 		}
@@ -575,55 +647,17 @@ func (s *Service) RunItem(ctx context.Context, item WatchItem) (RunSummary, erro
 		} else {
 			sum.NewItems++
 		}
-		collected, err := s.collectFeedItem(ctx, feed)
-		if err != nil {
-			_ = s.store.UpdateItemStatus(ctx, item.ID, key, StatusCollectFailed, err.Error(), "")
-			sum.Errors = append(sum.Errors, err.Error())
-			continue
-		}
-		sum.Collected++
-		contentActivity++
-		if err := s.store.UpdateItemCollectedMetadata(ctx, item.ID, key, collected.Title, collected.PublishedAt, collected.ContentType); err != nil {
-			sum.Errors = append(sum.Errors, err.Error())
-		}
-		_ = s.store.UpdateItemStatus(ctx, item.ID, key, StatusCollected, "", "")
-		req := summary.Request{
-			WatchID: item.ID, Platform: item.Platform, SourceName: item.Name, RunTime: time.Now().Format(time.RFC3339),
-			Items: []summary.Item{{
-				ItemID: key, URL: feed.URL, Title: firstNonEmpty(collected.Title, feed.Title),
-				PublishedAt: firstNonEmpty(collected.PublishedAt, feedPublishedAtText(feed.PublishedAt)),
-				Text:        collected.Text, ASRText: collected.ASRText, OCRText: collected.OCRText, Metadata: collected.Metadata,
-			}},
-		}
-		res, err := s.summarizer.Summarize(ctx, req)
-		if err != nil {
-			_ = s.store.UpdateItemStatus(ctx, item.ID, key, StatusSummaryFailed, "", err.Error())
-			sum.Errors = append(sum.Errors, err.Error())
-			continue
-		}
-		if err := validateSummaryResultForCollectedItem(collected, res); err != nil {
-			_ = s.store.UpdateItemStatus(ctx, item.ID, key, StatusSummaryFailed, "", err.Error())
-			sum.Errors = append(sum.Errors, err.Error())
-			continue
-		}
-		collected.Summary = res
-		sum.Summarized++
-		_ = s.store.UpdateItemStatus(ctx, item.ID, key, StatusSummarized, "", res.Error)
-		msg := watchlist.RenderNotification(res)
-		notifyResult := s.notifier.Send(ctx, item.NotifyTo, msg)
-		if notifyResult.Status == "notified" || notifyResult.Status == StatusNotified {
-			sum.Notified++
-			_ = s.store.UpdateItemStatus(ctx, item.ID, key, StatusNotified, "", "")
-			_ = s.store.UpsertDeliveryWithProvider(ctx, item.ID, key, notifyResult.ChannelID, StatusNotified, "", false, msg.Title, msg.Text, res.Provider)
-			continue
-		}
-		status := StatusNotifyFailed
-		if !notifyResult.Retryable {
-			status = StatusNotifyFinalFail
-		}
-		_ = s.store.UpdateItemStatus(ctx, item.ID, key, status, "", "")
-		_ = s.store.UpsertDeliveryWithProvider(ctx, item.ID, key, notifyResult.ChannelID, StatusNotifyFailed, notifyResult.Error, notifyResult.Retryable, msg.Title, msg.Text, res.Provider)
-		sum.Errors = append(sum.Errors, notifyResult.Error)
+		pending = append(pending, pendingFeed{feed: feed, key: key})
+	}
+	results := runPendingFeeds(s.cfg.Watchlist.Collect.MaxConcurrentItemsOrDefault(), pending, func(pending pendingFeed) itemResult {
+		return s.processPendingFeed(ctx, item, pending.feed, pending.key)
+	})
+	for _, result := range results {
+		sum.Collected += result.collected
+		sum.Summarized += result.summarized
+		sum.Notified += result.notified
+		contentActivity += result.activity
+		sum.Errors = append(sum.Errors, result.errors...)
 	}
 	if !baseline && sum.NewItems == 0 {
 		if alreadyNotified, err := s.store.HasNotifiedContentOnDate(ctx, item.ID, time.Now()); err != nil {
@@ -653,6 +687,86 @@ func (s *Service) RunItem(ctx context.Context, item WatchItem) (RunSummary, erro
 		errText = strings.Join(sum.Errors, "; ")
 	}
 	return sum, nil
+}
+
+func runPendingFeeds[T any](limit int, feeds []T, run func(T) itemResult) []itemResult {
+	if len(feeds) == 0 {
+		return nil
+	}
+	if limit <= 0 {
+		limit = 1
+	}
+	if limit > len(feeds) {
+		limit = len(feeds)
+	}
+	results := make([]itemResult, len(feeds))
+	jobs := make(chan int)
+	var workers sync.WaitGroup
+	for range limit {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			for index := range jobs {
+				results[index] = run(feeds[index])
+			}
+		}()
+	}
+	for index := range feeds {
+		jobs <- index
+	}
+	close(jobs)
+	workers.Wait()
+	return results
+}
+
+func (s *Service) processPendingFeed(ctx context.Context, item WatchItem, feed FeedItem, key string) itemResult {
+	result := itemResult{}
+	collected, err := s.collectFeedItem(ctx, feed)
+	if err != nil {
+		_ = s.store.UpdateItemStatus(ctx, item.ID, key, StatusCollectFailed, err.Error(), "")
+		result.errors = append(result.errors, err.Error())
+		return result
+	}
+	result.collected++
+	result.activity++
+	if err := s.store.UpdateItemCollectedMetadata(ctx, item.ID, key, collected.Title, collected.PublishedAt, collected.ContentType); err != nil {
+		result.errors = append(result.errors, err.Error())
+	}
+	_ = s.store.UpdateItemStatus(ctx, item.ID, key, StatusCollected, "", "")
+	req := summary.Request{WatchID: item.ID, Platform: item.Platform, SourceName: item.Name, RunTime: time.Now().Format(time.RFC3339), Items: []summary.Item{{
+		ItemID: key, URL: feed.URL, Title: firstNonEmpty(collected.Title, feed.Title),
+		PublishedAt: firstNonEmpty(collected.PublishedAt, feedPublishedAtText(feed.PublishedAt)),
+		Text:        collected.Text, ASRText: collected.ASRText, OCRText: collected.OCRText, Metadata: collected.Metadata,
+	}}}
+	res, err := s.summarizer.Summarize(ctx, req)
+	if err != nil {
+		_ = s.store.UpdateItemStatus(ctx, item.ID, key, StatusSummaryFailed, "", err.Error())
+		result.errors = append(result.errors, err.Error())
+		return result
+	}
+	if err := validateSummaryResultForCollectedItem(collected, res); err != nil {
+		_ = s.store.UpdateItemStatus(ctx, item.ID, key, StatusSummaryFailed, "", err.Error())
+		result.errors = append(result.errors, err.Error())
+		return result
+	}
+	result.summarized++
+	_ = s.store.UpdateItemStatus(ctx, item.ID, key, StatusSummarized, "", res.Error)
+	msg := watchlist.RenderNotification(res)
+	notifyResult := s.notifier.Send(ctx, item.NotifyTo, msg)
+	if notifyResult.Status == "notified" || notifyResult.Status == StatusNotified {
+		result.notified++
+		_ = s.store.UpdateItemStatus(ctx, item.ID, key, StatusNotified, "", "")
+		_ = s.store.UpsertDeliveryWithProvider(ctx, item.ID, key, notifyResult.ChannelID, StatusNotified, "", false, msg.Title, msg.Text, res.Provider)
+		return result
+	}
+	status := StatusNotifyFailed
+	if !notifyResult.Retryable {
+		status = StatusNotifyFinalFail
+	}
+	_ = s.store.UpdateItemStatus(ctx, item.ID, key, status, "", "")
+	_ = s.store.UpsertDeliveryWithProvider(ctx, item.ID, key, notifyResult.ChannelID, StatusNotifyFailed, notifyResult.Error, notifyResult.Retryable, msg.Title, msg.Text, res.Provider)
+	result.errors = append(result.errors, notifyResult.Error)
+	return result
 }
 
 func (s *Service) runScheduledTask(ctx context.Context, item WatchItem, def TaskDefinition) (RunSummary, error) {
