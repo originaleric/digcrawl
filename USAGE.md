@@ -97,6 +97,7 @@ go install ./cmd/digcollect
 |------|----------|
 | `mcp` | 用户 Skill profile：`$XDG_CONFIG_HOME/digcrawl/digcrawl-skill.yaml`；未设置 XDG 时为 `~/.config/digcrawl/digcrawl-skill.yaml`；Windows 为 `%APPDATA%\DigCrawl\digcrawl-skill.yaml` |
 | `gateway` / `collector` / `collect` 等 | 命令行 `--config`，未指定时为 `config/config.yaml` |
+| `video` | 显式 `--config` 时只使用该 profile；未指定时先使用项目 `config/config.yaml` 中已启用的处理器，再按处理器回退到标准用户 Skill profile，项目文件不存在时直接使用该 Skill profile |
 | `connect` / `login` | `$XDG_CONFIG_HOME/digcrawl/config.yaml`；未设置 XDG 时为 `~/.config/digcrawl/config.yaml`（可用 `--config` 覆盖） |
 | 本地 GORM 数据库连接 | `config/gorm.yml`，由 `config/gorm.example.yml` 复制生成；包含密码，默认不入 Git |
 | DigFlow 内嵌 Runtime 配置 | `config/digflow.yml`、`config/digflow-gorm.yml`、`config/eino.yml`、`agents/watchlist/agents.yml` |
@@ -748,6 +749,7 @@ digcrawl browser login         # 平台扫码/交互登录并保存 Cookie
 digcrawl browser check         # 检查平台会话，可选试读
 digcrawl asr setup --yes        # 安装隔离的本地 faster-whisper 运行时（不修改系统 Python）
 digcrawl asr transcribe <file> --timeout 1200 # ffmpeg 抽音频并转写任意本地视频/音频
+digcrawl video <local-file-or-direct-url> [--mode auto|asr|ocr|both] # 解析本地视频或可直接下载的视频 URL
 digcrawl watchlist run         # 执行 watchlist 监控、摘要和通知
 digcrawl watchlist serve       # 常驻调度，到期执行不同周期的 Tasks / Watchlist items
 scripts/digcrawl-watchlist-service.sh install|rebuild|rebuild-restart|start|stop|restart|status|logs|uninstall
@@ -756,6 +758,18 @@ digcrawl help
 ```
 
 全局习惯：多数子命令支持 `--config <path>` 指定配置文件。
+
+### 直接视频解析
+
+`digcrawl video` 面向明确提供的本地视频路径或可直接下载的 `http`/`https` 媒体 URL；平台页面 URL 仍通过对应平台工具读取。`--mode auto` 只运行已启用的 ASR 与视频帧 OCR，也可显式传入 `asr`、`ocr` 或 `both`。结果默认是 JSON；使用 `--format text`、`--format md` 和 `--out <file>` 调整输出。
+
+```bash
+digcrawl video ./meeting.mp4
+digcrawl video "https://cdn.example.com/meeting.mp4" --mode both --format md --out meeting.md
+digcrawl video "https://cdn.example.com/meeting.mp4" --keep ./meeting.mp4
+```
+
+直链下载默认使用私有临时目录，并受 `--max-bytes`（默认 512 MiB）与 `--download-timeout`（默认 300 秒）限制，处理结束后删除。仅在用户明确要求保留该次直链下载时使用 `--keep <path>`；它不会读取或修改 `Skill.Media.RetainDownloadedVideo`。未传 `--config` 时，项目根级 ASR/OCR 中已启用的处理器优先，未启用的处理器可从标准用户 Skill profile 的 `Skill.ASR` / `Skill.OCR` 补齐；显式 `--config` 始终只使用指定 profile。
 
 ### Watchlist 常驻服务脚本
 
