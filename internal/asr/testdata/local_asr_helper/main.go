@@ -60,7 +60,10 @@ func main() {
 			fmt.Print("426.926500\n")
 			return
 		}
-		time.Sleep(2 * time.Second)
+		// Keep this longer than the configured floor in
+		// TestTranscribePropagatesDynamicTimeoutToLocalProvider so that test
+		// cannot pass without the duration-derived operation budget.
+		time.Sleep(6 * time.Second)
 		fmt.Print(`{"text":"local transcript"}`)
 	case "slow-probe":
 		time.Sleep(2 * time.Second)

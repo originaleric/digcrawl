@@ -43,17 +43,24 @@ try {
         if ($Name -eq 'powershell.exe') { return [pscustomobject]@{ Source = 'powershell.exe' } }
         return $null
     }
-    function New-ScheduledTaskAction { return [pscustomobject]@{} }
-    function New-ScheduledTaskTrigger { return [pscustomobject]@{} }
-    function New-ScheduledTaskSettingsSet { return [pscustomobject]@{} }
-    function Register-ScheduledTask { $script:Lifecycle += 'register'; $script:TaskExists = $true; return [pscustomobject]@{} }
-    function Start-ScheduledTask { $script:Lifecycle += 'start'; $script:TaskState = 'Running' }
-    function Stop-ScheduledTask { $script:Lifecycle += 'stop'; $script:TaskState = 'Ready' }
+    function New-ScheduledTaskAction { param([string]$Execute, [string]$Argument); return [pscustomobject]@{} }
+    function New-ScheduledTaskTrigger { param([switch]$AtLogOn, [string]$User); return [pscustomobject]@{} }
+    function New-ScheduledTaskSettingsSet {
+        param([switch]$AllowStartIfOnBatteries, [switch]$DontStopIfGoingOnBatteries, [int]$RestartCount, [TimeSpan]$RestartInterval, [TimeSpan]$ExecutionTimeLimit)
+        return [pscustomobject]@{}
+    }
+    function Register-ScheduledTask {
+        param([string]$TaskName, $Action, $Trigger, $Settings, [string]$Description, [switch]$Force)
+        $script:Lifecycle += 'register'; $script:TaskExists = $true; return [pscustomobject]@{}
+    }
+    function Start-ScheduledTask { param([string]$TaskName); $script:Lifecycle += 'start'; $script:TaskState = 'Running' }
+    function Stop-ScheduledTask { param([string]$TaskName); $script:Lifecycle += 'stop'; $script:TaskState = 'Ready' }
     function Get-ScheduledTask {
+        param([string]$TaskName)
         if (-not $script:TaskExists) { return $null }
         return [pscustomobject]@{ State = $script:TaskState }
     }
-    function Start-Sleep { }
+    function Start-Sleep { param([int]$Seconds) }
 
     Install-Service
     Assert-True (($script:Lifecycle -join ',') -eq 'register,start') 'install must register then start the task'
