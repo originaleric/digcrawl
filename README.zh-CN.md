@@ -63,7 +63,7 @@ digcrawl mcp --config "$HOME/.config/digcrawl/digcrawl-skill.yaml"
 
 配置完成后，只需把支持的 URL 发给 Agent，并要求它读取、总结、比较、引用，或在明确请求时转写视频。Agent 会在本机调用 DigCrawl，并保留需要登录、验证码、频控等结构化结果。
 
-如需调整本地视频偏好，可以直接对 Agent 说“保存影片”“处理后删除影片”或“将视频下载上限调到 512 MiB”。Skill 会通过本机配置工具仅更新用户 profile 中既有的保留或大小设置，不需要指定平台路径，也不会在对话中直接编辑 profile。保留成功后，视频工具会在 `platform_metadata.retained_media_relative_path` 中返回相对媒体目录的路径，避免暴露本机绝对路径。
+对于 MCP 在富化过程中下载的平台视频，如需调整本地视频偏好，可以直接对 Agent 说“保存影片”“处理后删除影片”或“将视频下载上限调到 512 MiB”。Skill 会通过本机配置工具仅更新用户 profile 中既有的保留或大小设置，不需要指定平台路径，也不会在对话中直接编辑 profile。保留成功后，视频工具会在 `platform_metadata.retained_media_relative_path` 中返回相对媒体目录的路径，避免暴露本机绝对路径。对于本地文件或直链媒体，使用 `digcrawl video`；单次执行是否保留下载文件由 `--keep <path>` 控制。
 
 Skill 不包含 API Key，也不会暴露浏览器 Cookie。路由规则详见 [Agent Skill](./.agents/skills/digcrawl/)；安全细节详见[在 AI Agent 中使用](#在-ai-agent-中使用)。
 
@@ -103,6 +103,7 @@ macOS 与 Linux 默认将 profile 保存在 `$XDG_CONFIG_HOME/digcrawl/`；未�
 | --- | --- | --- |
 | 归档单个页面 | 将文章或帖子提取为可移植的 Markdown、HTML、JSON 和可选媒体 assets。 | `digcrawl collect <url>` |
 | 批量采集 URL | 处理 URL 文件或本地收件箱，并保留索引或数据库记录。 | `digcrawl collect --file urls.txt` |
+| 解析视频文件或直链 | 从本地视频或直接下载 URL 提取语音转写与画面文字。 | `digcrawl video ./video.mp4` |
 | 监控新增内容 | 从 feed、列表、主页或页面发现新增内容，再按计划采集和通知。 | `digcrawl watchlist run --once` |
 | 为 AI Agent 提供阅读能力 | 以官方 Skill 和平台感知路由运行本地 MCP 服务。 | `digcrawl mcp --config <profile>` |
 | 集成到宿主应用 | 使用 HTTP Gateway、Collector、stdio 或 Go SDK。 | [Transport 文档](./transport/README.md) |
@@ -130,6 +131,22 @@ URL 模式、登录行为与平台边界请查看[使用说明](./USAGE.md)。
 ./digcrawl collect --file urls.txt --format md,json --out ./collect-output
 ./digcrawl collect inbox --watch
 ```
+
+解析本地视频或可直接下载的视频 URL：
+
+```bash
+# 根据已启用的 ASR / 视频帧 OCR 配置自动处理。
+./digcrawl video ./meeting.mp4
+
+# 同时执行 ASR 与抽帧 OCR，并导出 Markdown。
+./digcrawl video "https://cdn.example.com/meeting.mp4" --mode both --format md --out meeting.md
+
+# 仅转写语音，或仅识别画面文字。
+./digcrawl video ./meeting.mp4 --mode asr
+./digcrawl video ./meeting.mp4 --mode ocr
+```
+
+视频 URL 必须是可直接下载的媒体地址；平台页面 URL 仍应使用对应的采集工具。远程视频会在处理结束后删除；如需保存，传入 `--keep ./video.mp4`。未传入 `--config` 时，`config/config.yaml` 中已启用的根级 ASR/OCR 优先；未启用的处理器可回退到标准用户 Skill profile 中已启用的配置。
 
 执行一轮 Watchlist，或在本机常驻运行调度器：
 
@@ -189,6 +206,7 @@ DigCrawl 在用户机器上运行，并将访问边界保持可见：
 
 | 时间 | 更新 | 对使用者的意义 |
 | --- | --- | --- |
+| 2026-08-30 | 新增本地文件与直链媒体的视频解析。 | `digcrawl video` 复用有边界的 ASR 与抽帧 OCR；直链默认清理，并能使用用户 Skill profile 而不削弱显式项目配置。 |
 | 2026-08-29 | 新增可选的 Watchlist 来源/条目并发与安全采集协调。 | 发现和处理可使用有界 goroutine；内容去重、输出路径、index.json 与平台请求间隔仍受保护。 |
 | 2026-08-26 | 新增显式的 Skill 视频保留偏好与安全 profile 更新。 | Agent 可在用户明确要求时保存或清理下载影片、调整上限，无需编辑 YAML；本地并发 profile 写入会串行化且可取消。 |
 | 2026-08-26 | 收口视频理解的执行隔离与外部 ID 边界。 | Skill 媒体目录每次执行独立；外部 call ID 仅关联请求，不能覆盖本地媒体或 manifest。 |

@@ -2,9 +2,13 @@ package source
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -13,6 +17,150 @@ import (
 	kuaishouplatform "github.com/originaleric/digcrawl/internal/platform/kuaishou"
 	"github.com/originaleric/digcrawl/internal/platform/reddit"
 )
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
+
+func TestToutiaoAuthorAccessProbeSendsLocalCookie(t *testing.T) {
+	var gotCookie string
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		gotCookie = req.Header.Get("Cookie")
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     make(http.Header),
+			Body:       io.NopCloser(strings.NewReader(`{"user_id":123}`)),
+		}, nil
+	})}
+	err := (Service{Client: client}).toutiaoAuthorAccessErrorWithCookieHeader(context.Background(), "https://www.toutiao.com/api/pc/user/info?token=abc", "session=active")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotCookie != "session=active" {
+		t.Fatalf("cookie=%q want local session cookie", gotCookie)
+	}
+}
+
+func TestToutiaoAuthorAccessProbeStillReportsRejectedSession(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     make(http.Header),
+			Body:       io.NopCloser(strings.NewReader(`{"reason":"login_required"}`)),
+		}, nil
+	})}
+	err := (Service{Client: client}).toutiaoAuthorAccessErrorWithCookieHeader(context.Background(), "https://www.toutiao.com/api/pc/user/info?token=abc", "session=expired")
+	var readErr *platform.ReadError
+	if err == nil || !errors.As(err, &readErr) || readErr.Code != platform.ErrLoginRequired {
+		t.Fatalf("error=%v", err)
+	}
+}
+
+func TestToutiaoAuthorAccessProbeUsesAPIPathCookies(t *testing.T) {
+	dir := t.TempDir()
+	cookies := []map[string]any{{"name": "api_session", "value": "active", "domain": ".toutiao.com", "path": "/api"}}
+	data, err := json.Marshal(cookies)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "www.toutiao.com.json"), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var gotCookie string
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		gotCookie = req.Header.Get("Cookie")
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"user_id":123}`))}, nil
+	})}
+	err = (Service{Client: client}).toutiaoAuthorAccessErrorForCookieStore(context.Background(), "https://www.toutiao.com/c/user/token/abc", dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotCookie != "api_session=active" {
+		t.Fatalf("cookie=%q want API-path cookie", gotCookie)
+	}
+}
+
+func TestToutiaoAuthorAccessProbeCombinesCompatibleCookieStores(t *testing.T) {
+	dir := t.TempDir()
+	primary := []map[string]any{{"name": "web_session", "value": "primary", "domain": ".toutiao.com", "path": "/"}}
+	root := []map[string]any{{"name": "api_session", "value": "active", "domain": ".toutiao.com", "path": "/api"}}
+	for domain, cookies := range map[string][]map[string]any{
+		"www.toutiao.com": primary,
+		"toutiao.com":     root,
+	} {
+		data, err := json.Marshal(cookies)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, domain+".json"), data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	var gotCookie string
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		gotCookie = req.Header.Get("Cookie")
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"user_id":123}`))}, nil
+	})}
+	if err := (Service{Client: client}).toutiaoAuthorAccessErrorForCookieStore(context.Background(), "https://www.toutiao.com/c/user/token/abc", dir); err != nil {
+		t.Fatal(err)
+	}
+	if gotCookie != "web_session=primary; api_session=active" {
+		t.Fatalf("cookie=%q want merged local session cookies", gotCookie)
+	}
+}
+
+func TestToutiaoAuthorAccessProbeReportsCorruptedLocalSession(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "toutiao.com.session.json"), []byte(`{not-json`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err := (Service{}).toutiaoAuthorAccessErrorForCookieStore(context.Background(), "https://www.toutiao.com/c/user/token/abc", dir)
+	var readErr *platform.ReadError
+	if err == nil || !errors.As(err, &readErr) || readErr.Code != platform.ErrLoginRequired {
+		t.Fatalf("corrupted local session must request re-login, err=%v", err)
+	}
+}
+
+func TestBrowserFallbackErrorDoesNotPreserveStaticLoginCode(t *testing.T) {
+	staticErr := platformReadError("toutiao", platform.ErrLoginRequired, "static page appears to require login")
+	err := browserFallbackDiscoveryError(staticErr, errors.New("browser timed out"))
+	var readErr *platform.ReadError
+	if errors.As(err, &readErr) {
+		t.Fatalf("error=%v", err)
+	}
+}
+
+func TestToutiaoStaticLoginEvidenceRequiresConfirmedSessionFailure(t *testing.T) {
+	staticErr := platformReadError("toutiao", platform.ErrLoginRequired, "static page appears to require login")
+	dir := t.TempDir()
+	cookies := []map[string]any{{"name": "session", "value": "active", "domain": ".toutiao.com", "path": "/"}}
+	data, err := json.Marshal(cookies)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "www.toutiao.com.json"), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"user_id":123}`))}, nil
+	})}
+	err = (Service{Client: client}).resolveToutiaoStaticLoginEvidence(context.Background(), "https://www.toutiao.com/c/user/token/abc", staticErr, dir)
+	var readErr *platform.ReadError
+	if err == nil || errors.As(err, &readErr) {
+		t.Fatalf("valid local session must leave static login as an unconfirmed diagnostic, err=%v", err)
+	}
+
+	rejectedClient := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"reason":"login_required"}`))}, nil
+	})}
+	err = (Service{Client: rejectedClient}).resolveToutiaoStaticLoginEvidence(context.Background(), "https://www.toutiao.com/c/user/token/abc", staticErr, dir)
+	if !errors.As(err, &readErr) || readErr.Code != platform.ErrLoginRequired {
+		t.Fatalf("rejected local session must be authoritative, err=%v", err)
+	}
+}
 
 func TestServiceReadsRSS(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -7,9 +7,6 @@ import (
 	"fmt"
 	"log"
 	"net/url"
-	"os"
-	"path/filepath"
-	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -20,9 +17,6 @@ import (
 	"github.com/originaleric/digcrawl/config"
 	"github.com/originaleric/digcrawl/runtime/policy"
 )
-
-var cookieDomainPattern = regexp.MustCompile(`^[a-zA-Z0-9.-]+$`)
-var cookieFileLocks sync.Map
 
 // BrowserBrowseRequest 本地浏览器抓取请求
 type BrowserBrowseRequest struct {
@@ -86,7 +80,6 @@ func BrowserBrowse(ctx context.Context, req *BrowserBrowseRequest) (*BrowserBrow
 	if err := policy.ValidateURLDomain(targetURL.String(), rootCfg.Gateway.AllowedDomains, nil); err != nil {
 		return nil, err
 	}
-
 	ctx, cancel := context.WithTimeout(ctx, time.Duration(cfg.TotalTimeoutSec)*time.Second)
 	defer cancel()
 
@@ -197,10 +190,6 @@ func BrowserBrowse(ctx context.Context, req *BrowserBrowseRequest) (*BrowserBrow
 		resp.ScreenshotBase = base64.StdEncoding.EncodeToString(imgBytes)
 	}
 
-	cookieDomain := strings.TrimSpace(req.UseCookieDomain)
-	if cookieDomain == "" {
-		cookieDomain = targetURL.Hostname()
-	}
 	if script := strings.TrimSpace(req.MetadataScript); script != "" {
 		if meta, err := evalPageMetadata(page, script); err == nil && len(meta) > 0 {
 			resp.Metadata = meta
@@ -217,10 +206,6 @@ func BrowserBrowse(ctx context.Context, req *BrowserBrowseRequest) (*BrowserBrow
 			captured = append(captured, finishMediaCapture()...)
 		}
 		resp.MediaURLs = uniqueMediaURLs(captured)
-	}
-
-	if err := saveDomainCookies(page, cookieDomain, cfg.CookieStoreDir, targetURL); err != nil {
-		return resp, newBrowseError(ErrorBrowserCookieFailed, "save_cookies", "页面抓取成功，但保存 Cookie 失败", err, false)
 	}
 
 	return resp, nil
@@ -461,204 +446,6 @@ func checkAllowedDomain(host string, allowedDomains []string) error {
 		}
 	}
 	return fmt.Errorf("目标域名 %s 不在允许列表", host)
-}
-
-func sanitizeCookieDomain(domain string) (string, error) {
-	d := strings.ToLower(strings.TrimSpace(domain))
-	d = strings.TrimPrefix(d, ".")
-	if d == "" {
-		return "", fmt.Errorf("cookie 域名为空")
-	}
-	if !cookieDomainPattern.MatchString(d) {
-		return "", fmt.Errorf("cookie 域名格式非法")
-	}
-	return d, nil
-}
-
-func cookieFilePath(cookieStoreDir, domain string) (string, error) {
-	d, err := sanitizeCookieDomain(domain)
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(cookieStoreDir, d+".json"), nil
-}
-
-func cookieFileMutex(cookiePath string) *sync.Mutex {
-	key := filepath.Clean(cookiePath)
-	mu, _ := cookieFileLocks.LoadOrStore(key, &sync.Mutex{})
-	return mu.(*sync.Mutex)
-}
-
-func loadDomainCookies(page interface {
-	SetCookies(cookies []*proto.NetworkCookieParam) error
-}, domain, cookieStoreDir string, targetURL *url.URL) error {
-	cookiePath, err := cookieFilePath(cookieStoreDir, domain)
-	if err != nil {
-		return err
-	}
-
-	cookies, loaded, err := readCookieParams(cookiePath)
-	if err != nil {
-		return err
-	}
-	if !loaded {
-		for _, alternate := range alternateCookieDomains(domain) {
-			alternatePath, err := cookieFilePath(cookieStoreDir, alternate)
-			if err != nil {
-				continue
-			}
-			if filepath.Clean(alternatePath) == filepath.Clean(cookiePath) {
-				continue
-			}
-			cookies, loaded, err = readCookieParams(alternatePath)
-			if err != nil {
-				return err
-			}
-			if loaded {
-				log.Printf("[browser-cookie] loaded fallback cookie domain=%s path=%s", alternate, alternatePath)
-				break
-			}
-		}
-	}
-	for _, c := range cookies {
-		if c.URL == "" {
-			c.URL = targetURL.Scheme + "://" + targetURL.Host
-		}
-	}
-	if len(cookies) == 0 {
-		return nil
-	}
-	if err := page.SetCookies(cookies); err != nil {
-		return fmt.Errorf("注入 cookie 失败: %w", err)
-	}
-	return nil
-}
-
-func readCookieParams(cookiePath string) ([]*proto.NetworkCookieParam, bool, error) {
-	mu := cookieFileMutex(cookiePath)
-	mu.Lock()
-	defer mu.Unlock()
-
-	data, err := os.ReadFile(cookiePath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, false, nil
-		}
-		return nil, false, fmt.Errorf("读取 cookie 文件失败: %w", err)
-	}
-
-	var cookies []*proto.NetworkCookieParam
-	if err := json.Unmarshal(data, &cookies); err != nil {
-		if quarantineErr := quarantineCookieFile(cookiePath); quarantineErr != nil {
-			return nil, false, fmt.Errorf("解析 cookie 文件失败: %w; 隔离损坏 cookie 文件失败: %v", err, quarantineErr)
-		}
-		log.Printf("[browser-cookie] quarantined corrupted cookie file path=%s err=%v", cookiePath, err)
-		return nil, false, nil
-	}
-	return cookies, true, nil
-}
-
-func alternateCookieDomains(domain string) []string {
-	d, err := sanitizeCookieDomain(domain)
-	if err != nil {
-		return nil
-	}
-	if strings.HasPrefix(d, "www.") {
-		return []string{strings.TrimPrefix(d, "www.")}
-	}
-	return []string{"www." + d}
-}
-
-func quarantineCookieFile(cookiePath string) error {
-	suffix := time.Now().Format("20060102T150405.000000000")
-	target := fmt.Sprintf("%s.bad.%s.%d", cookiePath, suffix, os.Getpid())
-	return os.Rename(cookiePath, target)
-}
-
-func saveDomainCookies(page interface {
-	Cookies(urls []string) ([]*proto.NetworkCookie, error)
-}, domain, cookieStoreDir string, targetURL *url.URL) error {
-	safeDomain, err := sanitizeCookieDomain(domain)
-	if err != nil {
-		return err
-	}
-	if err := os.MkdirAll(cookieStoreDir, 0o755); err != nil {
-		return fmt.Errorf("创建 cookie 目录失败: %w", err)
-	}
-
-	cookies, err := page.Cookies([]string{targetURL.String()})
-	if err != nil {
-		return fmt.Errorf("读取页面 cookie 失败: %w", err)
-	}
-
-	params := make([]*proto.NetworkCookieParam, 0, len(cookies))
-	for _, c := range cookies {
-		domainValue := c.Domain
-		if domainValue == "" {
-			domainValue = safeDomain
-		}
-		params = append(params, &proto.NetworkCookieParam{
-			Name:     c.Name,
-			Value:    c.Value,
-			Domain:   domainValue,
-			Path:     c.Path,
-			Secure:   c.Secure,
-			HTTPOnly: c.HTTPOnly,
-			SameSite: c.SameSite,
-			Expires:  c.Expires,
-		})
-	}
-
-	data, err := json.MarshalIndent(params, "", "  ")
-	if err != nil {
-		return fmt.Errorf("序列化 cookie 失败: %w", err)
-	}
-	cookiePath := filepath.Join(cookieStoreDir, safeDomain+".json")
-	if err := writeFileAtomic(cookiePath, data, 0o600); err != nil {
-		return fmt.Errorf("写入 cookie 文件失败: %w", err)
-	}
-	return nil
-}
-
-func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
-	mu := cookieFileMutex(path)
-	mu.Lock()
-	defer mu.Unlock()
-
-	dir := filepath.Dir(path)
-	base := filepath.Base(path)
-	tmp, err := os.CreateTemp(dir, "."+base+".tmp-*")
-	if err != nil {
-		return err
-	}
-	tmpName := tmp.Name()
-	cleanup := true
-	defer func() {
-		if cleanup {
-			_ = os.Remove(tmpName)
-		}
-	}()
-
-	if err := tmp.Chmod(perm); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if _, err := tmp.Write(data); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if err := tmp.Sync(); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	if err := os.Rename(tmpName, path); err != nil {
-		return err
-	}
-	cleanup = false
-	return nil
 }
 
 func pageTitle(page *rod.Page) (string, error) {

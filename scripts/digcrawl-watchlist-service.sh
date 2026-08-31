@@ -3,11 +3,16 @@
 #
 # Usage:
 #   ./scripts/digcrawl-watchlist-service.sh install
+#   ./scripts/digcrawl-watchlist-service.sh install-cli
 #   ./scripts/digcrawl-watchlist-service.sh build
 #   ./scripts/digcrawl-watchlist-service.sh rebuild
 #   ./scripts/digcrawl-watchlist-service.sh rebuild-restart
 #   ./scripts/digcrawl-watchlist-service.sh configure-ffmpeg
 #   ./scripts/digcrawl-watchlist-service.sh start|stop|restart|status|logs|uninstall
+#
+# `install`, `install-cli`, and rebuild commands create ~/.local/bin/digcrawl
+# and add that directory to the login-shell PATH. Use DIGCRAWL_CLI_BIN_DIR to
+# choose a different location.
 #
 # Optional environment overrides:
 #   DIGCRAWL_BIN=/path/to/digcrawl
@@ -39,6 +44,8 @@ DIGCRAWL_BUILD_GOCACHE="${DIGCRAWL_BUILD_GOCACHE:-/private/tmp/digcrawl-gocache}
 DIGCRAWL_BUILD_GOMODCACHE="${DIGCRAWL_BUILD_GOMODCACHE:-${WORKDIR}/.tmp/go-mod-watchlist}"
 DIGCRAWL_SERVICE_PATH="${DIGCRAWL_SERVICE_PATH:-/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin}"
 DIGCRAWL_FFMPEG_PATH="${DIGCRAWL_FFMPEG_PATH:-}"
+DIGCRAWL_CLI_NAME="${DIGCRAWL_CLI_NAME:-digcrawl}"
+DIGCRAWL_CLI_BIN_DIR="${DIGCRAWL_CLI_BIN_DIR:-${HOME}/.local/bin}"
 
 if [[ -n "${DIGCRAWL_BIN:-}" ]]; then
   BIN_PATH="${DIGCRAWL_BIN}"
@@ -55,7 +62,7 @@ OS_NAME="$(uname -s)"
 
 usage() {
   cat <<EOF
-Usage: $(basename "$0") <install|build|rebuild|rebuild-restart|configure-ffmpeg|start|stop|restart|status|logs|uninstall|run-foreground>
+Usage: $(basename "$0") <install|install-cli|build|rebuild|rebuild-restart|configure-ffmpeg|start|stop|restart|status|logs|uninstall|run-foreground>
 
 Environment:
   DIGCRAWL_BIN            default: ${BIN_PATH:-<not found>}
@@ -70,6 +77,8 @@ Environment:
   DIGCRAWL_BUILD_GOMODCACHE default: ${DIGCRAWL_BUILD_GOMODCACHE}
   DIGCRAWL_SERVICE_PATH   default: ${DIGCRAWL_SERVICE_PATH}
   DIGCRAWL_FFMPEG_PATH    default: ${DIGCRAWL_FFMPEG_PATH:-<auto-detect>}
+  DIGCRAWL_CLI_NAME       default: ${DIGCRAWL_CLI_NAME}
+  DIGCRAWL_CLI_BIN_DIR    default: ${DIGCRAWL_CLI_BIN_DIR}
 EOF
 }
 
@@ -191,6 +200,50 @@ build_binary() {
   [[ -x "${BIN_PATH}" ]] || fail "failed to build digcrawl binary: ${BIN_PATH}"
 }
 
+cli_profile_paths() {
+  case "$(basename "${SHELL:-}")" in
+    zsh)
+      printf '%s/.zprofile\n' "${HOME}"
+      printf '%s/.zshrc\n' "${HOME}"
+      ;;
+    bash)
+      printf '%s/.bash_profile\n' "${HOME}"
+      printf '%s/.bashrc\n' "${HOME}"
+      ;;
+    *)
+      printf '%s/.profile\n' "${HOME}"
+      ;;
+  esac
+}
+
+install_cli_link() {
+  local cli_link
+  local profile
+  local path_line
+  mkdir -p "${DIGCRAWL_CLI_BIN_DIR}"
+  cli_link="${DIGCRAWL_CLI_BIN_DIR}/${DIGCRAWL_CLI_NAME}"
+  if [[ -e "${cli_link}" && ! -L "${cli_link}" ]]; then
+    fail "refusing to replace non-symlink CLI path: ${cli_link}"
+  fi
+  ln -sfn "${BIN_PATH}" "${cli_link}"
+
+  path_line="export PATH=\"${DIGCRAWL_CLI_BIN_DIR}:\$PATH\" # digcrawl-cli-path"
+  while IFS= read -r profile; do
+    touch "${profile}"
+    if ! grep -Fqx "${path_line}" "${profile}"; then
+      printf '\n%s\n' "${path_line}" >>"${profile}"
+    fi
+  done < <(cli_profile_paths)
+  echo "installed CLI link: ${cli_link}"
+  echo "added ${DIGCRAWL_CLI_BIN_DIR} to PATH; open a new terminal or source your shell profile"
+}
+
+install_cli() {
+  use_installed_bin_path_if_available
+  build_binary
+  install_cli_link
+}
+
 xml_escape() {
   local value="$1"
   value="${value//&/&amp;}"
@@ -251,6 +304,7 @@ install_macos() {
   require_config
   ensure_ffmpeg_env
   build_binary
+  install_cli_link
   mkdir -p "${HOME}/Library/LaunchAgents" "${LOG_DIR}"
   local plist
   plist="$(mac_plist_path)"
@@ -311,6 +365,7 @@ install_linux() {
   require_config
   ensure_ffmpeg_env
   build_binary
+  install_cli_link
   mkdir -p "${HOME}/.config/systemd/user" "${LOG_DIR}"
   local unit
   unit="$(linux_unit_path)"
@@ -500,10 +555,14 @@ case "${cmd}" in
   install)
     dispatch_platform install
     ;;
+  install-cli)
+    install_cli
+    ;;
   build|rebuild)
     require_config
     use_installed_bin_path_if_available
     build_binary
+    install_cli_link
     ;;
   configure-ffmpeg)
     configure_ffmpeg
@@ -512,6 +571,7 @@ case "${cmd}" in
     require_config
     use_installed_bin_path_if_available
     build_binary
+    install_cli_link
     dispatch_platform restart
     dispatch_platform status
     ;;

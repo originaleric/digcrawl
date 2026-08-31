@@ -61,6 +61,8 @@ func run(argv []string) {
 		runWechatChannels(argv[2:])
 	case "asr":
 		runASR(argv[2:])
+	case "video":
+		runVideo(argv[2:])
 	case "watchlist":
 		runWatchlist(argv[2:])
 	case "connect":
@@ -108,6 +110,7 @@ func printUsage() {
   digcrawl wechat-channels bridge stop   停止桥接并恢复系统代理/移除本地证书
   digcrawl wechat-channels import        导入桥接捕获的当前视频号卡片
   digcrawl asr transcribe <video>  ffmpeg 抽音频并转写
+  digcrawl video <path-or-url>   解析本地视频或直接视频 URL（ASR/OCR）
   digcrawl watchlist run [--once]  定时抓取 watchlist 并通知
   digcrawl <url>               等价于 digcrawl collect <url>
   digcrawl connect [flags]     保存宿主配置并启动 Collector

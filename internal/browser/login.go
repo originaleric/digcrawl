@@ -88,6 +88,10 @@ func InteractiveLogin(ctx context.Context, platform string, cfg config.LocalBrow
 	cfg = normalizeLocalBrowserConfig(cfg)
 	profileDir := ProfileDirForPlatform(cfg.UserDataDir, spec.Platform)
 	cfg.UserDataDir = profileDir
+	target, err := url.Parse(spec.IndexURL)
+	if err != nil {
+		return err
+	}
 
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()
@@ -135,12 +139,8 @@ func InteractiveLogin(ctx context.Context, platform string, cfg config.LocalBrow
 		return err
 	}
 
-	target, err := url.Parse(spec.IndexURL)
-	if err != nil {
-		return err
-	}
 	for _, raw := range spec.CookieURLs {
-		u, parseErr := url.Parse(raw)
+		_, parseErr := url.Parse(raw)
 		if parseErr != nil {
 			continue
 		}
@@ -148,11 +148,10 @@ func InteractiveLogin(ctx context.Context, platform string, cfg config.LocalBrow
 			return fmt.Errorf("打开 %s 以同步 cookie 失败: %w", raw, err)
 		}
 		_ = page.WaitLoad()
-		domain := u.Hostname()
-		if err := saveDomainCookies(page, domain, cfg.CookieStoreDir, u); err != nil {
-			return fmt.Errorf("保存 %s cookie 失败: %w", domain, err)
-		}
 	}
+	// A completed interactive login is the sole writer of the canonical session.
+	// Background browser work only reads it and therefore cannot overwrite this
+	// freshly authenticated session.
 	if err := saveDomainCookies(page, spec.CookieDomain, cfg.CookieStoreDir, target); err != nil {
 		return fmt.Errorf("保存 cookie 失败: %w", err)
 	}

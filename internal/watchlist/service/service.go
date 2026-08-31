@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -15,6 +16,7 @@ import (
 	"github.com/originaleric/digcrawl/collect"
 	"github.com/originaleric/digcrawl/config"
 	"github.com/originaleric/digcrawl/internal/notify"
+	"github.com/originaleric/digcrawl/internal/platform"
 	"github.com/originaleric/digcrawl/internal/summary"
 	"github.com/originaleric/digcrawl/internal/watchlist"
 	"gopkg.in/yaml.v3"
@@ -916,7 +918,7 @@ func (s *Service) notifyLoginRequired(ctx context.Context, item WatchItem, now t
 		name = strings.TrimSpace(item.ID)
 	}
 	title := fmt.Sprintf("%s 需要重新登录", name)
-	text := fmt.Sprintf("%s\n\n来源「%s」的登录状态已失效，无法判断是否有更新。请在本机终端运行：\n\ndigcrawl browser login --platform %s\n\n完成登录后，Watchlist 会在下次轮询继续抓取。", title, name, platform)
+	text := fmt.Sprintf("%s\n\n来源「%s」的登录状态已失效，无法判断是否有更新。请在 DigCrawl 项目根目录的本机终端运行：\n\n./bin/digcrawl-watchlist browser login --platform %s\n\n完成登录后，Watchlist 会在下次轮询继续抓取。", title, name, platform)
 	res := s.notifier.Send(ctx, item.NotifyTo, notify.Message{Title: title, Text: text})
 	if res.Status == "notified" || res.Status == StatusNotified {
 		if err := s.store.UpsertDelivery(ctx, item.ID, key, res.ChannelID, StatusNotified, "", false, title, text); err != nil {
@@ -946,7 +948,8 @@ func loginRequiredDeliveryKey(platform string, now time.Time) string {
 }
 
 func isLoginRequiredError(err error) bool {
-	return err != nil && strings.Contains(strings.ToUpper(err.Error()), "LOGIN_REQUIRED")
+	var readErr *platform.ReadError
+	return errors.As(err, &readErr) && readErr.Code == platform.ErrLoginRequired
 }
 
 func (s *Service) normalizeItem(raw config.WatchlistItem) (WatchItem, error) {

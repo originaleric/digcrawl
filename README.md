@@ -63,7 +63,7 @@ Add the same local MCP command to the Agent you use:
 
 After configuration, simply give your Agent a supported URL and ask it to read, summarize, compare, quote, or—when explicitly requested—transcribe it. The Agent uses DigCrawl locally and preserves structured outcomes such as login required, captcha, or rate limiting.
 
-For explicit local-video preferences, say “keep downloaded videos”, “clean up downloaded videos after processing”, or “set the video download limit to 512 MiB”. The Skill updates only the user-owned media retention or size setting through its local configuration tool; it does not require a platform-specific path or edit the profile in chat.
+For a platform video that the MCP tool downloads during enrichment, say “keep downloaded videos”, “clean up downloaded videos after processing”, or “set the video download limit to 512 MiB”. The Skill updates only the user-owned media retention or size setting through its local configuration tool; it does not require a platform-specific path or edit the profile in chat. For a direct local file or media URL, use `digcrawl video`; `--keep <path>` controls retention for that one CLI invocation.
 
 The Skill does not include API keys or expose browser cookies. See the [Agent Skill](./.agents/skills/digcrawl/) for routing behavior and [Use with AI Agents](#use-with-ai-agents) for security details.
 
@@ -103,6 +103,7 @@ Developers who want to build from source need Go 1.26.1+; see the [development i
 | --- | --- | --- |
 | Archive a single page | Extract a page or post into portable Markdown, HTML, JSON, and optional media assets. | `digcrawl collect <url>` |
 | Collect a queue of URLs | Process a file or local inbox and retain an index or database record. | `digcrawl collect --file urls.txt` |
+| Analyze a video file or direct URL | Extract speech transcripts and on-screen text from a local video or direct media URL. | `digcrawl video ./video.mp4` |
 | Monitor new content | Discover new items from feeds, lists, profiles, or pages, then collect and notify on a schedule. | `digcrawl watchlist run --once` |
 | Give an AI agent reading tools | Run a local MCP server with the official Skill and platform-aware tool routing. | `digcrawl mcp --config <profile>` |
 | Integrate a host application | Use HTTP Gateway, Collector, stdio, or the Go SDK. | [transport docs](./transport/README.md) |
@@ -130,6 +131,22 @@ Collect one URL or a batch:
 ./digcrawl collect --file urls.txt --format md,json --out ./collect-output
 ./digcrawl collect inbox --watch
 ```
+
+Analyze a local video or a directly downloadable video URL:
+
+```bash
+# Run processors enabled in the ASR and video-frame OCR configuration.
+./digcrawl video ./meeting.mp4
+
+# Run both ASR and frame OCR, then export Markdown.
+./digcrawl video "https://cdn.example.com/meeting.mp4" --mode both --format md --out meeting.md
+
+# Run speech transcription or on-screen text recognition only.
+./digcrawl video ./meeting.mp4 --mode asr
+./digcrawl video ./meeting.mp4 --mode ocr
+```
+
+Video URLs must point directly to downloadable media; use the relevant collection tool for platform page URLs. Remote videos are deleted after processing unless `--keep ./video.mp4` is supplied. Unless `--config` is supplied, active root ASR/OCR settings in `config/config.yaml` take priority and inactive processors can fall back to the active settings in the standard user Skill profile.
 
 Run a watchlist once, or keep its scheduler running locally:
 
@@ -189,6 +206,7 @@ Read the [runtime documentation](./runtime/README.md) before exposing a Gateway 
 
 | Date | Highlight | Why it matters |
 | --- | --- | --- |
+| 2026-08-30 | Added direct local-file and direct-media-URL video analysis. | `digcrawl video` reuses bounded ASR and frame OCR, cleans up URL downloads by default, and can use the user Skill profile without weakening an explicit project configuration. |
 | 2026-08-29 | Added opt-in Watchlist source/item concurrency with safe collection coordination. | Discovery and processing can use bounded goroutines while content keys, output paths, index.json, and platform request spacing remain controlled. |
 | 2026-08-26 | Added explicit Skill video-retention preferences and safe profile updates. | Agents can retain or clean up downloaded videos and set a download cap without editing YAML; concurrent local profile writes are serialized and cancellable. |
 | 2026-08-26 | Finalized execution isolation and external-ID boundaries for video understanding. | Each Skill media operation owns a distinct workspace; external call IDs correlate requests only and cannot overwrite local media or manifests. |

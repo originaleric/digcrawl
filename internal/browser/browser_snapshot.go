@@ -53,7 +53,6 @@ func BrowserSnapshot(ctx context.Context, req *BrowserSnapshotRequest) (*Browser
 	if err := checkAllowedDomain(targetURL.Hostname(), cfg.AllowedDomains); err != nil {
 		return nil, err
 	}
-
 	ctx, cancel := context.WithTimeout(ctx, time.Duration(cfg.TotalTimeoutSec)*time.Second)
 	defer cancel()
 
@@ -103,20 +102,11 @@ func BrowserSnapshot(ctx context.Context, req *BrowserSnapshotRequest) (*Browser
 	// 应用过滤器
 	filteredElements := filterElements(elements, filter)
 
-	// 保存Cookie（如果指定）
-	cookieDomain := strings.TrimSpace(req.UseCookieDomain)
-	if cookieDomain == "" {
-		cookieDomain = targetURL.Hostname()
-	}
-	if err := saveDomainCookies(page, cookieDomain, cfg.CookieStoreDir, targetURL); err != nil {
-		// Cookie保存失败不影响快照结果
-		_ = err
-	}
-
-	return &BrowserSnapshotResponse{
+	resp := &BrowserSnapshotResponse{
 		URL:      targetURL.String(),
 		Title:    title,
 		Elements: filteredElements,
 		Refs:     refs,
-	}, nil
+	}
+	return resp, nil
 }
