@@ -206,6 +206,7 @@ Read the [runtime documentation](./runtime/README.md) before exposing a Gateway 
 
 | Date | Highlight | Why it matters |
 | --- | --- | --- |
+| 2026-08-31 | Stabilized browser sessions and Watchlist login recovery. | Canonical sessions prevent background readers from overwriting a completed login; every Watchlist entry generates its recovery command from the running executable and loaded configuration. |
 | 2026-08-30 | Added direct local-file and direct-media-URL video analysis. | `digcrawl video` reuses bounded ASR and frame OCR, cleans up URL downloads by default, and can use the user Skill profile without weakening an explicit project configuration. |
 | 2026-08-29 | Added opt-in Watchlist source/item concurrency with safe collection coordination. | Discovery and processing can use bounded goroutines while content keys, output paths, index.json, and platform request spacing remain controlled. |
 | 2026-08-26 | Added explicit Skill video-retention preferences and safe profile updates. | Agents can retain or clean up downloaded videos and set a download cap without editing YAML; concurrent local profile writes are serialized and cancellable. |

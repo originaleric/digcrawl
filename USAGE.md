@@ -98,6 +98,7 @@ go install ./cmd/digcollect
 | `mcp` | 用户 Skill profile：`$XDG_CONFIG_HOME/digcrawl/digcrawl-skill.yaml`；未设置 XDG 时为 `~/.config/digcrawl/digcrawl-skill.yaml`；Windows 为 `%APPDATA%\DigCrawl\digcrawl-skill.yaml` |
 | `gateway` / `collector` / `collect` 等 | 命令行 `--config`，未指定时为 `config/config.yaml` |
 | `video` | 显式 `--config` 时只使用该 profile；未指定时先使用项目 `config/config.yaml` 中已启用的处理器，再按处理器回退到标准用户 Skill profile，项目文件不存在时直接使用该 Skill profile |
+| `browser login` / `browser check` | 显式 `--config` 时只使用该 profile；未指定时先使用项目 `config/config.yaml`，项目文件不存在时使用标准用户 Skill profile。恢复 MCP 会话时应传入启动该 MCP 的同一 profile 路径。 |
 | `connect` / `login` | `$XDG_CONFIG_HOME/digcrawl/config.yaml`；未设置 XDG 时为 `~/.config/digcrawl/config.yaml`（可用 `--config` 覆盖） |
 | 本地 GORM 数据库连接 | `config/gorm.yml`，由 `config/gorm.example.yml` 复制生成；包含密码，默认不入 Git |
 | DigFlow 内嵌 Runtime 配置 | `config/digflow.yml`、`config/digflow-gorm.yml`、`config/eino.yml`、`agents/watchlist/agents.yml` |
@@ -778,6 +779,8 @@ digcrawl video "https://cdn.example.com/meeting.mp4" --keep ./meeting.mp4
 - macOS：生成 `~/Library/LaunchAgents/com.digcrawl.watchlist.plist` 并通过 `launchctl` 管理。
 - Linux：生成 `~/.config/systemd/user/digcrawl-watchlist.service` 并通过 `systemctl --user` 管理。
 - 日志：macOS 写入 `DIGCRAWL_LOG_DIR` 下的 `watchlist.out.log` / `watchlist.err.log`；Linux 默认进入 user journal，通过脚本的 `logs` 命令查看。
+- `install`、`install-cli`、`build`、`rebuild` 和 `rebuild-restart` 会创建 `${DIGCRAWL_CLI_BIN_DIR:-~/.local/bin}/digcrawl` 到服务 binary 的符号链接，并把该目录写入登录 shell 的启动配置。新开终端或 source 对应配置后，才可直接使用 `digcrawl`。
+- 收到 Watchlist 登录失效通知时，运行通知中给出的 `<服务实际 executable> browser login --config <服务实际配置路径> --platform <platform>`；命令由服务的当前 executable 与已加载配置生成，避免把 Cookie 写入另一套 profile。未从文件加载配置时会省略 `--config`，保留原有默认解析。
 
 常用命令：
 
@@ -998,7 +1001,7 @@ digcrawl collect "https://example.com/article" --format md,html,json --out ./my-
 
 ### 平台登录与健康检查
 
-部分平台在未登录或 Cookie 过期时会返回 `LOGIN_REQUIRED`。可使用 DigCrawl 的独立有头浏览器完成登录并保存 Cookie；它不会读取日常浏览器 profile。初始化 Skill profile 后，以下命令默认使用该 profile 的 `CookieStoreDir`，并会输出打开的登录 URL 和 Cookie 保存目录。若 MCP 使用自定义 profile，则登录和会话检查必须带同一个 `--config <profile>`，避免写入另一套 Cookie：
+部分平台在未登录或 Cookie 过期时会返回 `LOGIN_REQUIRED`。可使用 DigCrawl 的独立有头浏览器完成登录并保存 Cookie；它不会读取日常浏览器 profile。`browser login` 与 `browser check` 显式传入 `--config` 时使用该 profile；未传时先使用当前项目 `config/config.yaml`，项目文件不存在时才使用标准用户 Skill profile。恢复 MCP 会话时，必须传入启动该 MCP 的同一个 `--config <profile>`，避免把 Cookie 写入另一套 profile。命令会输出打开的登录 URL 和 Cookie 保存目录：
 
 ```bash
 digcrawl browser login --platform xiaohongshu
@@ -1331,6 +1334,8 @@ GOROOT=/Users/dig/.gvm/gos/go1.26.1 /Users/dig/.gvm/gos/go1.26.1/bin/go build -o
 - `title` / `text` 不为空
 
 ### 16.4 登录后试读
+
+下面的命令适用于当前项目配置；如要验证 MCP 会话，请为 login 和 check 都传入启动该 MCP 的同一 `--config <profile>`。
 
 ```bash
 ./digcrawl browser login --platform xiaohongshu

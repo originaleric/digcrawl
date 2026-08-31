@@ -752,7 +752,7 @@ func TestRunItemNotifiesLoginRequiredOnlyOncePerDay(t *testing.T) {
 	}
 	notifier := &recordingNotifier{}
 	svc := &Service{
-		cfg:      &config.Config{Watchlist: config.WatchlistConfig{DefaultInterval: "6h"}},
+		cfg:      &config.Config{SourcePath: "/Users/test/Watchlists/default.yaml", Watchlist: config.WatchlistConfig{DefaultInterval: "6h"}},
 		store:    st,
 		feeds:    staticFeedReader{err: platform.NewReadError(platform.ErrLoginRequired, "toutiao author page requires login", "toutiao", nil)},
 		notifier: notifier,
@@ -764,7 +764,7 @@ func TestRunItemNotifiesLoginRequiredOnlyOncePerDay(t *testing.T) {
 	if first.Notified != 1 || notifier.calls != 1 {
 		t.Fatalf("first login-required run should notify once, summary=%+v calls=%d", first, notifier.calls)
 	}
-	if len(notifier.messages) != 1 || !strings.Contains(notifier.messages[0].Title, "需要重新登录") || !strings.Contains(notifier.messages[0].Text, item.Name) || !strings.Contains(notifier.messages[0].Text, "./bin/digcrawl-watchlist browser login --platform toutiao") {
+	if len(notifier.messages) != 1 || !strings.Contains(notifier.messages[0].Title, "需要重新登录") || !strings.Contains(notifier.messages[0].Text, item.Name) || !strings.Contains(notifier.messages[0].Text, "browser login --config '/Users/test/Watchlists/default.yaml' --platform 'toutiao'") {
 		t.Fatalf("unexpected login-required notification: %+v", notifier.messages)
 	}
 	second, err := svc.RunItem(ctx, item)
@@ -773,6 +773,13 @@ func TestRunItemNotifiesLoginRequiredOnlyOncePerDay(t *testing.T) {
 	}
 	if second.Notified != 0 || notifier.calls != 1 {
 		t.Fatalf("repeated login-required run should not notify again, summary=%+v calls=%d", second, notifier.calls)
+	}
+}
+
+func TestLoginRecoveryCommandKeepsDefaultProfileResolutionWhenSourcePathIsEmpty(t *testing.T) {
+	command := loginRecoveryCommand(&config.Config{}, "toutiao")
+	if strings.Contains(command, "--config") || !strings.HasSuffix(command, " browser login --platform 'toutiao'") {
+		t.Fatalf("command=%q", command)
 	}
 }
 
