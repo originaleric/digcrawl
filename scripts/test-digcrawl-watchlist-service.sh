@@ -49,9 +49,37 @@ test_macos_install_starts_and_reports_running() {
         else
           printf '    state = exited\n'
         fi
-        ;;
+      ;;
     esac
   }
+  # macOS owns the real plist parser. The Linux CI runner simulates launchd,
+  # so it needs only the two plutil operations exercised by this test.
+  if [[ "${DIGCRAWL_TEST_FORCE_MOCK_PLUTIL:-}" == "1" ]] || ! command -v plutil >/dev/null 2>&1; then
+    plutil() {
+      case "$1" in
+        -lint)
+          [[ -f "$2" ]]
+          ;;
+        -replace)
+          [[ "$2" == "ProgramArguments.0" && "$3" == "-string" && -f "$5" ]] || return 1
+          awk -v replacement="$4" '
+            /<key>ProgramArguments<\/key>/ {
+              print
+              getline; print
+              getline
+              sub(/<string>[^<]*<\/string>/, "<string>" replacement "</string>")
+              print
+              next
+            }
+            { print }
+          ' "$5" >"$5.tmp" && mv "$5.tmp" "$5"
+          ;;
+        *)
+          return 64
+          ;;
+      esac
+    }
+  fi
   source "${SERVICE_SCRIPT}"
   install_macos
   local calls
