@@ -66,8 +66,7 @@ func PageFetchJSON(ctx context.Context, req *PageFetchRequest) (*PageFetchResult
 	defer manager.release(session)
 
 	page := session.page.Timeout(time.Duration(cfg.TotalTimeoutSec) * time.Second)
-	cookieDomain := strings.TrimSpace(req.UseCookieDomain)
-	if cookieDomain != "" {
+	if cookieDomain := strings.TrimSpace(req.UseCookieDomain); cookieDomain != "" {
 		if err := loadDomainCookies(page, cookieDomain, cfg.CookieStoreDir, targetWarm); err != nil {
 			return nil, err
 		}
@@ -93,9 +92,6 @@ func PageFetchJSON(ctx context.Context, req *PageFetchRequest) (*PageFetchResult
 	result, err := pageFetchEval(page, fetchURL, method, body, referer)
 	if err != nil {
 		return nil, err
-	}
-	if cookieDomain != "" {
-		_ = saveDomainCookies(page, cookieDomain, cfg.CookieStoreDir, targetWarm)
 	}
 	return result, nil
 }

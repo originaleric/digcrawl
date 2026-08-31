@@ -14,12 +14,22 @@ import (
 	"github.com/originaleric/digcrawl/collect"
 	"github.com/originaleric/digcrawl/config"
 	"github.com/originaleric/digcrawl/internal/notify"
+	"github.com/originaleric/digcrawl/internal/platform"
 	"github.com/originaleric/digcrawl/internal/summary"
 	"github.com/originaleric/digcrawl/internal/watchlist"
 )
 
 func boolPtr(v bool) *bool {
 	return &v
+}
+
+func TestIsLoginRequiredErrorRequiresStructuredCode(t *testing.T) {
+	if isLoginRequiredError(errors.New("LOGIN_REQUIRED: static page appeared unauthenticated; browser timed out")) {
+		t.Fatal("unstructured diagnostic text must not trigger a login notification")
+	}
+	if !isLoginRequiredError(platform.NewReadError(platform.ErrLoginRequired, "session rejected", "toutiao", nil)) {
+		t.Fatal("structured login-required error must trigger a login notification")
+	}
 }
 
 type recordingNotifier struct {
@@ -744,7 +754,7 @@ func TestRunItemNotifiesLoginRequiredOnlyOncePerDay(t *testing.T) {
 	svc := &Service{
 		cfg:      &config.Config{Watchlist: config.WatchlistConfig{DefaultInterval: "6h"}},
 		store:    st,
-		feeds:    staticFeedReader{err: errors.New("LOGIN_REQUIRED: toutiao author page requires login")},
+		feeds:    staticFeedReader{err: platform.NewReadError(platform.ErrLoginRequired, "toutiao author page requires login", "toutiao", nil)},
 		notifier: notifier,
 	}
 	first, err := svc.RunItem(ctx, item)
@@ -754,7 +764,7 @@ func TestRunItemNotifiesLoginRequiredOnlyOncePerDay(t *testing.T) {
 	if first.Notified != 1 || notifier.calls != 1 {
 		t.Fatalf("first login-required run should notify once, summary=%+v calls=%d", first, notifier.calls)
 	}
-	if len(notifier.messages) != 1 || !strings.Contains(notifier.messages[0].Title, "需要重新登录") || !strings.Contains(notifier.messages[0].Text, item.Name) || !strings.Contains(notifier.messages[0].Text, "digcrawl browser login --platform toutiao") {
+	if len(notifier.messages) != 1 || !strings.Contains(notifier.messages[0].Title, "需要重新登录") || !strings.Contains(notifier.messages[0].Text, item.Name) || !strings.Contains(notifier.messages[0].Text, "./bin/digcrawl-watchlist browser login --platform toutiao") {
 		t.Fatalf("unexpected login-required notification: %+v", notifier.messages)
 	}
 	second, err := svc.RunItem(ctx, item)
@@ -783,7 +793,7 @@ func TestRunItemDoesNotDoubleSendLoginRequiredAfterRetryFailure(t *testing.T) {
 	svc := &Service{
 		cfg:      &config.Config{Watchlist: config.WatchlistConfig{DefaultInterval: "6h"}},
 		store:    st,
-		feeds:    staticFeedReader{err: errors.New("LOGIN_REQUIRED: toutiao author page requires login")},
+		feeds:    staticFeedReader{err: platform.NewReadError(platform.ErrLoginRequired, "toutiao author page requires login", "toutiao", nil)},
 		notifier: notifier,
 	}
 	if _, err := svc.RunItem(ctx, item); err == nil {

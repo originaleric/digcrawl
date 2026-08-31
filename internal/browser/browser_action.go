@@ -45,7 +45,13 @@ func BrowserAction(ctx context.Context, req *BrowserActionRequest) (*BrowserActi
 
 	cfg := normalizeLocalBrowserConfig(config.Get().LocalBrowser)
 	action := strings.ToLower(strings.TrimSpace(req.Action))
-
+	targetURL, err := validateURL(req.URL)
+	if err != nil {
+		return nil, err
+	}
+	if err := checkAllowedDomain(targetURL.Hostname(), cfg.AllowedDomains); err != nil {
+		return nil, err
+	}
 	ctx, cancel := context.WithTimeout(ctx, time.Duration(cfg.TotalTimeoutSec)*time.Second)
 	defer cancel()
 
@@ -60,10 +66,6 @@ func BrowserAction(ctx context.Context, req *BrowserActionRequest) (*BrowserActi
 
 	// 加载Cookie（如果指定）
 	if req.UseCookieDomain != "" {
-		targetURL, err := validateURL(req.URL)
-		if err != nil {
-			return nil, err
-		}
 		if err := checkAllowedDomain(req.UseCookieDomain, cfg.AllowedDomains); err != nil {
 			return nil, fmt.Errorf("cookie 域名不在白名单: %w", err)
 		}
@@ -132,11 +134,12 @@ func BrowserAction(ctx context.Context, req *BrowserActionRequest) (*BrowserActi
 		}
 	}
 
-	return &BrowserActionResponse{
+	resp := &BrowserActionResponse{
 		Success: true,
 		Message: fmt.Sprintf("操作 %s 执行成功", action),
 		URL:     urlStr,
-	}, nil
+	}
+	return resp, nil
 }
 
 // executeClick 执行点击操作

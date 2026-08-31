@@ -37,13 +37,13 @@ func printBrowserUsage() {
   digcrawl browser login --platform xiaohongshu|douyin|toutiao|threads|instagram
   digcrawl browser check --platform xiaohongshu|douyin|toutiao|threads|instagram [--url URL] [--trial]
 
-不传 --config 时，使用用户级 Skill profile；定制 profile 请显式传 --config。
+不传 --config 时，优先使用当前项目的 config/config.yaml，其次使用用户级 Skill profile；定制 profile 请显式传 --config。
 `)
 }
 
 func runBrowserLogin(args []string) {
 	fs := flag.NewFlagSet("browser login", flag.ExitOnError)
-	configPath := fs.String("config", "", "path to profile (default: user skill profile)")
+	configPath := fs.String("config", "", "path to profile (default: project config, then user skill profile)")
 	platform := fs.String("platform", "", "platform: xiaohongshu, douyin, toutiao, threads, instagram")
 	_ = fs.Parse(args)
 
@@ -69,7 +69,7 @@ func runBrowserLogin(args []string) {
 
 func runBrowserCheck(args []string) {
 	fs := flag.NewFlagSet("browser check", flag.ExitOnError)
-	configPath := fs.String("config", "", "path to profile (default: user skill profile)")
+	configPath := fs.String("config", "", "path to profile (default: project config, then user skill profile)")
 	platform := fs.String("platform", "", "platform: xiaohongshu, douyin, toutiao, threads, instagram")
 	probeURL := fs.String("url", "", "optional probe URL for trial read")
 	trial := fs.Bool("trial", false, "require trial read (needs --url or Platform.HealthProbes)")
@@ -100,17 +100,24 @@ func runBrowserCheck(args []string) {
 	}
 }
 
-// browserProfilePath aligns the short browser-login command with the standard
-// MCP installation while retaining explicit custom-profile support.
+// browserProfilePath makes browser commands work from a DigCrawl checkout
+// without flags, while retaining the standard user Skill profile fallback and
+// explicit custom-profile support.
 func browserProfilePath(explicitPath string) (string, error) {
 	if path := strings.TrimSpace(explicitPath); path != "" {
 		return path, nil
 	}
-	path := config.DefaultSkillProfilePath()
-	if _, err := os.Stat(path); err == nil {
-		return path, nil
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return "", fmt.Errorf("inspect user Skill profile: %w", err)
+	for _, path := range []string{"config/config.yaml", config.DefaultSkillProfilePath()} {
+		info, err := os.Stat(path)
+		if err == nil {
+			if info.IsDir() {
+				return "", fmt.Errorf("config path is a directory: %s", path)
+			}
+			return path, nil
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return "", fmt.Errorf("inspect config %s: %w", path, err)
+		}
 	}
-	return "", fmt.Errorf("user Skill profile not found at %s; run `digcrawl init --profile skill` or pass --config", path)
+	return "", fmt.Errorf("no default config found at config/config.yaml or %s; run `digcrawl init --profile skill` or pass --config", config.DefaultSkillProfilePath())
 }

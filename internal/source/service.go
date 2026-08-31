@@ -5,6 +5,7 @@ import (
 	"crypto/sha1"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -1344,7 +1345,7 @@ var hrefRe = regexp.MustCompile(`(?i)href=["']([^"']+)["']`)
 var absoluteURLRe = regexp.MustCompile(`(?i)https?://[^"'<>\\\s]+`)
 var relativeContentPathRe = regexp.MustCompile(`(?i)/(?:article|group|video|w)/[0-9]+/?|/[A-Za-z0-9_]{1,32}/status/[0-9]+/?|/video/(?:BV[0-9A-Za-z]+|av[0-9]+)/?|/(?:detail|status)/[0-9A-Za-z]+/?|/(?:short-video|photo)/[0-9A-Za-z_-]+/?|/question/[0-9]+/answer/[0-9]+/?|/p/[0-9A-Za-z_-]+/?|/reel/[0-9A-Za-z_-]+/?|/@[A-Za-z0-9._]+/post/[0-9A-Za-z_-]+/?|/zvideo/[0-9]+/?`)
 
-func (r Service) readHTMLLinks(ctx context.Context, item Source, platform string) ([]Item, error) {
+func (r Service) readHTMLLinks(ctx context.Context, item Source, platformName string) ([]Item, error) {
 	data, _, err := r.feedService().Fetch(ctx, item.URL)
 	base, _ := url.Parse(item.URL)
 	var staticErr error
@@ -1354,40 +1355,73 @@ func (r Service) readHTMLLinks(ctx context.Context, item Source, platform string
 		html := string(data)
 		lower := strings.ToLower(html)
 		if strings.Contains(lower, "captcha") || strings.Contains(lower, "验证") {
-			staticErr = fmt.Errorf("CAPTCHA_REQUIRED: platform page requires verification")
+			staticErr = platformReadError(platformName, platform.ErrCaptchaRequired, "static page requires verification")
 		} else if strings.Contains(lower, "login") && strings.Contains(lower, "password") {
-			staticErr = fmt.Errorf("LOGIN_REQUIRED: platform page requires login")
-		} else if out, err := r.itemsFromLinkCandidates(ctx, item, platform, base, linkCandidates(html)); err == nil {
+			staticErr = platformReadError(platformName, platform.ErrLoginRequired, "static page appears to require login")
+		} else if out, err := r.itemsFromLinkCandidates(ctx, item, platformName, base, linkCandidates(html)); err == nil {
 			return out, nil
 		} else {
 			staticErr = err
 		}
 	}
 	if browserFallbackEnabled(item.Options) {
-		if out, err := r.readHTMLLinksBrowser(ctx, item, platform, base); err == nil {
+		if out, err := r.readHTMLLinksBrowser(ctx, item, platformName, base); err == nil {
 			return out, nil
-		} else if staticErr != nil {
-			accessErr := r.toutiaoAccessProbeError(ctx, item.URL, platform)
-			if accessErr != nil {
-				return nil, fmt.Errorf("%v; browser fallback: %w; access probe: %v", staticErr, err, accessErr)
-			}
-			return nil, fmt.Errorf("%v; browser fallback: %w", staticErr, err)
 		} else {
-			if accessErr := r.toutiaoAccessProbeError(ctx, item.URL, platform); accessErr != nil {
-				return nil, fmt.Errorf("browser fallback: %w; access probe: %v", err, accessErr)
+			if accessErr := r.toutiaoAccessProbeError(ctx, item.URL, platformName); accessErr != nil {
+				// The authenticated access probe is the only authoritative source
+				// for a Toutiao login-required result after browser fallback.
+				return nil, accessErr
 			}
-			return nil, err
-		}
-	}
-	if platform == "toutiao" {
-		if accessErr := r.toutiaoAuthorAccessError(ctx, item.URL); accessErr != nil {
-			return nil, accessErr
+			return nil, browserFallbackDiscoveryError(staticErr, err)
 		}
 	}
 	if staticErr != nil {
-		return nil, staticErr
+		return nil, r.resolveStaticDiscoveryError(ctx, item.URL, platformName, staticErr)
 	}
-	return nil, fmt.Errorf("CONTENT_NOT_FOUND: no %s content links found", platform)
+	return nil, fmt.Errorf("CONTENT_NOT_FOUND: no %s content links found", platformName)
+}
+
+// resolveStaticDiscoveryError keeps a static unauthenticated-looking page as
+// evidence, not a final session verdict. Toutiao can verify that evidence via
+// its authenticated local-session probe; other source errors keep their
+// original structured classification.
+func (r Service) resolveStaticDiscoveryError(ctx context.Context, rawURL, platformName string, staticErr error) error {
+	if platformName != "toutiao" || !hasPlatformReadErrorCode(staticErr, platform.ErrLoginRequired) {
+		return staticErr
+	}
+	return r.resolveToutiaoStaticLoginEvidence(ctx, rawURL, staticErr, config.Get().LocalBrowser.CookieStoreDir)
+}
+
+func (r Service) resolveToutiaoStaticLoginEvidence(ctx context.Context, rawURL string, staticErr error, cookieStoreDir string) error {
+	if accessErr := r.toutiaoAuthorAccessErrorForCookieStore(ctx, rawURL, cookieStoreDir); accessErr != nil {
+		return accessErr
+	}
+	return fmt.Errorf("static source appeared unauthenticated, but the local Toutiao session probe did not confirm a login failure: %s", readErrorMessage(staticErr))
+}
+
+func platformReadError(platformName, code, message string) error {
+	return platform.NewReadError(code, message, platformName, nil)
+}
+
+func hasPlatformReadErrorCode(err error, code string) bool {
+	var readErr *platform.ReadError
+	return errors.As(err, &readErr) && readErr.Code == code
+}
+
+func readErrorMessage(err error) string {
+	var readErr *platform.ReadError
+	if errors.As(err, &readErr) && strings.TrimSpace(readErr.Message) != "" {
+		return readErr.Message
+	}
+	return err.Error()
+}
+
+func browserFallbackDiscoveryError(staticErr, browserErr error) error {
+	if staticErr == nil {
+		return browserErr
+	}
+	return fmt.Errorf("browser fallback failed after static discovery failed (%s): %w", readErrorMessage(staticErr), browserErr)
 }
 
 func (r Service) toutiaoAccessProbeError(ctx context.Context, rawURL, platform string) error {
@@ -1742,11 +1776,29 @@ func socialRaw(item Source, platform string, base map[string]any) map[string]any
 }
 
 func (r Service) toutiaoAuthorAccessError(ctx context.Context, rawURL string) error {
+	return r.toutiaoAuthorAccessErrorForCookieStore(ctx, rawURL, config.Get().LocalBrowser.CookieStoreDir)
+}
+
+func (r Service) toutiaoAuthorAccessErrorForCookieStore(ctx context.Context, rawURL, cookieStoreDir string) error {
 	token := toutiaoUserTokenFromURL(rawURL)
 	if token == "" {
 		return nil
 	}
 	apiURL := "https://www.toutiao.com/api/pc/user/info?token=" + url.QueryEscape(token)
+	cookieHeader, err := browser.CookieHeaderForURL(cookieStoreDir, apiURL)
+	if err != nil {
+		var unavailable *browser.CookieSessionUnavailableError
+		if errors.As(err, &unavailable) {
+			return platformReadError("toutiao", platform.ErrLoginRequired, "local Toutiao browser session is unavailable; please log in again")
+		}
+		// This probe is diagnostic only. A missing or unreadable cookie store
+		// must not turn an unrelated browser fallback failure into LOGIN_REQUIRED.
+		return nil
+	}
+	return r.toutiaoAuthorAccessErrorWithCookieHeader(ctx, apiURL, cookieHeader)
+}
+
+func (r Service) toutiaoAuthorAccessErrorWithCookieHeader(ctx context.Context, apiURL, cookieHeader string) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
 	if err != nil {
 		return nil
@@ -1754,6 +1806,9 @@ func (r Service) toutiaoAuthorAccessError(ctx context.Context, rawURL string) er
 	req.Header.Set("Accept", "application/json,text/plain,*/*")
 	req.Header.Set("Referer", "https://www.toutiao.com/")
 	req.Header.Set("User-Agent", "Mozilla/5.0 DigCrawl Watchlist")
+	if strings.TrimSpace(cookieHeader) != "" {
+		req.Header.Set("Cookie", cookieHeader)
+	}
 	resp, err := r.httpClient().Do(req)
 	if err != nil {
 		return nil
@@ -1770,7 +1825,7 @@ func (r Service) toutiaoAuthorAccessError(ctx context.Context, rawURL string) er
 	reason := strings.ToLower(strings.TrimSpace(payload.Reason))
 	message := strings.ToLower(strings.TrimSpace(payload.Message))
 	if reason == "login_required" || (payload.UserID == 0 && message == "error") {
-		return fmt.Errorf("LOGIN_REQUIRED: toutiao author page requires login")
+		return platformReadError("toutiao", platform.ErrLoginRequired, "toutiao author page requires login")
 	}
 	return nil
 }
