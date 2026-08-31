@@ -108,18 +108,25 @@ Watchlist 常驻服务：
 ./digcrawl watchlist serve --config config/config.yaml
 ```
 
-安装 macOS/Linux 用户级常驻服务：
+安装 macOS/Linux 用户级常驻服务（`install` 成功返回即已启动）：
 
 ```bash
 DIGCRAWL_CONFIG="$PWD/config/config.yaml" \
 ./scripts/digcrawl-watchlist-service.sh install
 
-./scripts/digcrawl-watchlist-service.sh start
 ./scripts/digcrawl-watchlist-service.sh status
 ./scripts/digcrawl-watchlist-service.sh logs
 ```
 
-`install` 会同时创建 `~/.local/bin/digcrawl`（或 `DIGCRAWL_CLI_BIN_DIR`）到服务 binary 的符号链接，并把该目录写入登录 shell 的启动配置；新开终端或 source 对应配置后才可直接使用 `digcrawl`。Watchlist 的登录失效通知会由当前 executable 和已加载配置生成 `<executable> browser login --config <profile> --platform <platform>`；请执行该命令，以同一 executable 路径和配置恢复服务会话。未从文件加载配置时，通知会省略 `--config` 并保留默认解析。
+Windows 在 PowerShell 中使用：
+
+```powershell
+$env:DIGCRAWL_CONFIG = "$PWD\config\config.yaml"
+.\scripts\digcrawl-watchlist-service.ps1 install
+.\scripts\digcrawl-watchlist-service.ps1 status
+```
+
+macOS/Linux 的 `install` 会同时创建 `~/.local/bin/digcrawl`（或 `DIGCRAWL_CLI_BIN_DIR`）到服务 binary 的符号链接，并把该目录写入登录 shell 的启动配置；新开终端或 source 对应配置后才可直接使用 `digcrawl`。macOS 还会将 Watchlist 启动脚本私有复制到 `~/Library/Application Support/DigCrawl/bin/`，使 launchd 不依赖 `Documents` 等受保护目录中的项目脚本；`start` / `restart` 会自动迁移旧 plist 并刷新该副本。Windows 请把发布版 `digcrawl.exe` 路径作为 `DIGCRAWL_BIN`（或放在项目根目录）。Watchlist 的登录失效通知会由当前 executable 和已加载配置生成 `<executable> browser login --config <profile> --platform <platform>`；请执行该命令，以同一 executable 路径和配置恢复服务会话。未从文件加载配置时，通知会省略 `--config` 并保留默认解析。
 
 ## 5. Watchlist 清单维护
 

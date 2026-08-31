@@ -753,7 +753,8 @@ digcrawl asr transcribe <file> --timeout 1200 # ffmpeg 抽音频并转写任意�
 digcrawl video <local-file-or-direct-url> [--mode auto|asr|ocr|both] # 解析本地视频或可直接下载的视频 URL
 digcrawl watchlist run         # 执行 watchlist 监控、摘要和通知
 digcrawl watchlist serve       # 常驻调度，到期执行不同周期的 Tasks / Watchlist items
-scripts/digcrawl-watchlist-service.sh install|rebuild|rebuild-restart|start|stop|restart|status|logs|uninstall
+scripts/digcrawl-watchlist-service.sh install|rebuild|rebuild-restart|start|stop|restart|status|logs|uninstall  # macOS/Linux
+.\\scripts\\digcrawl-watchlist-service.ps1 install|start|stop|restart|status|logs|uninstall                    # Windows
 digcollect <url>              # 轻量采集入口，等价于 digcrawl collect <url>
 digcrawl help
 ```
@@ -774,12 +775,13 @@ digcrawl video "https://cdn.example.com/meeting.mp4" --keep ./meeting.mp4
 
 ### Watchlist 常驻服务脚本
 
-`scripts/digcrawl-watchlist-service.sh` 用于把 `digcrawl watchlist serve` 托管为用户级服务，方便本机或小型服务器部署。
+`scripts/digcrawl-watchlist-service.sh` 用于把 `digcrawl watchlist serve` 托管为用户级服务，方便本机或小型服务器部署。Windows 请使用对应的 PowerShell 脚本。
 
-- macOS：生成 `~/Library/LaunchAgents/com.digcrawl.watchlist.plist` 并通过 `launchctl` 管理。
+- macOS：生成 `~/Library/LaunchAgents/com.digcrawl.watchlist.plist`，并将启动脚本私有复制到 `~/Library/Application Support/DigCrawl/bin/`，再通过 `launchctl` 管理；`start` / `restart` 会自动迁移旧 plist 并刷新该副本，避免 launchd 被系统拒绝执行 `Documents` 等受保护目录中的项目脚本。
 - Linux：生成 `~/.config/systemd/user/digcrawl-watchlist.service` 并通过 `systemctl --user` 管理。
+- Windows：创建当前用户的 Task Scheduler 任务 `DigCrawl Watchlist` 并通过 PowerShell 管理。
 - 日志：macOS 写入 `DIGCRAWL_LOG_DIR` 下的 `watchlist.out.log` / `watchlist.err.log`；Linux 默认进入 user journal，通过脚本的 `logs` 命令查看。
-- `install`、`install-cli`、`build`、`rebuild` 和 `rebuild-restart` 会创建 `${DIGCRAWL_CLI_BIN_DIR:-~/.local/bin}/digcrawl` 到服务 binary 的符号链接，并把该目录写入登录 shell 的启动配置。新开终端或 source 对应配置后，才可直接使用 `digcrawl`。
+- macOS/Linux 的 `install`、`install-cli`、`build`、`rebuild` 和 `rebuild-restart` 会创建 `${DIGCRAWL_CLI_BIN_DIR:-~/.local/bin}/digcrawl` 到服务 binary 的符号链接，并把该目录写入登录 shell 的启动配置。新开终端或 source 对应配置后，才可直接使用 `digcrawl`；Windows 请把发布版 `digcrawl.exe` 路径作为 `DIGCRAWL_BIN`（或放在项目根目录）。
 - 收到 Watchlist 登录失效通知时，运行通知中给出的 `<服务实际 executable> browser login --config <服务实际配置路径> --platform <platform>`；命令由服务的当前 executable 与已加载配置生成，避免把 Cookie 写入另一套 profile。未从文件加载配置时会省略 `--config`，保留原有默认解析。
 
 常用命令：
@@ -788,7 +790,6 @@ digcrawl video "https://cdn.example.com/meeting.mp4" --keep ./meeting.mp4
 DIGCRAWL_CONFIG="$PWD/config/config.yaml" \
 ./scripts/digcrawl-watchlist-service.sh install
 
-./scripts/digcrawl-watchlist-service.sh start
 ./scripts/digcrawl-watchlist-service.sh status
 ./scripts/digcrawl-watchlist-service.sh logs
 ./scripts/digcrawl-watchlist-service.sh rebuild
@@ -796,6 +797,14 @@ DIGCRAWL_CONFIG="$PWD/config/config.yaml" \
 ./scripts/digcrawl-watchlist-service.sh restart
 ./scripts/digcrawl-watchlist-service.sh stop
 ./scripts/digcrawl-watchlist-service.sh uninstall
+```
+
+Windows（在 PowerShell 中）：
+
+```powershell
+$env:DIGCRAWL_CONFIG = "$PWD\config\config.yaml"
+.\scripts\digcrawl-watchlist-service.ps1 install
+.\scripts\digcrawl-watchlist-service.ps1 status
 ```
 
 可选环境变量：
@@ -813,7 +822,7 @@ DIGCRAWL_CONFIG="$PWD/config/config.yaml" \
 | `DIGCRAWL_BUILD_GOCACHE` | 自动构建 Go build cache，默认 `/private/tmp/digcrawl-gocache` |
 | `DIGCRAWL_BUILD_GOMODCACHE` | 自动构建 Go module cache，默认 `.tmp/go-mod-watchlist` |
 
-`install` 会构建默认 binary 并写入用户级服务配置；`run-foreground` 只运行已有 binary。更新代码或 DigFlow 依赖后，使用 `./scripts/digcrawl-watchlist-service.sh rebuild` 单独重建，或使用 `./scripts/digcrawl-watchlist-service.sh rebuild-restart` 重建后重启。脚本会优先读取已安装 launchd plist / systemd unit 里的 `DIGCRAWL_BIN`，重建到服务实际使用的 binary 路径。`build` 保留兼容，也会使用同样的路径解析逻辑。
+`install` 只有在服务已注册、已启动并通过运行状态检查后才会成功返回；不需要再补一次 `start`。`run-foreground` 只运行已有 binary。更新代码或 DigFlow 依赖后，使用 `./scripts/digcrawl-watchlist-service.sh rebuild` 单独重建，或使用 `./scripts/digcrawl-watchlist-service.sh rebuild-restart` 重建后重启。脚本会优先读取已安装 launchd plist / systemd unit 里的 `DIGCRAWL_BIN`，重建到服务实际使用的 binary 路径。`build` 保留兼容，也会使用同样的路径解析逻辑。
 
 使用 `digflow_runtime` summary agent 时，服务进程不再要求 launchd/systemd 注入业务密钥。推荐在主配置中设置 `RuntimeEnv.ConfigPath: config/runtime-env.yml`，并在本地 ignored 的 `config/runtime-env.yml` 中开启 `RuntimeEnv.Enabled: true`，填入 `DIGCRAWL_MYSQL_HOST`、`DIGCRAWL_MYSQL_DATABASE`、`DIGCRAWL_MYSQL_USER`、`DIGCRAWL_MYSQL_PASSWORD` 和 `DIGFLOW_SUMMARY_API_KEY`。仓库只提交 `config/runtime-env.example.yml`。
 
