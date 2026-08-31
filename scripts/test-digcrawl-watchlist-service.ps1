@@ -69,7 +69,7 @@ try {
     Assert-True (($script:Lifecycle -join ',') -eq 'register,start') 'install must register then start the task'
     Assert-True (Test-ServiceRunning) 'install must leave the task running'
     $runningStatus = Write-ServiceStatus | Out-String
-    Assert-True ($runningStatus.Contains("status=$greenEscape`running$resetEscape")) 'running status must be green'
+    Assert-True ($runningStatus.Contains("status=${greenEscape}running${resetEscape}")) 'running status must be green'
     Assert-True (-not $runningStatus.Contains('True')) 'status must not append a Boolean result'
 
     $script:Lifecycle = @()
@@ -79,7 +79,7 @@ try {
 
     $script:TaskState = 'Ready'
     $failedStatus = Write-ServiceStatus | Out-String
-    Assert-True ($failedStatus.Contains("status=$redEscape`ready$resetEscape")) 'non-running status must be red'
+    Assert-True ($failedStatus.Contains("status=${redEscape}ready${resetEscape}")) 'non-running status must be red'
 } finally {
     Remove-Item -LiteralPath $testRoot -Recurse -Force -ErrorAction SilentlyContinue
 }
