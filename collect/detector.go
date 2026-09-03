@@ -78,6 +78,9 @@ func Detect(rawURL string) (Match, error) {
 	if youtube.IsVideoURL(rawURL) {
 		return Match{Platform: youtube.PlatformName, Tool: platformprov.ToolYouTubeVideoRead}, nil
 	}
+	if host == "weixin.qq.com" && strings.HasPrefix(u.EscapedPath(), "/sph/") {
+		return Match{Platform: "wechat_channels", Tool: platformprov.ToolWechatChannelsRead}, nil
+	}
 	for _, r := range rules {
 		if hostMatches(host, r.hosts) {
 			return Match{Platform: r.platform, Tool: r.tool}, nil

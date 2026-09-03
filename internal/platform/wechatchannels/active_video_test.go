@@ -3,6 +3,8 @@ package wechatchannels
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -62,6 +64,94 @@ func TestImportActiveFetchesLoopbackBridgeResponse(t *testing.T) {
 	}
 	if content.Title != "Title" || content.PlatformMetadata["object_id"] != "object-1" {
 		t.Fatalf("content=%#v", content)
+	}
+}
+
+func TestLocalBridgeDownloadClientHasNoMetadataTimeout(t *testing.T) {
+	client := localBridgeDownloadClient()
+	if client.Timeout != 0 {
+		t.Fatalf("download client timeout=%s; video download must use caller cancellation", client.Timeout)
+	}
+}
+
+func TestDownloadActiveFromStateClassifiesUnavailableCapture(t *testing.T) {
+	stateDir := t.TempDir()
+	if err := writeBridgeState(filepath.Join(stateDir, bridgeStateFile), bridgeState{StateMachine: true, Service: "Wi-Fi", Port: 20261, ProxyMode: "pac", ControlToken: "token", DownloadProtocolVersion: downloadProtocolVersion, OwnerPID: 1}); err != nil {
+		t.Fatal(err)
+	}
+	srv := newIPv4TestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != bridgeDownloadPath || r.Header.Get(bridgeTokenHeader) != "token" {
+			http.NotFound(w, r)
+			return
+		}
+		var request activeDownloadRequest
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil || request.MaxBytes != 1024 {
+			http.Error(w, "invalid download limit", http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("X-DigCrawl-Bridge-Capture-Stats", "page_reports=0")
+		http.Error(w, "open and play one WeChat Channels video with the page adapter enabled first", http.StatusNotFound)
+	}))
+	defer srv.Close()
+	_, err := DownloadActiveFromState(context.Background(), srv.URL, stateDir, filepath.Join(t.TempDir(), "video.mp4"), 1024)
+	if !errors.Is(err, ErrActiveDownloadUnavailable) {
+		t.Fatalf("error=%v; want ErrActiveDownloadUnavailable", err)
+	}
+}
+
+func TestDownloadActiveFromStateRequiresBoundedDownloadBridge(t *testing.T) {
+	stateDir := t.TempDir()
+	if err := writeBridgeState(filepath.Join(stateDir, bridgeStateFile), bridgeState{StateMachine: true, Service: "Wi-Fi", Port: 20261, ProxyMode: "pac", ControlToken: "token", OwnerPID: 1}); err != nil {
+		t.Fatal(err)
+	}
+	_, err := DownloadActiveFromState(context.Background(), "http://127.0.0.1:1", stateDir, filepath.Join(t.TempDir(), "video.mp4"), 1024)
+	if err == nil || !strings.Contains(err.Error(), "stop it and start a new bridge") {
+		t.Fatalf("error=%v", err)
+	}
+	if err := CheckDownloadBridgeCompatibility(stateDir); err == nil || !strings.Contains(err.Error(), "bounded downloads") {
+		t.Fatalf("compatibility error=%v", err)
+	}
+}
+
+func TestActiveDownloadReadyFromStateUsesShortAuthenticatedControlRequest(t *testing.T) {
+	stateDir := t.TempDir()
+	if err := writeBridgeState(filepath.Join(stateDir, bridgeStateFile), bridgeState{StateMachine: true, Service: "Wi-Fi", Port: 20261, ProxyMode: "pac", ControlToken: "token", OwnerPID: 1}); err != nil {
+		t.Fatal(err)
+	}
+	srv := newIPv4TestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != bridgeDownloadReadyPath || r.Header.Get(bridgeTokenHeader) != "token" {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = w.Write([]byte(`{"ready":true}`))
+	}))
+	defer srv.Close()
+	ready, err := ActiveDownloadReadyFromState(context.Background(), srv.URL, stateDir)
+	if err != nil || !ready {
+		t.Fatalf("ready=%t err=%v", ready, err)
+	}
+}
+
+func TestImportActiveExplainsAmbiguousBridgeCapture(t *testing.T) {
+	srv := newIPv4TestServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "multiple videos", http.StatusConflict)
+	}))
+	defer srv.Close()
+	_, err := ImportActive(context.Background(), srv.URL)
+	if err == nil || !strings.Contains(err.Error(), "multiple videos") {
+		t.Fatalf("error=%v", err)
+	}
+}
+
+func TestImportActiveReportsAggregateCaptureStats(t *testing.T) {
+	srv := newIPv4TestServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("X-DigCrawl-Bridge-Capture-Stats", "tls_h1=2;tls_h2=1;http_requests=3")
+		http.Error(w, "not found", http.StatusNotFound)
+	}))
+	defer srv.Close()
+	_, err := ImportActive(context.Background(), srv.URL)
+	if err == nil || !strings.Contains(err.Error(), "tls_h1=2") {
+		t.Fatalf("error=%v", err)
 	}
 }
 

@@ -7,6 +7,7 @@ Gateway:
     - browser.browse
     - browser.snapshot
     - wechat.article.read
+    - wechat.channels.read
     - xiaohongshu.note.read
     - douyin.video.read
     - toutiao.article.read
@@ -52,6 +53,7 @@ Collector:
     - browser.browse
     - browser.snapshot
     - wechat.article.read
+    - wechat.channels.read
     - xiaohongshu.note.read
     - douyin.video.read
     - toutiao.article.read
@@ -99,6 +101,7 @@ LocalBrowser:
   AllowedDomains:
     - mp.weixin.qq.com
     - weixin.qq.com
+    - channels.weixin.qq.com
     - xiaohongshu.com
     - www.xiaohongshu.com
     - edith.xiaohongshu.com

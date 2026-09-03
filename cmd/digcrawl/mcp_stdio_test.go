@@ -115,7 +115,7 @@ func TestMCPPhaseOneProfileExposesOnlyReadTools(t *testing.T) {
 			idempotent  *bool
 		}{tool.InputSchema, tool.Annotations.ReadOnlyHint, tool.Annotations.DestructiveHint, tool.Annotations.IdempotentHint}
 	}
-	for _, name := range []string{"gateway.ping", "browser.browse", "wechat.article.read", "feed.read"} {
+	for _, name := range []string{"gateway.ping", "browser.browse", "wechat.article.read", "wechat.channels.read", "feed.read"} {
 		tool, ok := tools[name]
 		if !ok || tool.inputSchema == nil {
 			t.Fatalf("Phase 1 MCP profile missing callable tool %q: %#v", name, tools)
@@ -130,7 +130,7 @@ func TestMCPPhaseOneProfileExposesOnlyReadTools(t *testing.T) {
 	if ping.readOnly == nil || !*ping.readOnly || ping.destructive == nil || *ping.destructive || ping.idempotent == nil || !*ping.idempotent {
 		t.Fatalf("gateway.ping annotations=%+v", ping)
 	}
-	for _, name := range []string{"browser.browse", "wechat.article.read", "feed.read"} {
+	for _, name := range []string{"browser.browse", "wechat.article.read", "wechat.channels.read", "feed.read"} {
 		tool := tools[name]
 		if tool.readOnly != nil || tool.idempotent != nil || tool.destructive == nil || *tool.destructive {
 			t.Fatalf("%s annotations overclaim no side effects: %+v", name, tool)

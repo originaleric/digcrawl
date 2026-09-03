@@ -4,7 +4,6 @@ go 1.26.1
 
 require (
 	github.com/JohannesKaufmann/html-to-markdown v1.6.0
-	github.com/elazarl/goproxy v1.7.2
 	github.com/glebarez/go-sqlite v1.21.2
 	github.com/go-rod/rod v0.116.2
 	github.com/go-rod/stealth v0.4.9
