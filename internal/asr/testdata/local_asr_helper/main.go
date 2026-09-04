@@ -53,6 +53,17 @@ func main() {
 	case "preflight-fail":
 		fmt.Fprintln(os.Stderr, "faster_whisper import failed: missing")
 		os.Exit(2)
+	case "prepare-model":
+		args := os.Args[1:]
+		if len(args) != 4 || !strings.HasPrefix(filepath.Base(args[0]), "faster_whisper_asr-") || args[1] != "--download-model" || args[2] != "--model" || args[3] != "base" {
+			fmt.Fprintf(os.Stderr, "unexpected model preparation arguments: %q\n", args)
+			os.Exit(13)
+		}
+		if os.Getenv("HF_HOME") == "" || os.Getenv("HF_HOME") != os.Getenv("DIGCRAWL_ASR_MODEL_CACHE_DIR") {
+			fmt.Fprintln(os.Stderr, "model cache environment was not configured")
+			os.Exit(14)
+		}
+		fmt.Print(`{"status":"ok","model_downloaded":true}`)
 	case "ffprobe":
 		fmt.Print("426.926500\n")
 	case "slow-transcript-with-probe":

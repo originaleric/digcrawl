@@ -93,6 +93,13 @@ digcrawl config validate --config "$HOME/.config/digcrawl/digcrawl-skill.yaml"
 digcrawl doctor --config "$HOME/.config/digcrawl/digcrawl-skill.yaml"
 ```
 
+To enable local video transcription, prepare the same Skill profile's isolated runtime and model once:
+
+```bash
+digcrawl asr setup --config "$HOME/.config/digcrawl/digcrawl-skill.yaml" --scope skill --yes
+digcrawl asr check --config "$HOME/.config/digcrawl/digcrawl-skill.yaml" --scope skill
+```
+
 On macOS and Linux, the default profile is stored in `$XDG_CONFIG_HOME/digcrawl/` (or `~/.config/digcrawl/`). On Windows it is stored in `%APPDATA%\DigCrawl\`. `init` never overwrites an existing profile unless `--force` is supplied.
 
 Developers who want to build from source need Go 1.26.1+; see the [development installation instructions](./USAGE.md#从源码运行). For installation, release verification, configuration, and troubleshooting, see the [usage guide](./USAGE.md).
@@ -206,6 +213,7 @@ Read the [runtime documentation](./runtime/README.md) before exposing a Gateway 
 
 | Date | Highlight | Why it matters |
 | --- | --- | --- |
+| 2026-09-04 | Unified local ASR setup, configuration scopes, and readiness checks. | Release users can install faster-whisper without Go; setup, transcription, and `asr check` share one root/Skill cache domain, while custom runners are reported as externally managed rather than falsely ready. |
 | 2026-08-31 | Stabilized browser sessions and Watchlist login recovery. | Canonical sessions prevent background readers from overwriting a completed login; every Watchlist entry generates its recovery command from the running executable and loaded configuration. |
 | 2026-08-30 | Added direct local-file and direct-media-URL video analysis. | `digcrawl video` reuses bounded ASR and frame OCR, cleans up URL downloads by default, and can use the user Skill profile without weakening an explicit project configuration. |
 | 2026-08-29 | Added opt-in Watchlist source/item concurrency with safe collection coordination. | Discovery and processing can use bounded goroutines while content keys, output paths, index.json, and platform request spacing remain controlled. |

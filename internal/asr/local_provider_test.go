@@ -301,13 +301,29 @@ func TestCheckAvailableRunsBundledFasterWhisperPreflight(t *testing.T) {
 	copyLocalASRTestCommand(t, localASRTestExecutablePath(dir, "python"))
 	t.Setenv("DIGCRAWL_TEST_LOCAL_ASR_MODE", "preflight-ok")
 	t.Setenv("PATH", dir)
-	if err := CheckAvailable(config.ASRConfig{
+	readiness, err := CheckReadiness(config.ASRConfig{
 		Provider:      "local",
 		FFmpegPath:    localASRTestCommand(t),
 		LocalCommand:  "faster-whisper",
 		ModelCacheDir: filepath.Join(dir, "models"),
-	}); err != nil {
-		t.Fatalf("CheckAvailable() error = %v", err)
+	})
+	if err != nil || !readiness.OfflineModelVerified {
+		t.Fatalf("CheckReadiness()=%+v err=%v", readiness, err)
+	}
+}
+
+func TestCheckReadinessMarksCustomRunnerAsExternallyManaged(t *testing.T) {
+	readiness, err := CheckReadiness(config.ASRConfig{
+		Provider:     "local",
+		FFmpegPath:   localASRTestCommand(t),
+		LocalCommand: localASRTestCommand(t),
+		LocalArgs:    []string{"custom-asr-script.py"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if readiness.OfflineModelVerified {
+		t.Fatalf("custom runner readiness=%+v, want externally managed", readiness)
 	}
 }
 

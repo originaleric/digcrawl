@@ -48,6 +48,11 @@ def main() -> int:
         action="store_true",
         help="with --check, verify the selected model is already available offline",
     )
+    parser.add_argument(
+        "--download-model",
+        action="store_true",
+        help="download the selected model into the configured cache without transcribing audio",
+    )
     parser.add_argument("--model", default="small")
     parser.add_argument("--language", default="")
     parser.add_argument("--output_format", default="json")
@@ -66,6 +71,8 @@ def main() -> int:
 
     if args.check_model and not args.check:
         parser.error("--check-model requires --check")
+    if args.download_model and (args.check or args.check_model or args.audio_path):
+        parser.error("--download-model cannot be combined with --check or audio_path")
     if args.check:
         if args.check_model:
             try:
@@ -80,8 +87,16 @@ def main() -> int:
                 return 3
         print(json.dumps({"status": "ok", "provider": "faster-whisper", "model": args.model, "model_verified": args.check_model}))
         return 0
+    if args.download_model:
+        try:
+            WhisperModel(args.model, device=args.device, compute_type=args.compute_type)
+        except Exception as exc:  # pragma: no cover - depends on model hosting.
+            print(f"faster_whisper model download failed: {exc}", file=sys.stderr)
+            return 3
+        print(json.dumps({"status": "ok", "provider": "faster-whisper", "model": args.model, "model_downloaded": True}))
+        return 0
     if not args.audio_path:
-        parser.error("audio_path is required unless --check is used")
+        parser.error("audio_path is required unless --check or --download-model is used")
 
     model = WhisperModel(args.model, device=args.device, compute_type=args.compute_type)
     kwargs = {"vad_filter": True, "beam_size": 5}

@@ -222,14 +222,20 @@ video provider -> media download -> ffmpeg extract audio -> ASR -> summary agent
 
 不要直接把 `asr_text` 全文推送给用户；应把 ASR 文本交给 summary agent，再输出标题、要点和判断。
 
-本地 ASR 依赖：
+本地 ASR 需要 `ffmpeg` 与 Python 3.9–3.13；使用发布版不需要 Go。`faster-whisper` 与所选模型无需预先安装：首次执行 setup 会在 DigCrawl 的隔离 Python 运行时中安装依赖、下载模型并离线验证，不会修改系统 Python。命令不传 `--config` 时，会依次检查项目 `config/config.yaml` 与 `digcrawl init --profile skill` 创建的用户 Skill profile；不声明根 `ASR` 或 `Skill` 的项目配置会被跳过。找不到有效 ASR 域会直接报错，不会向当前工作目录写入模型缓存。
 
 ```bash
-ffmpeg
-faster-whisper
+./digcrawl asr setup --yes
+./digcrawl asr check
+./digcrawl asr setup --model base --yes  # 仅预备 base；不改写配置
+./digcrawl asr setup --config "$HOME/.config/digcrawl/digcrawl-skill.yaml" --scope skill --yes
 ```
 
-示例：
+项目根 `ASR` 与 Skill profile 的 `Skill.ASR` 是两个独立配置域，各自拥有模型缓存；setup、直接转写与 `asr check` 必须选择同一域。若同一配置文件同时声明两者，必须使用 `--scope root` 或 `--scope skill`，避免把模型下载到错误缓存。DigCrawl 管理的默认 faster-whisper runner 的 `asr check` 会在所选域离线确认 ffmpeg、运行时与模型可用；自定义 runner 或未由 DigCrawl 管理的本地命令只确认入口命令可执行，并明确报告脚本、运行时与模型仍由外部管理、未被验证。`digcrawl doctor` 只面向 MCP Skill profile，不用于确认项目根 `ASR`。`--model base` 仅影响本次预备。后续请在转写时同样传入 `--provider local --model base`，或把所选域的 Provider / Model 改为目标值；否则默认转写仍使用原配置。若当前配置是 API provider，setup 会安全地预备 local 默认模型 `small`，不会把 API 模型误用于 faster-whisper。
+
+如只需要预装运行时，可显式使用 `--skip-model`；在模型下载完成前，local ASR 与 `asr check` 的离线检查会保持不可用。配置自定义 `LocalCommand` / `LocalArgs` 时，模型与运行时由该集成负责，setup 需显式使用 `--skip-model`；此时命令不会创建 venv、安装依赖或下载模型。
+
+转写示例：
 
 ```bash
 ./digcrawl asr transcribe ./video.mp4 --provider local --model small

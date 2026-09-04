@@ -16,22 +16,27 @@ import (
 type Config struct {
 	// SourcePath records the local profile that produced this in-memory
 	// configuration. It is runtime metadata and is never written to YAML.
-	SourcePath    string              `yaml:"-" json:"-"`
-	Gateway       GatewayConfig       `yaml:"Gateway" json:"Gateway"`
-	Collector     CollectorConfig     `yaml:"Collector" json:"Collector"`
-	Collect       CollectConfig       `yaml:"Collect" json:"Collect"`
-	LocalBrowser  LocalBrowserConfig  `yaml:"LocalBrowser" json:"LocalBrowser"`
-	RuntimeEnv    RuntimeEnvConfig    `yaml:"RuntimeEnv" json:"RuntimeEnv,omitempty"`
-	Skill         SkillConfig         `yaml:"Skill" json:"Skill,omitempty"`
-	Platform      PlatformConfig      `yaml:"Platform" json:"Platform"`
-	OCR           OCRConfig           `yaml:"OCR" json:"OCR"`
-	ASR           ASRConfig           `yaml:"ASR" json:"ASR"`
-	Watchlist     WatchlistConfig     `yaml:"Watchlist" json:"Watchlist"`
-	Tasks         []TaskConfig        `yaml:"Tasks" json:"Tasks,omitempty"`
-	Summary       SummaryConfig       `yaml:"Summary" json:"Summary"`
-	Notifications NotificationsConfig `yaml:"Notifications" json:"Notifications"`
-	Providers     ProvidersConfig     `yaml:"Providers" json:"Providers"`
-	Social        SocialConfig        `yaml:"Social" json:"Social,omitempty"`
+	SourcePath string `yaml:"-" json:"-"`
+	// HasRootASR and HasSkillProfile preserve which configuration domain the
+	// source file declared before defaults are merged. They let CLI commands
+	// select ASR state without guessing from default-populated fields.
+	HasRootASR      bool                `yaml:"-" json:"-"`
+	HasSkillProfile bool                `yaml:"-" json:"-"`
+	Gateway         GatewayConfig       `yaml:"Gateway" json:"Gateway"`
+	Collector       CollectorConfig     `yaml:"Collector" json:"Collector"`
+	Collect         CollectConfig       `yaml:"Collect" json:"Collect"`
+	LocalBrowser    LocalBrowserConfig  `yaml:"LocalBrowser" json:"LocalBrowser"`
+	RuntimeEnv      RuntimeEnvConfig    `yaml:"RuntimeEnv" json:"RuntimeEnv,omitempty"`
+	Skill           SkillConfig         `yaml:"Skill" json:"Skill,omitempty"`
+	Platform        PlatformConfig      `yaml:"Platform" json:"Platform"`
+	OCR             OCRConfig           `yaml:"OCR" json:"OCR"`
+	ASR             ASRConfig           `yaml:"ASR" json:"ASR"`
+	Watchlist       WatchlistConfig     `yaml:"Watchlist" json:"Watchlist"`
+	Tasks           []TaskConfig        `yaml:"Tasks" json:"Tasks,omitempty"`
+	Summary         SummaryConfig       `yaml:"Summary" json:"Summary"`
+	Notifications   NotificationsConfig `yaml:"Notifications" json:"Notifications"`
+	Providers       ProvidersConfig     `yaml:"Providers" json:"Providers"`
+	Social          SocialConfig        `yaml:"Social" json:"Social,omitempty"`
 }
 
 // SkillConfig controls the independently deployable agent Skill enhancement pipeline.
@@ -477,6 +482,48 @@ type ASRConfig struct {
 	MaxAudioBytes     int64    `yaml:"MaxAudioBytes" json:"MaxAudioBytes,omitempty"`
 	LocalCommand      string   `yaml:"LocalCommand" json:"LocalCommand,omitempty"`
 	LocalArgs         []string `yaml:"LocalArgs" json:"LocalArgs,omitempty"`
+}
+
+// ASRScope identifies the configuration domain an ASR command operates on.
+// Auto is safe only when the loaded file declares one ASR domain.
+type ASRScope string
+
+const (
+	ASRScopeAuto  ASRScope = "auto"
+	ASRScopeRoot  ASRScope = "root"
+	ASRScopeSkill ASRScope = "skill"
+)
+
+// SelectASRConfig returns a copy of the requested ASR configuration and its
+// resolved scope. A file that declares both root ASR and Skill state is
+// intentionally ambiguous in auto mode: selecting one silently would split
+// model caches from the caller that owns them.
+func (c Config) SelectASRConfig(scope ASRScope) (ASRConfig, ASRScope, error) {
+	switch scope {
+	case "", ASRScopeAuto:
+		switch {
+		case c.HasRootASR && c.HasSkillProfile:
+			return ASRConfig{}, "", fmt.Errorf("configuration declares both root ASR and Skill profile; choose --scope root or --scope skill")
+		case c.HasRootASR:
+			return c.ASR, ASRScopeRoot, nil
+		case c.HasSkillProfile:
+			return c.Skill.ASR, ASRScopeSkill, nil
+		default:
+			return ASRConfig{}, "", fmt.Errorf("configuration declares neither root ASR nor Skill profile")
+		}
+	case ASRScopeRoot:
+		if !c.HasRootASR {
+			return ASRConfig{}, "", fmt.Errorf("configuration has no root ASR; choose --scope skill or use a root ASR configuration")
+		}
+		return c.ASR, ASRScopeRoot, nil
+	case ASRScopeSkill:
+		if !c.HasSkillProfile {
+			return ASRConfig{}, "", fmt.Errorf("configuration has no Skill profile; choose --scope root or use a Skill profile")
+		}
+		return c.Skill.ASR, ASRScopeSkill, nil
+	default:
+		return ASRConfig{}, "", fmt.Errorf("unsupported ASR scope %q; choose auto, root, or skill", scope)
+	}
 }
 
 // EnabledOrDefault reports whether ASR tooling is enabled.
@@ -1557,11 +1604,17 @@ func load(path string, applyRuntimeEnv bool) (*Config, error) {
 	if err := validateSkillSummaryConfig(data); err != nil {
 		return nil, err
 	}
+	hasRootASR, hasSkillProfile, err := configASRSectionPresence(data)
+	if err != nil {
+		return nil, err
+	}
 	var cfg Config
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return nil, err
 	}
 	mergeDefaults(&cfg)
+	cfg.HasRootASR = hasRootASR
+	cfg.HasSkillProfile = hasSkillProfile
 	cfg.SourcePath = normalizedConfigPath(path)
 	normalizeSkillASRPaths(&cfg)
 	if applyRuntimeEnv {
@@ -1580,6 +1633,16 @@ func load(path string, applyRuntimeEnv bool) (*Config, error) {
 		return &defaultCfg, nil
 	}
 	return &cfg, nil
+}
+
+func configASRSectionPresence(data []byte) (hasRootASR, hasSkillProfile bool, err error) {
+	var sections map[string]yaml.Node
+	if err := yaml.Unmarshal(data, &sections); err != nil {
+		return false, false, err
+	}
+	_, hasRootASR = sections["ASR"]
+	_, hasSkillProfile = sections["Skill"]
+	return hasRootASR, hasSkillProfile, nil
 }
 
 // normalizeSkillASRPaths makes a Skill profile self-contained: persistent

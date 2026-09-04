@@ -101,6 +101,7 @@ func printUsage() {
   digcrawl collect show <id>   查看单条采集详情（id 或 URL）
   digcrawl collect migrate-index  从 index.json 导入 SQLite
   digcrawl asr transcribe <video>  ffmpeg 抽音频并转写
+  digcrawl asr check [--config <profile>] [--scope auto|root|skill]  检查所选本地 ASR 模型
   digcrawl video <path-or-url>   解析本地视频或直接视频 URL（ASR/OCR）
   digcrawl watchlist run [--once]  定时抓取 watchlist 并通知
   digcrawl <url>               等价于 digcrawl collect <url>

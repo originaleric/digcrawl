@@ -130,6 +130,39 @@ func TestLocalASRRuntimeHealthCheckContextBoundsBackgroundCaller(t *testing.T) {
 	}
 }
 
+func TestPrepareLocalModelUsesPreparedRuntimeAndConfiguredCache(t *testing.T) {
+	root := t.TempDir()
+	modelCacheDir := filepath.Join(root, "asr_models")
+	runtimePython := localASRTestRuntimePythonPath(localASRRuntimeDir(modelCacheDir))
+	if err := os.MkdirAll(filepath.Dir(runtimePython), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	copyLocalASRTestCommand(t, runtimePython)
+	t.Setenv("DIGCRAWL_TEST_LOCAL_ASR_MODE", "prepare-model")
+
+	if err := PrepareLocalModel(context.Background(), config.ASRConfig{
+		Provider:      "local",
+		Model:         "base",
+		ModelCacheDir: modelCacheDir,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := filepath.Glob(filepath.Join(modelCacheDir, "digcrawl-runner", "faster_whisper_asr-*.py"))
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("bundled runner was not materialized under model cache: entries=%q err=%v", entries, err)
+	}
+}
+
+func TestPrepareLocalModelRejectsCustomLocalCommand(t *testing.T) {
+	err := ValidateLocalModelSetup(config.ASRConfig{
+		Provider:     "local",
+		LocalCommand: "custom-asr",
+	})
+	if err == nil || !strings.Contains(err.Error(), "custom ASR.LocalCommand") {
+		t.Fatalf("error=%v", err)
+	}
+}
+
 func TestLocalProviderRuntimeHealthCheckHonorsTranscriptionDeadline(t *testing.T) {
 	dir := t.TempDir()
 	runtimeDir := localASRRuntimeDir(filepath.Join(dir, "models"))

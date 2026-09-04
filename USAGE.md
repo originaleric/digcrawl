@@ -307,11 +307,13 @@ OCR:
 | `MaxTimeoutSec` | 单次 ASR 的硬上限，默认 `1800` 秒；Runtime/MCP 会据此预留任务时间。若时长公式超过该值，会明确失败而非被外层 deadline 静默取消。 |
 | `FFmpegPath` | ffmpeg 可执行文件路径，默认 `ffmpeg` |
 | `TempDir` | 抽取音频的临时目录，空则使用系统临时目录 |
-| `ModelCacheDir` | 本地 ASR 模型的唯一持久缓存目录；`doctor` 会以离线模式验证所选模型已可加载。旧版未配置该字段的 Skill 会在首次启动时原地复用旧 `HF_HOME`（或旧 cwd 下的 `.cache/huggingface`），并在新目录记录兼容状态，不移动模型、不依赖后续 cwd，也无需重新下载。显式配置该字段时该目录完全由用户负责。 |
+| `ModelCacheDir` | 本地 ASR 模型的唯一持久缓存目录；默认 `digcrawl asr setup` 会将本次选择的 local 模型下载至此并离线验证，`digcrawl asr check` 使用相同配置域检查可用性。旧版未配置该字段的 Skill 会在首次启动时原地复用旧 `HF_HOME`（或旧 cwd 下的 `.cache/huggingface`），并在新目录记录兼容状态，不移动模型、不依赖后续 cwd，也无需重新下载。显式配置该字段时该目录完全由用户负责。 |
 | `AudioSampleRate` | ffmpeg 抽取 wav 的采样率，默认 `16000` |
 | `MaxAudioBytes` | API provider 上传音频大小上限 |
 | `LocalCommand` | 本地 ASR 命令，默认 `faster-whisper`；命令不存在且未配置 `LocalArgs` 时，会使用内置 runner，并依次查找 `python3`、`python`、`py` |
 | `LocalArgs` | 本地 ASR 参数模板，支持 `{audio_path}`、`{model}`、`{language}`、`{output_dir}`；Skill profile 内带路径的命令和首个脚本参数相对 profile 目录解析 |
+
+使用 DigCrawl 发布版不需要 Go。本地默认 runner 仍需要可用的 `ffmpeg` 与 Python 3.9–3.13。`asr setup`、`asr check` 与 `asr transcribe` 总是先选择一个明确的 ASR 配置域：不传 `--config` 时，会检查当前项目 `config/config.yaml` 与用户 Skill profile，并选择第一个实际声明 ASR 域的文件；不含根 `ASR` 或 `Skill` 的项目配置会被跳过。项目根 `ASR` 与 Skill profile 的 `Skill.ASR` 分别拥有独立模型缓存。一个配置文件同时声明两者时，必须显式传 `--scope root` 或 `--scope skill`；显式 scope 也必须在该文件中实际声明，命令不会猜测或回退。找不到任一配置会明确要求先执行 `digcrawl init --profile skill`，因此发布版不会向当前工作目录写入临时运行时。`digcrawl asr setup --yes` 会在所选域的隔离 venv 内安装 faster-whisper、下载并离线验证所选 local 模型；随后 `digcrawl asr check` 会以相同配置域离线校验该 DigCrawl 管理的运行时、ffmpeg 与模型。自定义 runner 或未由 DigCrawl 管理的本地命令，其脚本、运行时和模型均由外部管理；`asr check` 只确认入口命令可执行，并会明确输出“未验证”，不会报告 ready。如当前 provider 不是 `local`，setup 会预备 local 默认模型 `small`，但不会改写现有配置；请在转写时显式传入 `--provider local --model small`，或将所选域的 Provider / Model 改为目标值。`--model base` 同样仅为本次预备模型，后续使用时需传入相同模型或更新配置。配置了自定义 `LocalCommand` / `LocalArgs` 时，setup 需显式 `--skip-model`，随后会直接退出，不会创建 venv、安装依赖或访问网络。`digcrawl doctor` 仍只检查 MCP Skill profile；不要用它确认项目根 `ASR`。
 
 配置示例：
 
@@ -748,7 +750,8 @@ digcrawl collect <url>         # 采集单个 URL
 digcrawl collect inbox         # 处理收件箱
 digcrawl browser login         # 平台扫码/交互登录并保存 Cookie
 digcrawl browser check         # 检查平台会话，可选试读
-digcrawl asr setup --yes        # 安装隔离的本地 faster-whisper 运行时（不修改系统 Python）
+digcrawl asr setup --yes        # 使用项目配置或用户 Skill profile，安装隔离 faster-whisper 并验证所选 local 模型
+digcrawl asr check              # 以与 setup/transcribe 相同的配置域离线检查本地 ASR
 digcrawl asr transcribe <file> --timeout 1200 # ffmpeg 抽音频并转写任意本地视频/音频
 digcrawl video <local-file-or-direct-url> [--mode auto|asr|ocr|both] # 解析本地视频或可直接下载的视频 URL
 digcrawl watchlist run         # 执行 watchlist 监控、摘要和通知

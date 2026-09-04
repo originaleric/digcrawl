@@ -112,7 +112,7 @@ func runDoctor(args []string) {
 	if strings.TrimSpace(*configPath) == "" {
 		log.Fatal("doctor: --config is required")
 	}
-	cfg, err := validateProfile(*configPath)
+	cfg, err := loadDoctorProfile(*configPath)
 	if err != nil {
 		log.Fatalf("doctor: %v", err)
 	}
@@ -122,8 +122,8 @@ func runDoctor(args []string) {
 		{name: "profile", err: nil},
 		{name: "artifact directory", err: checkWritableDirectory(cfg.Gateway.ArtifactDir)},
 		{name: "browser", err: browser.CheckAvailable(cfg.LocalBrowser)},
-		{name: "ffmpeg", err: checkFFmpeg(cfg)},
-		{name: "ASR provider", err: checkASRProvider(cfg)},
+		{name: "Skill ffmpeg", err: checkSkillFFmpeg(cfg)},
+		{name: "Skill ASR provider", err: checkSkillASRProvider(cfg)},
 		{name: "mcp startup", err: checkMCPStartup(cfg)},
 	}
 	failed := false
@@ -138,6 +138,20 @@ func runDoctor(args []string) {
 	if failed {
 		os.Exit(1)
 	}
+}
+
+// loadDoctorProfile keeps the generic doctor on the MCP Skill boundary. A
+// root-only config has no MCP Skill runtime to validate; its ASR health check
+// must use the shared ASR domain resolver instead.
+func loadDoctorProfile(path string) (*config.Config, error) {
+	cfg, err := validateProfile(path)
+	if err != nil {
+		return nil, err
+	}
+	if !cfg.HasSkillProfile {
+		return nil, errors.New("profile has no Skill section; use `digcrawl asr check --config <path> --scope root` for root ASR readiness")
+	}
+	return cfg, nil
 }
 
 type doctorCheck struct {
@@ -270,7 +284,10 @@ func checkWritableDirectory(path string) error {
 	return os.Remove(name)
 }
 
-func checkFFmpeg(cfg *config.Config) error {
+// checkSkillFFmpeg is intentionally scoped to the MCP Skill profile. Root
+// ASR readiness is checked by `digcrawl asr check`, which shares setup and
+// transcription's explicit domain resolver.
+func checkSkillFFmpeg(cfg *config.Config) error {
 	if !cfg.Skill.ASR.EnabledOrDefault() {
 		return nil
 	}
@@ -305,7 +322,7 @@ func validateSkillASRConfig(cfg config.ASRConfig) error {
 	return nil
 }
 
-func checkASRProvider(cfg *config.Config) error {
+func checkSkillASRProvider(cfg *config.Config) error {
 	if !cfg.Skill.ASR.EnabledOrDefault() || cfg.Skill.ASR.ProviderOrDefault() != "local" {
 		return nil
 	}
