@@ -22,7 +22,11 @@ jobs:
           go-version: '1.26.1'
       - run: go test ./...
       - if: runner.os == 'Linux'
-        run: bash scripts/test-digcrawl-cdp-browser-service.sh
+        run: |
+          bash scripts/test-digcrawl-cdp-browser-service.sh
+          bash scripts/test-digcrawl-watchlist-service.sh
       - if: runner.os == 'Windows'
         shell: pwsh
-        run: ./scripts/test-digcrawl-cdp-browser-service.ps1
+        run: |
+          ./scripts/test-digcrawl-cdp-browser-service.ps1
+          ./scripts/test-digcrawl-watchlist-service.ps1

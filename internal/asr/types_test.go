@@ -63,7 +63,10 @@ func TestTranscribePropagatesDynamicTimeoutToLocalProvider(t *testing.T) {
 
 	result, err := Transcribe(context.Background(), mediaPath, config.ASRConfig{
 		Provider:      "local",
-		TimeoutSec:    1,
+		// Keep the configured floor long enough for a cold Windows child-process
+		// launch. The fixture sleeps longer than this floor, so the test still
+		// proves that the successful duration probe raised the operation budget.
+		TimeoutSec:    5,
 		FFmpegPath:    ffmpeg,
 		LocalCommand:  localCommand,
 		ModelCacheDir: filepath.Join(dir, "models"),

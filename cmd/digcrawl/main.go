@@ -121,8 +121,9 @@ func printUsage() {
   digcrawl wechat-channels capture       单终端启动桥接、下载当前视频并可选转写
   digcrawl wechat-channels inspect       只读检查微信是否已暴露 CDP 调试通道
   digcrawl asr setup [--yes]       安装隔离的本地 faster-whisper 运行时
-  digcrawl asr transcribe <file>   ffmpeg 抽取并转写本地视频或音频
-  digcrawl video <path-or-url>     解析本地视频或直接视频 URL（ASR/OCR）
+  digcrawl asr transcribe <video>  ffmpeg 抽音频并转写
+  digcrawl asr check [--config <profile>] [--scope auto|root|skill]  检查所选本地 ASR 模型
+  digcrawl video <path-or-url>    解析本地视频或直接视频 URL（ASR/OCR）
   digcrawl watchlist run [--once]  定时抓取 watchlist 并通知
   digcrawl <url>               等价于 digcrawl collect <url>
   digcrawl connect [flags]     保存宿主配置并启动 Collector

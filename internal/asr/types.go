@@ -62,29 +62,45 @@ const (
 	localASRDurationProbeLimit = 10 * time.Second
 )
 
-// CheckAvailable verifies the local prerequisites that Transcribe will need
-// before a caller persists an ASR opt-in. The bundled faster-whisper runner is
+// Readiness reports what a non-transcribing ASR preflight was able to verify.
+// A custom local command owns its own script, runtime, and model lifecycle, so
+// it can be checked for command availability but not truthfully reported as a
+// verified offline faster-whisper installation.
+type Readiness struct {
+	OfflineModelVerified bool
+}
+
+// CheckAvailable preserves the compatibility contract for callers that need
+// prerequisite errors but do not need to distinguish a managed runner from a
+// custom integration.
+func CheckAvailable(cfg config.ASRConfig) error {
+	_, err := CheckReadiness(cfg)
+	return err
+}
+
+// CheckReadiness verifies the prerequisites that Transcribe will need before
+// a caller persists an ASR opt-in. The bundled faster-whisper runner is
 // checked against the configured cache in offline mode, so this never downloads
 // a model but does prove the selected model can be loaded.
-func CheckAvailable(cfg config.ASRConfig) error {
+func CheckReadiness(cfg config.ASRConfig) (Readiness, error) {
 	ffmpeg := cfg.FFmpegPathOrDefault()
 	if _, err := exec.LookPath(ffmpeg); err != nil {
-		return fmt.Errorf("ffmpeg %q is not available: %w", ffmpeg, err)
+		return Readiness{}, fmt.Errorf("ffmpeg %q is not available: %w", ffmpeg, err)
 	}
 	p, err := newProvider(cfg)
 	if err != nil {
-		return err
+		return Readiness{}, err
 	}
 	local, ok := p.(*localProvider)
 	if !ok {
-		return nil
+		return Readiness{}, nil
 	}
 	// Keep readiness behavior aligned with Transcribe: an explicitly prepared
 	// DigCrawl runtime is authoritative over an ambient PATH executable.
 	if localASRRuntimePython(localASRRuntimeDir(local.modelCacheDir)) != "" {
 		fallbackCommand, fallbackArgs, fallbackErr := localCommandFallback(context.Background(), local.command, local.args, local.modelCacheDir, local.legacyModelCacheDirs, local.legacyHubCacheDir)
 		if fallbackErr != nil {
-			return fallbackErr
+			return Readiness{}, fallbackErr
 		}
 		if fallbackCommand != "" {
 			local.command, local.args = fallbackCommand, fallbackArgs
@@ -93,15 +109,15 @@ func CheckAvailable(cfg config.ASRConfig) error {
 	if _, err := exec.LookPath(local.command); err != nil {
 		fallbackCommand, fallbackArgs, fallbackErr := localCommandFallback(context.Background(), local.command, local.args, local.modelCacheDir, local.legacyModelCacheDirs, local.legacyHubCacheDir)
 		if fallbackErr != nil {
-			return fallbackErr
+			return Readiness{}, fallbackErr
 		}
 		if fallbackCommand == "" {
-			return fmt.Errorf("local ASR command %q is not available", local.command)
+			return Readiness{}, fmt.Errorf("local ASR command %q is not available", local.command)
 		}
 		local.command, local.args = fallbackCommand, fallbackArgs
 	}
 	if !usesBundledFasterWhisperRunner(local.args) {
-		return nil
+		return Readiness{}, nil
 	}
 	// LocalArgs is a runtime template and commonly contains {audio_path},
 	// {output_dir}, and {model}. A readiness probe has no audio/output and must
@@ -113,21 +129,21 @@ func CheckAvailable(cfg config.ASRConfig) error {
 	cmd := exec.CommandContext(checkCtx, local.command, checkArgs...)
 	env, envErr := localASREnv(os.Environ(), local.modelCacheDir, local.legacyModelCacheDirs, local.legacyHubCacheDir)
 	if envErr != nil {
-		return envErr
+		return Readiness{}, envErr
 	}
 	cmd.Env = env
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		if errors.Is(checkCtx.Err(), context.DeadlineExceeded) {
-			return fmt.Errorf("local faster-whisper runtime check timed out after %s", localASRRuntimeHealthCheckTimeout)
+			return Readiness{}, fmt.Errorf("local faster-whisper runtime check timed out after %s", localASRRuntimeHealthCheckTimeout)
 		}
 		message := strings.TrimSpace(string(output))
 		if message == "" {
 			message = err.Error()
 		}
-		return fmt.Errorf("local faster-whisper runtime check failed: %s", message)
+		return Readiness{}, fmt.Errorf("local faster-whisper runtime check failed: %s", message)
 	}
-	return nil
+	return Readiness{OfflineModelVerified: true}, nil
 }
 
 func usesBundledFasterWhisperRunner(args []string) bool {

@@ -59,6 +59,9 @@ fi
 
 SELF_PATH="${SCRIPT_DIR}/$(basename "${BASH_SOURCE[0]}")"
 OS_NAME="$(uname -s)"
+COLOR_GREEN=$'\033[32m'
+COLOR_RED=$'\033[31m'
+COLOR_RESET=$'\033[0m'
 
 usage() {
   cat <<EOF
@@ -266,6 +269,38 @@ mac_plist_path() {
   printf '%s/%s.plist' "${HOME}/Library/LaunchAgents" "${SERVICE_LABEL}"
 }
 
+mac_launcher_path() {
+  printf '%s/Library/Application Support/DigCrawl/bin/digcrawl-watchlist-service.sh' "${HOME}"
+}
+
+stage_macos_launcher() {
+  # launchd can be denied execution of scripts under protected folders such
+  # as Documents. Keep the single Watchlist launcher in Application Support,
+  # where the user-level service can execute it reliably.
+  local launcher
+  local temporary
+  launcher="$(mac_launcher_path)"
+  mkdir -p "$(dirname "${launcher}")"
+  temporary="${launcher}.tmp.$$"
+  cp "${SELF_PATH}" "${temporary}"
+  chmod 700 "${temporary}"
+  mv -f "${temporary}" "${launcher}"
+  printf '%s\n' "${launcher}"
+}
+
+reconcile_macos_launcher_reference() {
+  # Existing installations may still point launchd at a project script under
+  # Documents. Migrate only the executable entry, preserving the installed
+  # binary, config, log, and build settings already stored in the plist.
+  local plist
+  local launcher
+  plist="$(mac_plist_path)"
+  [[ -f "${plist}" ]] || fail "plist not found; run install first: ${plist}"
+  command -v plutil >/dev/null 2>&1 || fail "plutil is required to update the macOS Watchlist service; run install from macOS"
+  launcher="$(stage_macos_launcher)"
+  plutil -replace ProgramArguments.0 -string "${launcher}" "${plist}" >/dev/null || fail "failed to update launchd executable in ${plist}; run install again"
+}
+
 linux_unit_path() {
   printf '%s/%s.service' "${HOME}/.config/systemd/user" "${SERVICE_NAME}"
 }
@@ -306,6 +341,8 @@ install_macos() {
   build_binary
   install_cli_link
   mkdir -p "${HOME}/Library/LaunchAgents" "${LOG_DIR}"
+  local launcher
+  launcher="$(stage_macos_launcher)"
   local plist
   plist="$(mac_plist_path)"
   cat >"${plist}" <<EOF
@@ -317,7 +354,7 @@ install_macos() {
   <string>$(xml_escape "${SERVICE_LABEL}")</string>
   <key>ProgramArguments</key>
   <array>
-    <string>$(xml_escape "${SELF_PATH}")</string>
+    <string>$(xml_escape "${launcher}")</string>
     <string>run-foreground</string>
   </array>
   <key>WorkingDirectory</key>
@@ -359,6 +396,8 @@ install_macos() {
 </plist>
 EOF
   echo "installed launchd plist: ${plist}"
+  start_macos_service
+  echo "installed and running ${SERVICE_LABEL}"
 }
 
 install_linux() {
@@ -399,21 +438,32 @@ WantedBy=default.target
 EOF
   systemctl --user daemon-reload
   systemctl --user enable "${SERVICE_NAME}.service"
-  echo "installed systemd user unit: ${unit}"
+  systemctl --user restart "${SERVICE_NAME}.service"
+  if ! systemctl --user is-active --quiet "${SERVICE_NAME}.service"; then
+    fail "install did not leave ${SERVICE_NAME}.service running; inspect: systemctl --user status ${SERVICE_NAME}.service --no-pager"
+  fi
+  echo "installed and running systemd user unit: ${unit}"
 }
 
-start_macos() {
+start_macos_service() {
   local plist
   plist="$(mac_plist_path)"
-  [[ -f "${plist}" ]] || fail "plist not found; run install first: ${plist}"
   launchctl bootout "gui/${UID}" "${plist}" >/dev/null 2>&1 || true
   if launchctl bootstrap "gui/${UID}" "${plist}" >/dev/null 2>&1; then
-    echo "started ${SERVICE_LABEL}"
+    :
   elif launchctl load "${plist}" >/dev/null 2>&1; then
-    echo "started ${SERVICE_LABEL}"
+    :
   else
     fail "failed to start ${SERVICE_LABEL}; try: launchctl bootstrap gui/$(id -u) ${plist}"
   fi
+  local pid
+  pid="$(wait_for_mac_service_running)" || fail "start did not leave ${SERVICE_LABEL} running; inspect logs or try: launchctl kickstart -k gui/$(id -u)/${SERVICE_LABEL}"
+  echo "started ${SERVICE_LABEL} (pid ${pid})"
+}
+
+start_macos() {
+  reconcile_macos_launcher_reference
+  start_macos_service
 }
 
 stop_macos() {
@@ -457,6 +507,7 @@ restart_macos() {
   local plist
   plist="$(mac_plist_path)"
   [[ -f "${plist}" ]] || fail "plist not found; run install first: ${plist}"
+  reconcile_macos_launcher_reference
   local old_pid=""
   local new_pid=""
   if launchctl print "gui/${UID}/${SERVICE_LABEL}" >/dev/null 2>&1; then
@@ -472,7 +523,7 @@ restart_macos() {
     echo "kickstart failed; falling back to bootout/bootstrap" >&2
   fi
   stop_macos
-  start_macos
+  start_macos_service
   new_pid="$(wait_for_mac_service_running)" || fail "restart did not leave ${SERVICE_LABEL} running; inspect logs or try running this command in a local terminal: launchctl kickstart -k gui/$(id -u)/${SERVICE_LABEL}"
   if [[ -n "${old_pid}" && "${new_pid}" == "${old_pid}" ]]; then
     fail "restart did not replace ${SERVICE_LABEL}; it may still be running the previous binary. Try running this command in a local terminal: launchctl kickstart -k gui/$(id -u)/${SERVICE_LABEL}"
@@ -480,21 +531,34 @@ restart_macos() {
 }
 
 status_macos() {
-  if launchctl print "gui/${UID}/${SERVICE_LABEL}" >/dev/null 2>&1; then
-    launchctl print "gui/${UID}/${SERVICE_LABEL}" | sed -n '1,40p'
-  else
-    launchctl list | grep -F "${SERVICE_LABEL}" || fail "service is not loaded: ${SERVICE_LABEL}"
+  local state
+  local pid
+  state="$(mac_service_state)"
+  pid="$(mac_service_pid)"
+  if [[ "${state}" == "running" && -n "${pid}" ]]; then
+    printf 'status=%srunning%s (pid %s)\n' "${COLOR_GREEN}" "${COLOR_RESET}" "${pid}"
+    return 0
   fi
+  if [[ -z "${state}" ]]; then
+    state="not_loaded"
+  fi
+  printf 'status=%s%s%s\n' "${COLOR_RED}" "${state}" "${COLOR_RESET}" >&2
+  return 1
 }
 
 uninstall_macos() {
   stop_macos
   rm -f "$(mac_plist_path)"
+  rm -f "$(mac_launcher_path)"
   echo "removed $(mac_plist_path)"
 }
 
 start_linux() {
   systemctl --user start "${SERVICE_NAME}.service"
+  if ! systemctl --user is-active --quiet "${SERVICE_NAME}.service"; then
+    fail "start did not leave ${SERVICE_NAME}.service running; inspect: systemctl --user status ${SERVICE_NAME}.service --no-pager"
+  fi
+  echo "started ${SERVICE_NAME}.service"
 }
 
 stop_linux() {
@@ -506,7 +570,17 @@ restart_linux() {
 }
 
 status_linux() {
-  systemctl --user status "${SERVICE_NAME}.service" --no-pager
+  local state
+  state="$(systemctl --user is-active "${SERVICE_NAME}.service" 2>/dev/null || true)"
+  if [[ "${state}" == "active" ]]; then
+    printf 'status=%srunning%s\n' "${COLOR_GREEN}" "${COLOR_RESET}"
+    return 0
+  fi
+  if [[ -z "${state}" ]]; then
+    state="not_loaded"
+  fi
+  printf 'status=%s%s%s\n' "${COLOR_RED}" "${state}" "${COLOR_RESET}" >&2
+  return 1
 }
 
 uninstall_linux() {
@@ -551,6 +625,9 @@ dispatch_platform() {
 }
 
 cmd="${1:-}"
+if [[ "${DIGCRAWL_WATCHLIST_SERVICE_TEST:-}" == "1" ]]; then
+  return 0 2>/dev/null || exit 0
+fi
 case "${cmd}" in
   install)
     dispatch_platform install

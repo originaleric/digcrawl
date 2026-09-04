@@ -98,6 +98,7 @@ go install ./cmd/digcollect
 | `mcp` | 用户 Skill profile：`$XDG_CONFIG_HOME/digcrawl/digcrawl-skill.yaml`；未设置 XDG 时为 `~/.config/digcrawl/digcrawl-skill.yaml`；Windows 为 `%APPDATA%\DigCrawl\digcrawl-skill.yaml` |
 | `gateway` / `collector` / `collect` 等 | 命令行 `--config`，未指定时为 `config/config.yaml` |
 | `video` | 显式 `--config` 时只使用该 profile；未指定时先使用项目 `config/config.yaml` 中已启用的处理器，再按处理器回退到标准用户 Skill profile，项目文件不存在时直接使用该 Skill profile |
+| `browser login` / `browser check` | 显式 `--config` 时只使用该 profile；未指定时先使用项目 `config/config.yaml`，项目文件不存在时使用标准用户 Skill profile。恢复 MCP 会话时应传入启动该 MCP 的同一 profile 路径。 |
 | `connect` / `login` | `$XDG_CONFIG_HOME/digcrawl/config.yaml`；未设置 XDG 时为 `~/.config/digcrawl/config.yaml`（可用 `--config` 覆盖） |
 | 本地 GORM 数据库连接 | `config/gorm.yml`，由 `config/gorm.example.yml` 复制生成；包含密码，默认不入 Git |
 | DigFlow 内嵌 Runtime 配置 | `config/digflow.yml`、`config/digflow-gorm.yml`、`config/eino.yml`、`agents/watchlist/agents.yml` |
@@ -319,11 +320,13 @@ OCR:
 | `MaxTimeoutSec` | 单次 ASR 的硬上限，默认 `1800` 秒；Runtime/MCP 会据此预留任务时间。若时长公式超过该值，会明确失败而非被外层 deadline 静默取消。 |
 | `FFmpegPath` | ffmpeg 可执行文件路径，默认 `ffmpeg` |
 | `TempDir` | 抽取音频的临时目录，空则使用系统临时目录 |
-| `ModelCacheDir` | 本地 ASR 模型的唯一持久缓存目录；`doctor` 会以离线模式验证所选模型已可加载。旧版未配置该字段的 Skill 会在首次启动时原地复用旧 `HF_HOME`（或旧 cwd 下的 `.cache/huggingface`），并在新目录记录兼容状态，不移动模型、不依赖后续 cwd，也无需重新下载。显式配置该字段时该目录完全由用户负责。 |
+| `ModelCacheDir` | 本地 ASR 模型的唯一持久缓存目录；默认 `digcrawl asr setup` 会将本次选择的 local 模型下载至此并离线验证，`digcrawl asr check` 使用相同配置域检查可用性。旧版未配置该字段的 Skill 会在首次启动时原地复用旧 `HF_HOME`（或旧 cwd 下的 `.cache/huggingface`），并在新目录记录兼容状态，不移动模型、不依赖后续 cwd，也无需重新下载。显式配置该字段时该目录完全由用户负责。 |
 | `AudioSampleRate` | ffmpeg 抽取 wav 的采样率，默认 `16000` |
 | `MaxAudioBytes` | API provider 上传音频大小上限 |
 | `LocalCommand` | 本地 ASR 命令，默认 `faster-whisper`；命令不存在且未配置 `LocalArgs` 时，会使用内置 runner，并依次查找 `python3`、`python`、`py` |
 | `LocalArgs` | 本地 ASR 参数模板，支持 `{audio_path}`、`{model}`、`{language}`、`{output_dir}`；Skill profile 内带路径的命令和首个脚本参数相对 profile 目录解析 |
+
+使用 DigCrawl 发布版不需要 Go。本地默认 runner 仍需要可用的 `ffmpeg` 与 Python 3.9–3.13。`asr setup`、`asr check` 与 `asr transcribe` 总是先选择一个明确的 ASR 配置域：不传 `--config` 时，会检查当前项目 `config/config.yaml` 与用户 Skill profile，并选择第一个实际声明 ASR 域的文件；不含根 `ASR` 或 `Skill` 的项目配置会被跳过。项目根 `ASR` 与 Skill profile 的 `Skill.ASR` 分别拥有独立模型缓存。一个配置文件同时声明两者时，必须显式传 `--scope root` 或 `--scope skill`；显式 scope 也必须在该文件中实际声明，命令不会猜测或回退。找不到任一配置会明确要求先执行 `digcrawl init --profile skill`，因此发布版不会向当前工作目录写入临时运行时。`digcrawl asr setup --yes` 会在所选域的隔离 venv 内安装 faster-whisper、下载并离线验证所选 local 模型；随后 `digcrawl asr check` 会以相同配置域离线校验该 DigCrawl 管理的运行时、ffmpeg 与模型。自定义 runner 或未由 DigCrawl 管理的本地命令，其脚本、运行时和模型均由外部管理；`asr check` 只确认入口命令可执行，并会明确输出“未验证”，不会报告 ready。如当前 provider 不是 `local`，setup 会预备 local 默认模型 `small`，但不会改写现有配置；请在转写时显式传入 `--provider local --model small`，或将所选域的 Provider / Model 改为目标值。`--model base` 同样仅为本次预备模型，后续使用时需传入相同模型或更新配置。配置了自定义 `LocalCommand` / `LocalArgs` 时，setup 需显式 `--skip-model`，随后会直接退出，不会创建 venv、安装依赖或访问网络。`digcrawl doctor` 仍只检查 MCP Skill profile；不要用它确认项目根 `ASR`。
 
 配置示例：
 
@@ -763,12 +766,14 @@ digcrawl wechat-channels bridge stop # 停止桥接并恢复其系统改动
 digcrawl wechat-channels import # 导入当前已播放的视频号聊天卡片元数据
 digcrawl browser login         # 平台扫码/交互登录并保存 Cookie
 digcrawl browser check         # 检查平台会话，可选试读
-digcrawl asr setup --yes        # 安装隔离的本地 faster-whisper 运行时（不修改系统 Python）
+digcrawl asr setup --yes        # 使用项目配置或用户 Skill profile，安装隔离 faster-whisper 并验证所选 local 模型
+digcrawl asr check              # 以与 setup/transcribe 相同的配置域离线检查本地 ASR
 digcrawl asr transcribe <file> --timeout 1200 # ffmpeg 抽音频并转写任意本地视频/音频
 digcrawl video <local-file-or-direct-url> [--mode auto|asr|ocr|both] # 解析本地视频或可直接下载的视频 URL
 digcrawl watchlist run         # 执行 watchlist 监控、摘要和通知
 digcrawl watchlist serve       # 常驻调度，到期执行不同周期的 Tasks / Watchlist items
-scripts/digcrawl-watchlist-service.sh install|rebuild|rebuild-restart|start|stop|restart|status|logs|uninstall
+scripts/digcrawl-watchlist-service.sh install|rebuild|rebuild-restart|start|stop|restart|status|logs|uninstall  # macOS/Linux
+.\\scripts\\digcrawl-watchlist-service.ps1 install|start|stop|restart|status|logs|uninstall                    # Windows
 digcollect <url>              # 轻量采集入口，等价于 digcrawl collect <url>
 digcrawl help
 ```
@@ -789,11 +794,14 @@ digcrawl video "https://cdn.example.com/meeting.mp4" --keep ./meeting.mp4
 
 ### Watchlist 常驻服务脚本
 
-`scripts/digcrawl-watchlist-service.sh` 用于把 `digcrawl watchlist serve` 托管为用户级服务，方便本机或小型服务器部署。
+`scripts/digcrawl-watchlist-service.sh` 用于把 `digcrawl watchlist serve` 托管为用户级服务，方便本机或小型服务器部署。Windows 请使用对应的 PowerShell 脚本。
 
-- macOS：生成 `~/Library/LaunchAgents/com.digcrawl.watchlist.plist` 并通过 `launchctl` 管理。
+- macOS：生成 `~/Library/LaunchAgents/com.digcrawl.watchlist.plist`，并将启动脚本私有复制到 `~/Library/Application Support/DigCrawl/bin/`，再通过 `launchctl` 管理；`start` / `restart` 会自动迁移旧 plist 并刷新该副本，避免 launchd 被系统拒绝执行 `Documents` 等受保护目录中的项目脚本。
 - Linux：生成 `~/.config/systemd/user/digcrawl-watchlist.service` 并通过 `systemctl --user` 管理。
+- Windows：创建当前用户的 Task Scheduler 任务 `DigCrawl Watchlist` 并通过 PowerShell 管理。
 - 日志：macOS 写入 `DIGCRAWL_LOG_DIR` 下的 `watchlist.out.log` / `watchlist.err.log`；Linux 默认进入 user journal，通过脚本的 `logs` 命令查看。
+- macOS/Linux 的 `install`、`install-cli`、`build`、`rebuild` 和 `rebuild-restart` 会创建 `${DIGCRAWL_CLI_BIN_DIR:-~/.local/bin}/digcrawl` 到服务 binary 的符号链接，并把该目录写入登录 shell 的启动配置。新开终端或 source 对应配置后，才可直接使用 `digcrawl`；Windows 请把发布版 `digcrawl.exe` 路径作为 `DIGCRAWL_BIN`（或放在项目根目录）。
+- 收到 Watchlist 登录失效通知时，运行通知中给出的 `<服务实际 executable> browser login --config <服务实际配置路径> --platform <platform>`；命令由服务的当前 executable 与已加载配置生成，避免把 Cookie 写入另一套 profile。未从文件加载配置时会省略 `--config`，保留原有默认解析。
 
 常用命令：
 
@@ -801,7 +809,6 @@ digcrawl video "https://cdn.example.com/meeting.mp4" --keep ./meeting.mp4
 DIGCRAWL_CONFIG="$PWD/config/config.yaml" \
 ./scripts/digcrawl-watchlist-service.sh install
 
-./scripts/digcrawl-watchlist-service.sh start
 ./scripts/digcrawl-watchlist-service.sh status
 ./scripts/digcrawl-watchlist-service.sh logs
 ./scripts/digcrawl-watchlist-service.sh rebuild
@@ -809,6 +816,14 @@ DIGCRAWL_CONFIG="$PWD/config/config.yaml" \
 ./scripts/digcrawl-watchlist-service.sh restart
 ./scripts/digcrawl-watchlist-service.sh stop
 ./scripts/digcrawl-watchlist-service.sh uninstall
+```
+
+Windows（在 PowerShell 中）：
+
+```powershell
+$env:DIGCRAWL_CONFIG = "$PWD\config\config.yaml"
+.\scripts\digcrawl-watchlist-service.ps1 install
+.\scripts\digcrawl-watchlist-service.ps1 status
 ```
 
 可选环境变量：
@@ -826,7 +841,7 @@ DIGCRAWL_CONFIG="$PWD/config/config.yaml" \
 | `DIGCRAWL_BUILD_GOCACHE` | 自动构建 Go build cache，默认 `/private/tmp/digcrawl-gocache` |
 | `DIGCRAWL_BUILD_GOMODCACHE` | 自动构建 Go module cache，默认 `.tmp/go-mod-watchlist` |
 
-`install` 会构建默认 binary 并写入用户级服务配置；`run-foreground` 只运行已有 binary。更新代码或 DigFlow 依赖后，使用 `./scripts/digcrawl-watchlist-service.sh rebuild` 单独重建，或使用 `./scripts/digcrawl-watchlist-service.sh rebuild-restart` 重建后重启。脚本会优先读取已安装 launchd plist / systemd unit 里的 `DIGCRAWL_BIN`，重建到服务实际使用的 binary 路径。`build` 保留兼容，也会使用同样的路径解析逻辑。
+`install` 只有在服务已注册、已启动并通过运行状态检查后才会成功返回；不需要再补一次 `start`。`run-foreground` 只运行已有 binary。更新代码或 DigFlow 依赖后，使用 `./scripts/digcrawl-watchlist-service.sh rebuild` 单独重建，或使用 `./scripts/digcrawl-watchlist-service.sh rebuild-restart` 重建后重启。脚本会优先读取已安装 launchd plist / systemd unit 里的 `DIGCRAWL_BIN`，重建到服务实际使用的 binary 路径。`build` 保留兼容，也会使用同样的路径解析逻辑。
 
 使用 `digflow_runtime` summary agent 时，服务进程不再要求 launchd/systemd 注入业务密钥。推荐在主配置中设置 `RuntimeEnv.ConfigPath: config/runtime-env.yml`，并在本地 ignored 的 `config/runtime-env.yml` 中开启 `RuntimeEnv.Enabled: true`，填入 `DIGCRAWL_MYSQL_HOST`、`DIGCRAWL_MYSQL_DATABASE`、`DIGCRAWL_MYSQL_USER`、`DIGCRAWL_MYSQL_PASSWORD` 和 `DIGFLOW_SUMMARY_API_KEY`。仓库只提交 `config/runtime-env.example.yml`。
 
@@ -1014,7 +1029,7 @@ digcrawl collect "https://example.com/article" --format md,html,json --out ./my-
 
 ### 平台登录与健康检查
 
-部分平台在未登录或 Cookie 过期时会返回 `LOGIN_REQUIRED`。可使用 DigCrawl 的独立有头浏览器完成登录并保存 Cookie；它不会读取日常浏览器 profile。初始化 Skill profile 后，以下命令默认使用该 profile 的 `CookieStoreDir`，并会输出打开的登录 URL 和 Cookie 保存目录。若 MCP 使用自定义 profile，则登录和会话检查必须带同一个 `--config <profile>`，避免写入另一套 Cookie：
+部分平台在未登录或 Cookie 过期时会返回 `LOGIN_REQUIRED`。可使用 DigCrawl 的独立有头浏览器完成登录并保存 Cookie；它不会读取日常浏览器 profile。`browser login` 与 `browser check` 显式传入 `--config` 时使用该 profile；未传时先使用当前项目 `config/config.yaml`，项目文件不存在时才使用标准用户 Skill profile。恢复 MCP 会话时，必须传入启动该 MCP 的同一个 `--config <profile>`，避免把 Cookie 写入另一套 profile。命令会输出打开的登录 URL 和 Cookie 保存目录：
 
 ```bash
 digcrawl browser login --platform xiaohongshu
@@ -1347,6 +1362,8 @@ GOROOT=/Users/dig/.gvm/gos/go1.26.1 /Users/dig/.gvm/gos/go1.26.1/bin/go build -o
 - `title` / `text` 不为空
 
 ### 16.4 登录后试读
+
+下面的命令适用于当前项目配置；如要验证 MCP 会话，请为 login 和 check 都传入启动该 MCP 的同一 `--config <profile>`。
 
 ```bash
 ./digcrawl browser login --platform xiaohongshu

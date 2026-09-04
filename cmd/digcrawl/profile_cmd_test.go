@@ -114,6 +114,18 @@ func TestValidateProfileRejectsRelativeRequiredPaths(t *testing.T) {
 	}
 }
 
+func TestLoadDoctorProfileRejectsRootOnlyASRConfig(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "root.yaml")
+	data := []byte("Gateway:\n  ArtifactDir: " + dir + "\nLocalBrowser:\n  CookieStoreDir: " + dir + "\nASR:\n  Provider: local\n")
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadDoctorProfile(path); err == nil || !strings.Contains(err.Error(), "asr check") {
+		t.Fatalf("root-only doctor error=%v", err)
+	}
+}
+
 func TestProfilePathForMCPUsesUserSkillProfile(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	if got, want := profilePathForMCP(""), config.DefaultSkillProfilePath(); got != want {
@@ -170,9 +182,9 @@ func TestValidateProfileExpandsASRAPIKeyEnvironment(t *testing.T) {
 	}
 }
 
-func TestCheckASRProviderRejectsUnavailableLocalCommand(t *testing.T) {
+func TestCheckSkillASRProviderRejectsUnavailableLocalCommand(t *testing.T) {
 	enabled := true
-	err := checkASRProvider(&config.Config{Skill: config.SkillConfig{ASR: config.ASRConfig{
+	err := checkSkillASRProvider(&config.Config{Skill: config.SkillConfig{ASR: config.ASRConfig{
 		Enabled: &enabled, Provider: "local", LocalCommand: "digcrawl-test-command-that-does-not-exist",
 	}}})
 	if err == nil || !strings.Contains(err.Error(), "not available") {

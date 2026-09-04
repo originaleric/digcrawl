@@ -72,6 +72,8 @@ Codex、Claude Code、WorkBuddy 等宿主只需按各自格式登记这条 stdio
 
 Skill 默认只读取链接；归档、Watchlist、浏览器交互和任意本地文件转写仍不暴露。图片文字和视觉分析由 Codex、Claude Code 等宿主读取 DigCrawl 返回的页面截图附件完成：平台工具使用 `include_media` 与 `include_screenshot`，但不使用本地 `include_ocr`。`media` URL 是来源引用，若没有 MCP 图片附件，宿主不得声称已识别该图片。视频 ASR 与抽帧 OCR 是显式本地能力：Provider 下载受限临时 MP4，通用 core 仅接收该本地文件并返回理解结果，不感知平台、artifact 或 Collect；默认处理完成即清理。用户明确说“保存影片”“处理后删除影片”或明确要求调整单次下载上限时，宿主调用 `skill.media.configure` 覆写现有 `RetainDownloadedVideo` 或 `MaxBytes`，而不是直接编辑 YAML；文件保留时写入 `Skill.Media.Dir`，视频结果的 `platform_metadata.retained_media_relative_path` 则提供相对此目录的定位路径，绝不返回本机绝对路径。通用 Skill 媒体获取会在该目录内为每次执行创建私有子目录；外部 call ID 只用于请求关联，不能命名或覆盖本地媒体、固定下载文件或 manifest。Collect 的文件导出保持独立，不是这些 core 的输入前提。用户同意调用 `skill.asr.enable` 时，DigCrawl 会先检查 ffmpeg 与当前 ASR provider；缺失依赖时不会写入 opt-in 状态，宿主应保留错误并提示用户完成本地配置。视频摘要始终由宿主基于返回的 Markdown 和成功的 `asr_text` 完成；默认 profile 仅保留 `Skill.Media` 与 `Skill.ASR`，不包含 OCR、Summary 或模型 API Key，也不使用 DigFlow。`Gateway.AllowedDomains` 留空时允许任意 `http/https` 目标；配置后作为可选的访问收紧策略。用户明确请求截图时，返回当前视口图片；`Gateway.ArtifactMaxInlineBytes` 控制 MCP 附件上限，默认 `10485760`（10 MiB）。Cookie、artifact、下载媒体和登录态始终保留在用户本机。遇到小红书、抖音、头条、Threads 或 Instagram 的 `LOGIN_REQUIRED` 时，先经用户同意再运行 `digcrawl browser login --platform <platform>`；它会打开 DigCrawl 独立的有头登录窗口，不读取日常浏览器 profile，完成登录后在终端按 Enter 保存 Cookie。
 
+上述不带 `--config` 的登录命令会先解析当前项目的 `config/config.yaml`，项目文件不存在时才使用标准用户 Skill profile。要恢复 MCP 的会话，必须使用启动该 MCP 时的同一 `--config <profile>`；不应猜测未知的 profile 路径。
+
 ## 4. 常用命令
 
 构建：
@@ -110,16 +112,25 @@ Watchlist 常驻服务：
 ./digcrawl watchlist serve --config config/config.yaml
 ```
 
-安装 macOS/Linux 用户级常驻服务：
+安装 macOS/Linux 用户级常驻服务（`install` 成功返回即已启动）：
 
 ```bash
 DIGCRAWL_CONFIG="$PWD/config/config.yaml" \
 ./scripts/digcrawl-watchlist-service.sh install
 
-./scripts/digcrawl-watchlist-service.sh start
 ./scripts/digcrawl-watchlist-service.sh status
 ./scripts/digcrawl-watchlist-service.sh logs
 ```
+
+Windows 在 PowerShell 中使用：
+
+```powershell
+$env:DIGCRAWL_CONFIG = "$PWD\config\config.yaml"
+.\scripts\digcrawl-watchlist-service.ps1 install
+.\scripts\digcrawl-watchlist-service.ps1 status
+```
+
+macOS/Linux 的 `install` 会同时创建 `~/.local/bin/digcrawl`（或 `DIGCRAWL_CLI_BIN_DIR`）到服务 binary 的符号链接，并把该目录写入登录 shell 的启动配置；新开终端或 source 对应配置后才可直接使用 `digcrawl`。macOS 还会将 Watchlist 启动脚本私有复制到 `~/Library/Application Support/DigCrawl/bin/`，使 launchd 不依赖 `Documents` 等受保护目录中的项目脚本；`start` / `restart` 会自动迁移旧 plist 并刷新该副本。Windows 请把发布版 `digcrawl.exe` 路径作为 `DIGCRAWL_BIN`（或放在项目根目录）。Watchlist 的登录失效通知会由当前 executable 和已加载配置生成 `<executable> browser login --config <profile> --platform <platform>`；请执行该命令，以同一 executable 路径和配置恢复服务会话。未从文件加载配置时，通知会省略 `--config` 并保留默认解析。
 
 ## 5. Watchlist 清单维护
 
@@ -215,14 +226,20 @@ video provider -> media download -> ffmpeg extract audio -> ASR -> summary agent
 
 不要直接把 `asr_text` 全文推送给用户；应把 ASR 文本交给 summary agent，再输出标题、要点和判断。
 
-本地 ASR 依赖：
+本地 ASR 需要 `ffmpeg` 与 Python 3.9–3.13；使用发布版不需要 Go。`faster-whisper` 与所选模型无需预先安装：首次执行 setup 会在 DigCrawl 的隔离 Python 运行时中安装依赖、下载模型并离线验证，不会修改系统 Python。命令不传 `--config` 时，会依次检查项目 `config/config.yaml` 与 `digcrawl init --profile skill` 创建的用户 Skill profile；不声明根 `ASR` 或 `Skill` 的项目配置会被跳过。找不到有效 ASR 域会直接报错，不会向当前工作目录写入模型缓存。
 
 ```bash
-ffmpeg
-faster-whisper
+./digcrawl asr setup --yes
+./digcrawl asr check
+./digcrawl asr setup --model base --yes  # 仅预备 base；不改写配置
+./digcrawl asr setup --config "$HOME/.config/digcrawl/digcrawl-skill.yaml" --scope skill --yes
 ```
 
-示例：
+项目根 `ASR` 与 Skill profile 的 `Skill.ASR` 是两个独立配置域，各自拥有模型缓存；setup、直接转写与 `asr check` 必须选择同一域。若同一配置文件同时声明两者，必须使用 `--scope root` 或 `--scope skill`，避免把模型下载到错误缓存。DigCrawl 管理的默认 faster-whisper runner 的 `asr check` 会在所选域离线确认 ffmpeg、运行时与模型可用；自定义 runner 或未由 DigCrawl 管理的本地命令只确认入口命令可执行，并明确报告脚本、运行时与模型仍由外部管理、未被验证。`digcrawl doctor` 只面向 MCP Skill profile，不用于确认项目根 `ASR`。`--model base` 仅影响本次预备。后续请在转写时同样传入 `--provider local --model base`，或把所选域的 Provider / Model 改为目标值；否则默认转写仍使用原配置。若当前配置是 API provider，setup 会安全地预备 local 默认模型 `small`，不会把 API 模型误用于 faster-whisper。
+
+如只需要预装运行时，可显式使用 `--skip-model`；在模型下载完成前，local ASR 与 `asr check` 的离线检查会保持不可用。配置自定义 `LocalCommand` / `LocalArgs` 时，模型与运行时由该集成负责，setup 需显式使用 `--skip-model`；此时命令不会创建 venv、安装依赖或下载模型。
+
+转写示例：
 
 ```bash
 ./digcrawl asr transcribe ./video.mp4 --provider local --model small

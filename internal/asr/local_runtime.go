@@ -18,10 +18,10 @@ import (
 
 const localASRRuntimeHealthCheckTimeout = 10 * time.Second
 
-// PrepareLocalRuntime creates the isolated Python runtime used by
-// the generic local ASR provider. It intentionally does not download a model:
-// model acquisition remains the explicit first transcription of any local
-// media file, and the runtime is shared by every platform.
+// PrepareLocalRuntime creates the isolated Python runtime used by the generic
+// local ASR provider. Model preparation is deliberately separate so callers
+// that need a ready-to-transcribe default can make that network download an
+// explicit, confirmed step.
 func PrepareLocalRuntime(ctx context.Context, cfg config.ASRConfig, bootstrapPython string) (string, error) {
 	if cfg.ProviderOrDefault() != "local" {
 		return "", fmt.Errorf("local ASR runtime setup requires ASR.Provider=local")
@@ -92,6 +92,50 @@ func PrepareLocalRuntime(ctx context.Context, cfg config.ASRConfig, bootstrapPyt
 		return "", fmt.Errorf("publish local ASR runtime: %w", err)
 	}
 	return localASRRuntimePython(runtimeDir), nil
+}
+
+// ValidateLocalModelSetup verifies that cfg uses the portable faster-whisper
+// runner. Custom ASR.LocalCommand integrations own their model lifecycle and
+// must not be invoked with runner-specific flags.
+func ValidateLocalModelSetup(cfg config.ASRConfig) error {
+	if cfg.ProviderOrDefault() != "local" {
+		return fmt.Errorf("local ASR model setup requires ASR.Provider=local")
+	}
+	command := strings.ToLower(strings.TrimSpace(cfg.LocalCommand))
+	if len(cfg.LocalArgs) != 0 || (command != "" && command != "faster-whisper" && command != "faster_whisper") {
+		return fmt.Errorf("local ASR model setup is only available with the default faster-whisper runner; custom ASR.LocalCommand/LocalArgs manage their own models")
+	}
+	return nil
+}
+
+// PrepareLocalModel downloads the configured faster-whisper model into the
+// same cache used by local transcription and doctor.
+func PrepareLocalModel(ctx context.Context, cfg config.ASRConfig) error {
+	if err := ValidateLocalModelSetup(cfg); err != nil {
+		return err
+	}
+	modelCacheDir := cfg.ModelCacheDirOrDefault()
+	python, ok := localASRRuntimeReady(ctx, localASRRuntimeDir(modelCacheDir))
+	if !ok {
+		return fmt.Errorf("isolated local ASR runtime is not ready; run `digcrawl asr setup` again")
+	}
+	runner, err := ensureBundledFasterWhisperRunner(modelCacheDir, cfg.LegacyModelCacheDirs, cfg.LegacyHubCacheDir)
+	if err != nil {
+		return fmt.Errorf("prepare bundled faster-whisper runner: %w", err)
+	}
+	env, err := localASREnv(os.Environ(), modelCacheDir, cfg.LegacyModelCacheDirs, cfg.LegacyHubCacheDir)
+	if err != nil {
+		return err
+	}
+	cmd := exec.CommandContext(ctx, python, runner, "--download-model", "--model", cfg.ModelOrDefault())
+	cmd.Env = env
+	if output, err := cmd.CombinedOutput(); err != nil {
+		if errors.Is(ctx.Err(), context.Canceled) {
+			return fmt.Errorf("download local ASR model: cancelled: %w", ctx.Err())
+		}
+		return fmt.Errorf("download local ASR model %q: %w", cfg.ModelOrDefault(), commandOutputError(output, err))
+	}
+	return nil
 }
 
 func isExistingRuntimePublishConflict(renameErr error, runtimeDir string) bool {

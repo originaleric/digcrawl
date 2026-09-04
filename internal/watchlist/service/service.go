@@ -918,7 +918,7 @@ func (s *Service) notifyLoginRequired(ctx context.Context, item WatchItem, now t
 		name = strings.TrimSpace(item.ID)
 	}
 	title := fmt.Sprintf("%s 需要重新登录", name)
-	text := fmt.Sprintf("%s\n\n来源「%s」的登录状态已失效，无法判断是否有更新。请在 DigCrawl 项目根目录的本机终端运行：\n\n./bin/digcrawl-watchlist browser login --platform %s\n\n完成登录后，Watchlist 会在下次轮询继续抓取。", title, name, platform)
+	text := fmt.Sprintf("%s\n\n来源「%s」的登录状态已失效，无法判断是否有更新。请在本机终端运行：\n\n%s\n\n完成登录后，Watchlist 会在下次轮询继续抓取。", title, name, loginRecoveryCommand(s.cfg, platform))
 	res := s.notifier.Send(ctx, item.NotifyTo, notify.Message{Title: title, Text: text})
 	if res.Status == "notified" || res.Status == StatusNotified {
 		if err := s.store.UpsertDelivery(ctx, item.ID, key, res.ChannelID, StatusNotified, "", false, title, text); err != nil {
@@ -937,6 +937,29 @@ func (s *Service) notifyLoginRequired(ctx context.Context, item WatchItem, now t
 		return false, fmt.Errorf("notify login-required message failed")
 	}
 	return false, fmt.Errorf("notify login-required message failed: %s", res.Error)
+}
+
+func loginRecoveryCommand(cfg *config.Config, platform string) string {
+	executablePath, err := os.Executable()
+	if err != nil {
+		executablePath = os.Args[0]
+	}
+	executablePath = strings.TrimSpace(executablePath)
+	if executablePath == "" {
+		executablePath = "digcrawl"
+	}
+	command := shellQuote(executablePath) + " browser login"
+	if cfg != nil {
+		configPath := strings.TrimSpace(cfg.SourcePath)
+		if configPath != "" {
+			command += " --config " + shellQuote(configPath)
+		}
+	}
+	return command + " --platform " + shellQuote(platform)
+}
+
+func shellQuote(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
 }
 
 func noUpdateDeliveryKey(now time.Time) string {
