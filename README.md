@@ -63,7 +63,7 @@ Add the same local MCP command to the Agent you use:
 
 After configuration, simply give your Agent a supported URL and ask it to read, summarize, compare, quote, or—when explicitly requested—transcribe it. The Agent uses DigCrawl locally and preserves structured outcomes such as login required, captcha, or rate limiting.
 
-For a platform video that the MCP tool downloads during enrichment, say “keep downloaded videos”, “clean up downloaded videos after processing”, or “set the video download limit to 512 MiB”. The Skill updates only the user-owned media retention or size setting through its local configuration tool; it does not require a platform-specific path or edit the profile in chat. For a direct local file or media URL, use `digcrawl video`; `--keep <path>` controls retention for that one CLI invocation.
+For a supported platform video, explicitly ask the Agent to save that platform's videos. The Skill enables only the requested provider in the user-owned local `VideoDownload` profile and can use a user-specified absolute directory or its profile-local default. Bilibili, Douyin, Instagram, Kuaishou, Threads, Toutiao, Weibo, Xiaohongshu, YouTube, and Zhihu are eligible; X, Reddit, and WeChat are not in this retention path. For a direct local file or media URL, use `digcrawl video`; `--keep <path>` controls retention for that one CLI invocation.
 
 The Skill does not include API keys or expose browser cookies. See the [Agent Skill](./.agents/skills/digcrawl/) for routing behavior and [Use with AI Agents](#use-with-ai-agents) for security details.
 
@@ -213,6 +213,7 @@ Read the [runtime documentation](./runtime/README.md) before exposing a Gateway 
 
 | Date | Highlight | Why it matters |
 | --- | --- | --- |
+| 2026-09-06 | Added explicit provider-scoped local video retention. | Users can opt supported platforms into saving one validated local video; API-first page content remains authoritative, and Collect still exports a successful read when optional retention fails. |
 | 2026-09-04 | Unified local ASR setup, configuration scopes, and readiness checks. | Release users can install faster-whisper without Go; setup, transcription, and `asr check` share one root/Skill cache domain, while custom runners are reported as externally managed rather than falsely ready. |
 | 2026-08-31 | Stabilized browser sessions and Watchlist login recovery. | Canonical sessions prevent background readers from overwriting a completed login; every Watchlist entry generates its recovery command from the running executable and loaded configuration. |
 | 2026-08-30 | Added direct local-file and direct-media-URL video analysis. | `digcrawl video` reuses bounded ASR and frame OCR, cleans up URL downloads by default, and can use the user Skill profile without weakening an explicit project configuration. |

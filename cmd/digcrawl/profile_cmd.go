@@ -174,6 +174,12 @@ func defaultSkillProfile(baseDir string) map[string]any {
 		"LocalBrowser": map[string]any{
 			"CookieStoreDir": filepath.Join(baseDir, "browser_cookies"),
 		},
+		"VideoDownload": map[string]any{
+			"Dir":        filepath.Join(baseDir, "media"),
+			"Providers":  map[string]bool{},
+			"MaxBytes":   config.DefaultVideoDownloadMaxBytes,
+			"TimeoutSec": config.DefaultVideoDownloadTimeoutSec,
+		},
 		"Skill": map[string]any{
 			"Media": map[string]any{
 				"DownloadMedia":         false,

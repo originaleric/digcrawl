@@ -35,7 +35,8 @@ func TestDownloadAssetsCopiesMediaArtifact(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.Put(context.Background(), "youtube-video", "video/mp4", "video.mp4", []byte("video")); err != nil {
+	validMP4 := []byte{0, 0, 0, 24, 'f', 't', 'y', 'p', 'i', 's', 'o', 'm'}
+	if _, err := store.Put(context.Background(), "youtube-video", "video/mp4", "video.mp4", validMP4); err != nil {
 		t.Fatal(err)
 	}
 	assets := t.TempDir()
@@ -49,12 +50,54 @@ func TestDownloadAssetsCopiesMediaArtifact(t *testing.T) {
 		t.Fatalf("saved=%v", saved)
 	}
 	data, err := os.ReadFile(filepath.Join(assets, "001.mp4"))
-	if err != nil || string(data) != "video" {
+	if err != nil || string(data) != string(validMP4) {
 		t.Fatalf("artifact media=%q err=%v", data, err)
 	}
 }
 
+func TestDownloadAssetsRejectsNonVideoArtifact(t *testing.T) {
+	store, err := artifact.NewDiskStore(t.TempDir(), time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Put(context.Background(), "invalid-video", "video/mp4", "video.mp4", []byte("not a video")); err != nil {
+		t.Fatal(err)
+	}
+	assets := t.TempDir()
+	saved, err := DownloadAssets(context.Background(), assets, map[string]any{
+		"media": []any{map[string]any{"type": "video", "artifact_id": "invalid-video"}},
+	}, AssetDownloadOptions{ArtifactStore: store, MaxBytes: 16})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(saved) != 1 || filepath.Base(saved[0]) != "media.json" {
+		t.Fatalf("invalid artifact must not be saved as media: %v", saved)
+	}
+	if _, err := os.Stat(filepath.Join(assets, "001.mp4")); !os.IsNotExist(err) {
+		t.Fatalf("invalid artifact file must be removed, stat err=%v", err)
+	}
+}
+
+func TestWithoutVideoMediaKeepsOtherAssetsAndDoesNotMutateOutput(t *testing.T) {
+	out := map[string]any{
+		"media": []any{
+			map[string]any{"type": "image", "url": "https://example.com/image.jpg"},
+			map[string]any{"type": "video", "url": "https://example.com/video.mp4"},
+		},
+	}
+	filtered := withoutVideoMedia(out)
+	items := extractMediaItems(filtered)
+	if len(items) != 1 || items[0]["type"] != "image" {
+		t.Fatalf("filtered media=%+v", items)
+	}
+	original := extractMediaItems(out)
+	if len(original) != 2 {
+		t.Fatalf("original output was mutated: %+v", original)
+	}
+}
+
 func TestDownloadFilePrefersCompatibleImageFormatsOnlyForOCRAssets(t *testing.T) {
+	validMP4 := []byte{0, 0, 0, 24, 'f', 't', 'y', 'p', 'i', 's', 'o', 'm'}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/image":
@@ -68,13 +111,13 @@ func TestDownloadFilePrefersCompatibleImageFormatsOnlyForOCRAssets(t *testing.T)
 				t.Fatalf("video Accept=%q; image preference must not affect video downloads", got)
 			}
 			w.Header().Set("Content-Type", "video/mp4")
-			_, _ = w.Write([]byte("mp4"))
+			_, _ = w.Write(validMP4)
 		}
 	}))
 	defer server.Close()
 	for _, tc := range []struct{ path, mediaType, want string }{
 		{path: "/image", mediaType: "image", want: "jpeg"},
-		{path: "/video", mediaType: "video", want: "mp4"},
+		{path: "/video", mediaType: "video", want: string(validMP4)},
 	} {
 		t.Run(tc.mediaType, func(t *testing.T) {
 			dest := filepath.Join(t.TempDir(), "asset")

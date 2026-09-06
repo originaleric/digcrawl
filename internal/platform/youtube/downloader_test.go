@@ -23,7 +23,7 @@ func TestDownloadVideoUsesCanonicalURLAndEnforcesSize(t *testing.T) {
 		t.Fatalf("path=%q", path)
 	}
 	data, err := os.ReadFile(path)
-	if err != nil || string(data) != "video" {
+	if err != nil || len(data) < 8 || string(data[4:8]) != "ftyp" {
 		t.Fatalf("downloaded data=%q err=%v", data, err)
 	}
 	cleanup()
@@ -38,6 +38,16 @@ func TestDownloadVideoRejectsOversizedOutput(t *testing.T) {
 	ytDLPCommand = fakeYTDLP(t, "oversized")
 	_, _, err := DownloadVideo(context.Background(), "https://www.youtube.com/watch?v=dQw4w9WgXcQ", 4, false, "")
 	if err == nil || !strings.Contains(err.Error(), "exceeds allowed maximum") {
+		t.Fatalf("err=%v", err)
+	}
+}
+
+func TestDownloadVideoRejectsNonVideoMP4(t *testing.T) {
+	oldCommand := ytDLPCommand
+	t.Cleanup(func() { ytDLPCommand = oldCommand })
+	ytDLPCommand = fakeYTDLP(t, "invalid-video")
+	_, _, err := DownloadVideo(context.Background(), "https://www.youtube.com/watch?v=dQw4w9WgXcQ", 16, false, "")
+	if err == nil || !strings.Contains(err.Error(), "not a recognized video file") {
 		t.Fatalf("err=%v", err)
 	}
 }

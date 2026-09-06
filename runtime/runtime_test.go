@@ -71,6 +71,26 @@ func TestRecommendedCallTimeoutUsesSkillMediaDefault(t *testing.T) {
 	}
 }
 
+func TestRecommendedCallTimeoutIncludesOptedInProviderRetention(t *testing.T) {
+	cfg := &config.Config{
+		LocalBrowser: config.LocalBrowserConfig{TotalTimeoutSec: 90},
+		VideoDownload: config.VideoDownloadConfig{
+			Providers:  map[string]bool{"toutiao": true},
+			TimeoutSec: 300,
+		},
+	}
+	// The handler asks its reader for media because of this opt-in after the
+	// Runtime selects a deadline, so include_media need not be present here.
+	call := &protocol.ToolCall{Tool: "toutiao.video.read", Input: json.RawMessage(`{"url":"https://example.com/video"}`)}
+	if got, want := RecommendedCallTimeout(cfg, call), 420*time.Second; got != want {
+		t.Fatalf("retention timeout=%s want %s", got, want)
+	}
+	notOptedIn := &protocol.ToolCall{Tool: "douyin.video.read", Input: call.Input}
+	if got, want := RecommendedCallTimeout(cfg, notOptedIn), 120*time.Second; got != want {
+		t.Fatalf("non-opted provider timeout=%s want %s", got, want)
+	}
+}
+
 func TestRecommendedCallTimeoutReadsActiveSkillSnapshotDuringUpdates(t *testing.T) {
 	old := config.Skill()
 	t.Cleanup(func() { config.SetSkill(old) })

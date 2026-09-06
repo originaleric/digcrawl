@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"encoding/json"
+	"strings"
 	"time"
 
 	"github.com/originaleric/digcrawl/config"
@@ -31,18 +32,21 @@ func RecommendedCallTimeout(cfg *config.Config, call *protocol.ToolCall) time.Du
 	maxVideoFrames := config.VideoFrameOCRConfig{}.MaxTotalFramesOrDefault()
 	skillOCREnabled := false
 	videoFrameOCREnabled := false
+	videoDownloadSeconds := 0
 	if cfg != nil {
 		var skillCfg config.SkillConfig
+		var videoDownloadCfg config.VideoDownloadConfig
 		if cfg == config.Get() {
 			// The standard Skill profile can be changed by a local configuration
 			// tool while MCP workers are being dispatched. Read its mutable
 			// section through the synchronized snapshot accessor so the timeout
 			// matches one coherent media configuration.
-			skillCfg = config.Skill()
+			skillCfg, videoDownloadCfg = config.SkillVideoDownload()
 		} else {
 			// Collect and focused tests inject an execution-local config that is
 			// immutable for that execution.
 			skillCfg = cfg.Skill
+			videoDownloadCfg = cfg.VideoDownload
 		}
 		if cfg.LocalBrowser.TotalTimeoutSec > 0 {
 			browserSeconds = cfg.LocalBrowser.TotalTimeoutSec
@@ -58,6 +62,12 @@ func RecommendedCallTimeout(cfg *config.Config, call *protocol.ToolCall) time.Du
 		maxVideoFrames = skillCfg.OCR.VideoFrames.MaxTotalFramesOrDefault()
 		skillOCREnabled = skillCfg.OCR.EnabledOrDefault()
 		videoFrameOCREnabled = skillOCREnabled && skillCfg.OCR.VideoFrames.EnabledOrDefault()
+		if call != nil {
+			provider, _, hasProvider := strings.Cut(strings.ToLower(strings.TrimSpace(call.Tool)), ".")
+			if hasProvider && config.IsSupportedVideoDownloadProvider(provider) && videoDownloadCfg.EnabledFor(provider) {
+				videoDownloadSeconds = videoDownloadCfg.TimeoutSecOrDefault()
+			}
+		}
 	}
 
 	if call != nil && call.Tool == "asr.transcribe" {
@@ -100,5 +110,10 @@ func RecommendedCallTimeout(cfg *config.Config, call *protocol.ToolCall) time.Du
 			seconds += mediaSeconds + videoFrameSeconds + maxVideoFrames*ocrSeconds
 		}
 	}
+	// Provider retention happens after page extraction and before any optional
+	// local enrichment. It has its own user-configured operation deadline, so
+	// reserve that complete phase even when include_media was omitted: the
+	// retention opt-in itself requests media internally.
+	seconds += videoDownloadSeconds
 	return time.Duration(seconds) * time.Second
 }

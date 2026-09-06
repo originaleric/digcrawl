@@ -5,8 +5,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"net"
-	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -332,7 +330,7 @@ func isHTTPURL(input string) bool {
 }
 
 func downloadURL(ctx context.Context, rawURL string, opts Options) (string, string, func(), error) {
-	if err := validateRemoteURL(rawURL); err != nil {
+	if err := media.ValidateRemoteURL(rawURL); err != nil {
 		return "", "", nil, fmt.Errorf("validate video URL: %w", err)
 	}
 	maxBytes := opts.MaxBytes
@@ -351,7 +349,7 @@ func downloadURL(ctx context.Context, rawURL string, opts Options) (string, stri
 	u, _ := url.Parse(rawURL)
 	name := "video" + safeExtension(u.Path)
 	dest := filepath.Join(dir, name)
-	client := newSafeHTTPClient(timeout)
+	client := media.NewSafeHTTPClient(timeout)
 	if _, err := media.DownloadFile(ctx, client, rawURL, dest, maxBytes, "", "video"); err != nil {
 		cleanup()
 		return "", "", nil, fmt.Errorf("download video: %w", err)
@@ -370,102 +368,6 @@ func safeExtension(rawPath string) string {
 		}
 	}
 	return ext
-}
-
-func validateRemoteURL(rawURL string) error {
-	u, err := url.Parse(rawURL)
-	if err != nil {
-		return err
-	}
-	scheme := strings.ToLower(u.Scheme)
-	if scheme != "http" && scheme != "https" {
-		return fmt.Errorf("unsupported URL scheme %q", u.Scheme)
-	}
-	if u.User != nil {
-		return fmt.Errorf("video URL userinfo is not supported")
-	}
-	host := strings.TrimSpace(u.Hostname())
-	if host == "" {
-		return fmt.Errorf("video URL missing host")
-	}
-	if ip := net.ParseIP(host); ip != nil {
-		if isPrivateOrLocalIP(ip) {
-			return fmt.Errorf("video host %q is private/local", host)
-		}
-		return nil
-	}
-	lower := strings.ToLower(host)
-	if lower == "localhost" || strings.HasSuffix(lower, ".localhost") {
-		return fmt.Errorf("video host %q is local", host)
-	}
-	return nil
-}
-
-func isPrivateOrLocalIP(ip net.IP) bool {
-	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsMulticast() || ip.IsUnspecified()
-}
-
-// newSafeHTTPClient validates a URL at redirect time and again at connection
-// time. The latter prevents a hostname from bypassing validation by resolving
-// to a private address after URL parsing. Proxy support is deliberately disabled
-// here: otherwise a proxy could make the final network target unobservable to
-// this local, user-directed downloader.
-func newSafeHTTPClient(timeout time.Duration) *http.Client {
-	transport := http.DefaultTransport.(*http.Transport).Clone()
-	transport.Proxy = nil
-	transport.DialContext = safeDialContext
-	return &http.Client{
-		Timeout:   timeout,
-		Transport: transport,
-		CheckRedirect: func(req *http.Request, _ []*http.Request) error {
-			return validateRemoteURL(req.URL.String())
-		},
-	}
-}
-
-func safeDialContext(ctx context.Context, network, address string) (net.Conn, error) {
-	host, port, err := net.SplitHostPort(address)
-	if err != nil {
-		return nil, fmt.Errorf("parse video download address %q: %w", address, err)
-	}
-	ips, err := resolvePublicHost(ctx, host)
-	if err != nil {
-		return nil, err
-	}
-	dialer := &net.Dialer{}
-	var lastErr error
-	for _, ip := range ips {
-		conn, err := dialer.DialContext(ctx, network, net.JoinHostPort(ip.String(), port))
-		if err == nil {
-			return conn, nil
-		}
-		lastErr = err
-	}
-	return nil, fmt.Errorf("dial video host %q: %w", host, lastErr)
-}
-
-func resolvePublicHost(ctx context.Context, host string) ([]net.IP, error) {
-	if ip := net.ParseIP(host); ip != nil {
-		if isPrivateOrLocalIP(ip) {
-			return nil, fmt.Errorf("video host %q is private/local", host)
-		}
-		return []net.IP{ip}, nil
-	}
-	addresses, err := net.DefaultResolver.LookupIPAddr(ctx, host)
-	if err != nil {
-		return nil, fmt.Errorf("resolve video host %q: %w", host, err)
-	}
-	if len(addresses) == 0 {
-		return nil, fmt.Errorf("resolve video host %q: no addresses", host)
-	}
-	ips := make([]net.IP, 0, len(addresses))
-	for _, address := range addresses {
-		if isPrivateOrLocalIP(address.IP) {
-			return nil, fmt.Errorf("video host %q resolved to private/local address %q", host, address.IP)
-		}
-		ips = append(ips, address.IP)
-	}
-	return ips, nil
 }
 
 func copyFileNew(source, dest string) error {

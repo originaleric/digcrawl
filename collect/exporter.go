@@ -17,15 +17,16 @@ import (
 
 // ExportOptions configures local file export.
 type ExportOptions struct {
-	OutputDir       string
-	Formats         []string
-	Now             time.Time
-	DownloadMedia   bool
-	MaxMediaBytes   int64
-	MediaTimeoutSec int
-	ArtifactStore   artifact.Store
-	OCR             config.OCRConfig
-	ASR             config.ASRConfig
+	OutputDir         string
+	Formats           []string
+	Now               time.Time
+	DownloadMedia     bool
+	SkipVideoDownload bool
+	MaxMediaBytes     int64
+	MediaTimeoutSec   int
+	ArtifactStore     artifact.Store
+	OCR               config.OCRConfig
+	ASR               config.ASRConfig
 }
 
 // ExportResult lists written files.
@@ -104,7 +105,11 @@ func exportToPaths(ctx context.Context, out map[string]any, opts ExportOptions, 
 	var downloaded []map[string]any
 	ocrAppliedAfterWrite := false
 	if opts.DownloadMedia {
-		assetFiles, err := DownloadAssets(ctx, paths.Assets, out, AssetDownloadOptions{
+		mediaOut := out
+		if opts.SkipVideoDownload {
+			mediaOut = withoutVideoMedia(out)
+		}
+		assetFiles, err := DownloadAssets(ctx, paths.Assets, mediaOut, AssetDownloadOptions{
 			MaxBytes:      opts.MaxMediaBytes,
 			TimeoutSec:    opts.MediaTimeoutSec,
 			ArtifactStore: opts.ArtifactStore,
@@ -175,6 +180,30 @@ func exportToPaths(ctx context.Context, out map[string]any, opts ExportOptions, 
 	}
 
 	return ExportResult{Paths: paths, Written: written, Downloaded: downloaded}, nil
+}
+
+func withoutVideoMedia(out map[string]any) map[string]any {
+	if out == nil || out["media"] == nil {
+		return out
+	}
+	filtered := make(map[string]any, len(out))
+	for key, value := range out {
+		filtered[key] = value
+	}
+	items := extractMediaItems(out)
+	// extractMediaItems accepts the public []any representation. Preserve it
+	// here so the filtered copy can travel through the ordinary asset exporter
+	// without changing its media contract.
+	withoutVideos := make([]any, 0, len(items))
+	for _, item := range items {
+		mediaType, _ := item["type"].(string)
+		if strings.EqualFold(strings.TrimSpace(mediaType), "video") {
+			continue
+		}
+		withoutVideos = append(withoutVideos, item)
+	}
+	filtered["media"] = withoutVideos
+	return filtered
 }
 
 func rewriteTextualOutputs(out map[string]any, paths OutputPaths, formats []string) error {

@@ -1,8 +1,10 @@
 package platformprov
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -131,6 +133,280 @@ func TestPlatformReadHandlerAppliesSkillConfiguredOCR(t *testing.T) {
 	}
 }
 
+func TestPlatformReadHandlerRetainsOptedInProviderVideo(t *testing.T) {
+	mediaRoot := t.TempDir()
+	store, err := artifact.NewDiskStore(t.TempDir(), time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	validMP4 := []byte{0, 0, 0, 24, 'f', 't', 'y', 'p', 'i', 's', 'o', 'm'}
+	if _, err := store.Put(context.Background(), "toutiao-video", "video/mp4", "video.mp4", validMP4); err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.Config{VideoDownload: config.VideoDownloadConfig{
+		Dir:       mediaRoot,
+		Providers: map[string]bool{"toutiao": true},
+	}}
+	input, err := json.Marshal(platformReadInput{URL: "https://8.8.8.8/video"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := platformReadHandlerNamedWithConfig(ToolToutiaoVideoRead, []string{"8.8.8.8"}, nil, store, func(_ context.Context, in iplatform.ReadInput) (*iplatform.Content, error) {
+		if !in.IncludeMedia {
+			t.Fatal("provider retention must request media from the reader")
+		}
+		return &iplatform.Content{
+			Platform: "toutiao", ContentType: "video", SourceURL: in.URL,
+			Media: []iplatform.MediaItem{{Type: "video", ArtifactID: "toutiao-video"}},
+		}, nil
+	}, cfg)
+	out, _, err := handler(context.Background(), &protocol.ToolCall{Type: protocol.TypeToolCall, Tool: ToolToutiaoVideoRead, Input: input})
+	if err != nil {
+		t.Fatalf("retain provider video: %v", err)
+	}
+	meta, ok := out["platform_metadata"].(map[string]any)
+	if !ok || meta["video_download_status"] != "saved" || meta["downloaded_video_retained"] != true {
+		t.Fatalf("retention metadata=%+v", meta)
+	}
+	paths, ok := meta["retained_media_relative_paths"].([]string)
+	if !ok || len(paths) != 1 || filepath.IsAbs(paths[0]) {
+		t.Fatalf("relative retained paths=%#v", meta["retained_media_relative_paths"])
+	}
+	if _, err := os.Stat(filepath.Join(mediaRoot, filepath.FromSlash(paths[0]))); err != nil {
+		t.Fatalf("retained file is missing: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(mediaRoot, filepath.Dir(filepath.FromSlash(paths[0])), "media.json")); !os.IsNotExist(err) {
+		t.Fatalf("retained video directory must not keep source-URL manifest, stat err=%v", err)
+	}
+	serialized, _ := json.Marshal(out)
+	if strings.Contains(string(serialized), mediaRoot) {
+		t.Fatalf("retention result leaked local root: %s", serialized)
+	}
+	if _, ok := out["media"]; ok {
+		t.Fatalf("retention must not expose media that the caller did not request: %+v", out)
+	}
+}
+
+func TestPlatformReadHandlerRejectsNonVideoArtifactForProviderRetention(t *testing.T) {
+	mediaRoot := t.TempDir()
+	store, err := artifact.NewDiskStore(t.TempDir(), time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Put(context.Background(), "invalid-video", "video/mp4", "video.mp4", []byte("not a video")); err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.Config{VideoDownload: config.VideoDownloadConfig{
+		Dir:       mediaRoot,
+		Providers: map[string]bool{"toutiao": true},
+	}}
+	input, err := json.Marshal(platformReadInput{URL: "https://8.8.8.8/video"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := platformReadHandlerNamedWithConfig(ToolToutiaoVideoRead, []string{"8.8.8.8"}, nil, store, func(_ context.Context, _ iplatform.ReadInput) (*iplatform.Content, error) {
+		return &iplatform.Content{Platform: "toutiao", ContentType: "video", Media: []iplatform.MediaItem{{Type: "video", ArtifactID: "invalid-video"}}}, nil
+	}, cfg)
+	out, _, err := handler(context.Background(), &protocol.ToolCall{Type: protocol.TypeToolCall, Tool: ToolToutiaoVideoRead, Input: input})
+	if err == nil {
+		t.Fatal("expected invalid artifact video retention to fail")
+	}
+	var coded interface{ ToolErrorCode() string }
+	if !errors.As(err, &coded) || coded.ToolErrorCode() != ProviderVideoDownloadFailedCode {
+		t.Fatalf("err=%v", err)
+	}
+	meta, _ := out["platform_metadata"].(map[string]any)
+	if meta["video_download_status"] != "failed" || meta["video_download_failure_reason"] != "not_single_file_video" {
+		t.Fatalf("metadata=%+v", meta)
+	}
+	entries, err := os.ReadDir(mediaRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("invalid retention must not leave a directory: %+v", entries)
+	}
+}
+
+func TestPlatformReadHandlerRetainsOnlyPrimaryProviderVideo(t *testing.T) {
+	mediaRoot := t.TempDir()
+	store, err := artifact.NewDiskStore(t.TempDir(), time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	validMP4 := []byte{0, 0, 0, 24, 'f', 't', 'y', 'p', 'i', 's', 'o', 'm'}
+	for _, id := range []string{"primary", "alternate"} {
+		if _, err := store.Put(context.Background(), id, "video/mp4", id+".mp4", validMP4); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cfg := &config.Config{VideoDownload: config.VideoDownloadConfig{
+		Dir:       mediaRoot,
+		Providers: map[string]bool{"toutiao": true},
+	}}
+	input, err := json.Marshal(platformReadInput{URL: "https://8.8.8.8/video"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := platformReadHandlerNamedWithConfig(ToolToutiaoVideoRead, []string{"8.8.8.8"}, nil, store, func(_ context.Context, in iplatform.ReadInput) (*iplatform.Content, error) {
+		return &iplatform.Content{
+			Platform: "toutiao", ContentType: "video", SourceURL: in.URL,
+			Media: []iplatform.MediaItem{
+				{Type: "video", ArtifactID: "primary"},
+				{Type: "video", ArtifactID: "alternate"},
+			},
+		}, nil
+	}, cfg)
+	out, _, err := handler(context.Background(), &protocol.ToolCall{Type: protocol.TypeToolCall, Tool: ToolToutiaoVideoRead, Input: input})
+	if err != nil {
+		t.Fatalf("retain provider video: %v", err)
+	}
+	meta := out["platform_metadata"].(map[string]any)
+	if meta["video_download_status"] != "saved" || meta["video_download_count"] != 1 || meta["video_download_attempted_count"] != 1 {
+		t.Fatalf("retention metadata=%+v", meta)
+	}
+	paths := meta["retained_media_relative_paths"].([]string)
+	data, err := os.ReadFile(filepath.Join(mediaRoot, filepath.FromSlash(paths[0])))
+	if err != nil || !bytes.Equal(data, validMP4) {
+		t.Fatalf("retained primary=%q err=%v", data, err)
+	}
+	if _, err := os.Stat(filepath.Join(mediaRoot, filepath.Dir(filepath.FromSlash(paths[0])), "002.mp4")); !os.IsNotExist(err) {
+		t.Fatalf("alternate rendition must not be retained, stat err=%v", err)
+	}
+}
+
+func TestPlatformReadHandlerReportsSanitizedProviderVideoFailure(t *testing.T) {
+	mediaRoot := t.TempDir()
+	cfg := &config.Config{VideoDownload: config.VideoDownloadConfig{
+		Dir:       mediaRoot,
+		Providers: map[string]bool{"toutiao": true},
+	}}
+	input, err := json.Marshal(platformReadInput{URL: "https://8.8.8.8/video"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := platformReadHandlerNamedWithConfig(ToolToutiaoVideoRead, []string{"8.8.8.8"}, nil, nil, func(_ context.Context, in iplatform.ReadInput) (*iplatform.Content, error) {
+		return &iplatform.Content{
+			Platform: "toutiao", ContentType: "video", SourceURL: in.URL,
+			Media: []iplatform.MediaItem{{Type: "video", URL: "http://127.0.0.1/video.mp4?token=secret"}},
+		}, nil
+	}, cfg)
+	out, _, err := handler(context.Background(), &protocol.ToolCall{Type: protocol.TypeToolCall, Tool: ToolToutiaoVideoRead, Input: input})
+	if err == nil || !strings.Contains(err.Error(), "invalid_media_url") {
+		t.Fatalf("retention error=%v", err)
+	}
+	var coded interface{ ToolErrorCode() string }
+	if !errors.As(err, &coded) || coded.ToolErrorCode() != ProviderVideoDownloadFailedCode {
+		t.Fatalf("retention failure must expose its typed partial-success contract: %v", err)
+	}
+	meta := out["platform_metadata"].(map[string]any)
+	if meta["video_download_status"] != "failed" || meta["video_download_count"] != 0 || meta["video_download_attempted_count"] != 1 || meta["video_download_failure_reason"] != "invalid_media_url" {
+		t.Fatalf("retention metadata=%+v", meta)
+	}
+	serialized, _ := json.Marshal(out)
+	if strings.Contains(string(serialized), "127.0.0.1") || strings.Contains(string(serialized), "token=secret") || strings.Contains(string(serialized), mediaRoot) {
+		t.Fatalf("failure leaked source or local path: %s", serialized)
+	}
+}
+
+func TestPlatformReadHandlerSanitizesProviderVideoStorageFailure(t *testing.T) {
+	mediaRoot := filepath.Join(t.TempDir(), "not-a-directory")
+	if err := os.WriteFile(mediaRoot, []byte("file"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.Config{VideoDownload: config.VideoDownloadConfig{
+		Dir:       mediaRoot,
+		Providers: map[string]bool{"toutiao": true},
+	}}
+	input, err := json.Marshal(platformReadInput{URL: "https://8.8.8.8/video"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := platformReadHandlerNamedWithConfig(ToolToutiaoVideoRead, []string{"8.8.8.8"}, nil, nil, func(_ context.Context, in iplatform.ReadInput) (*iplatform.Content, error) {
+		return &iplatform.Content{
+			Platform: "toutiao", ContentType: "video", SourceURL: in.URL,
+			Media: []iplatform.MediaItem{{Type: "video", URL: "https://cdn.example.test/video.mp4?token=secret"}},
+		}, nil
+	}, cfg)
+	out, _, err := handler(context.Background(), &protocol.ToolCall{Type: protocol.TypeToolCall, Tool: ToolToutiaoVideoRead, Input: input})
+	if err == nil || err.Error() != "provider video download failed: local_storage_failed" {
+		t.Fatalf("retention error=%v", err)
+	}
+	meta := out["platform_metadata"].(map[string]any)
+	if meta["video_download_status"] != "failed" || meta["video_download_count"] != 0 || meta["video_download_attempted_count"] != 0 || meta["video_download_failure_reason"] != "local_storage_failed" {
+		t.Fatalf("retention metadata=%+v", meta)
+	}
+	serialized, _ := json.Marshal(out)
+	if strings.Contains(string(serialized), mediaRoot) || strings.Contains(string(serialized), "token=secret") {
+		t.Fatalf("storage failure leaked local path or source: %s", serialized)
+	}
+}
+
+func TestPlatformReadHandlerDoesNotRetainDisabledProviderVideo(t *testing.T) {
+	mediaRoot := t.TempDir()
+	cfg := &config.Config{VideoDownload: config.VideoDownloadConfig{
+		Dir:       mediaRoot,
+		Providers: map[string]bool{"toutiao": false},
+	}}
+	input, err := json.Marshal(platformReadInput{URL: "https://8.8.8.8/video"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := platformReadHandlerNamedWithConfig(ToolToutiaoVideoRead, []string{"8.8.8.8"}, nil, nil, func(_ context.Context, in iplatform.ReadInput) (*iplatform.Content, error) {
+		if in.IncludeMedia {
+			t.Fatal("disabled provider retention must not broaden the read request")
+		}
+		return &iplatform.Content{Platform: "toutiao", ContentType: "video", SourceURL: in.URL}, nil
+	}, cfg)
+	out, _, err := handler(context.Background(), &protocol.ToolCall{Type: protocol.TypeToolCall, Tool: ToolToutiaoVideoRead, Input: input})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := out["platform_metadata"]; ok {
+		t.Fatalf("disabled provider must not report retention: %+v", out)
+	}
+	entries, err := os.ReadDir(mediaRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("disabled provider created files: %+v", entries)
+	}
+}
+
+func TestPlatformReadHandlerReportsUnavailableOptedInProviderVideo(t *testing.T) {
+	mediaRoot := t.TempDir()
+	cfg := &config.Config{VideoDownload: config.VideoDownloadConfig{
+		Dir:       mediaRoot,
+		Providers: map[string]bool{"toutiao": true},
+	}}
+	input, err := json.Marshal(platformReadInput{URL: "https://8.8.8.8/video"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := platformReadHandlerNamedWithConfig(ToolToutiaoVideoRead, []string{"8.8.8.8"}, nil, nil, func(_ context.Context, in iplatform.ReadInput) (*iplatform.Content, error) {
+		if !in.IncludeMedia {
+			t.Fatal("provider retention must request media from the reader")
+		}
+		return &iplatform.Content{Platform: "toutiao", ContentType: "video", SourceURL: in.URL}, nil
+	}, cfg)
+	out, _, err := handler(context.Background(), &protocol.ToolCall{Type: protocol.TypeToolCall, Tool: ToolToutiaoVideoRead, Input: input})
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta, ok := out["platform_metadata"].(map[string]any)
+	if !ok || meta["video_download_status"] != "not_available" {
+		t.Fatalf("missing unavailable retention status: %+v", out)
+	}
+	entries, err := os.ReadDir(mediaRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("unavailable video created files: %+v", entries)
+	}
+}
+
 func TestShouldDownloadYouTubeMediaHonorsSkillASROptIn(t *testing.T) {
 	oldSkill := config.Skill()
 	t.Cleanup(func() { config.SetSkill(oldSkill) })
@@ -145,6 +421,20 @@ func TestShouldDownloadYouTubeMediaHonorsSkillASROptIn(t *testing.T) {
 	}
 	if shouldDownloadYouTubeMedia(config.Get(), config.Skill(), false, platformReadInput{IncludeMedia: true}) {
 		t.Fatal("include_media alone must not acquire a private MP4")
+	}
+}
+
+func TestShouldDownloadYouTubeMediaKeepsCollectBehaviorWhenYouTubeIsNotOptedIn(t *testing.T) {
+	enabled := true
+	cfg := &config.Config{Collect: config.CollectConfig{DownloadMedia: &enabled}, VideoDownload: config.VideoDownloadConfig{
+		Providers: map[string]bool{"douyin": true},
+	}}
+	if !shouldDownloadYouTubeMedia(cfg, config.SkillConfig{}, true, platformReadInput{IncludeMedia: true}) {
+		t.Fatal("another provider's retention setting must not disable Collect's YouTube media export")
+	}
+	cfg.VideoDownload.Providers["youtube"] = true
+	if shouldDownloadYouTubeMedia(cfg, config.SkillConfig{}, true, platformReadInput{IncludeMedia: true}) {
+		t.Fatal("opted-in YouTube retention must own its Collect video persistence")
 	}
 }
 
@@ -282,6 +572,115 @@ func TestYouTubeRetentionIsAnExplicitProviderOptIn(t *testing.T) {
 	serialized, _ := json.Marshal(out)
 	if strings.Contains(string(serialized), videoPath) {
 		t.Fatalf("retained local path must not leak through tool output: %s", serialized)
+	}
+}
+
+func TestYouTubeProviderRetentionUsesVideoDownloadConfig(t *testing.T) {
+	mediaDir := t.TempDir()
+	videoPath := filepath.Join(mediaDir, "retained.mp4")
+	if err := os.WriteFile(videoPath, []byte("video"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runtimeCfg := &config.Config{VideoDownload: config.VideoDownloadConfig{
+		Dir:        mediaDir,
+		Providers:  map[string]bool{"youtube": true},
+		MaxBytes:   2048,
+		TimeoutSec: 60,
+	}}
+	oldAcquire := acquireYouTubeVideo
+	var gotRetain bool
+	var gotDir string
+	var gotMaxBytes int64
+	acquireYouTubeVideo = func(_ context.Context, _ string, maxBytes int64, retain bool, retainDir string) (string, func(), error) {
+		gotRetain, gotDir, gotMaxBytes = retain, retainDir, maxBytes
+		return videoPath, func() {}, nil
+	}
+	t.Cleanup(func() { acquireYouTubeVideo = oldAcquire })
+	input, err := json.Marshal(platformReadInput{URL: "https://www.youtube.com/watch?v=test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := platformReadHandlerNamedWithConfig(ToolYouTubeVideoRead, youtubeDefaultDomains, nil, nil, func(_ context.Context, in iplatform.ReadInput) (*iplatform.Content, error) {
+		if !in.IncludeMedia {
+			t.Fatal("provider retention must request YouTube media")
+		}
+		return &iplatform.Content{Platform: "youtube", ContentType: "video", SourceURL: in.URL}, nil
+	}, runtimeCfg)
+	out, _, err := handler(context.Background(), &protocol.ToolCall{Type: protocol.TypeToolCall, ID: "retain-youtube", Tool: ToolYouTubeVideoRead, Input: input})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !gotRetain || gotDir != mediaDir || gotMaxBytes != 2048 {
+		t.Fatalf("VideoDownload was not passed to YouTube: retain=%v dir=%q max=%d", gotRetain, gotDir, gotMaxBytes)
+	}
+	meta := out["platform_metadata"].(map[string]any)
+	if meta["video_download_status"] != "saved" || meta["retained_media_relative_path"] != "retained.mp4" {
+		t.Fatalf("unexpected YouTube retention metadata: %+v", meta)
+	}
+}
+
+func TestYouTubeProviderRetentionReturnsFailedStatusWithPartialOutput(t *testing.T) {
+	mediaDir := t.TempDir()
+	runtimeCfg := &config.Config{VideoDownload: config.VideoDownloadConfig{
+		Dir:       mediaDir,
+		Providers: map[string]bool{"youtube": true},
+	}}
+	oldAcquire := acquireYouTubeVideo
+	acquireYouTubeVideo = func(context.Context, string, int64, bool, string) (string, func(), error) {
+		return "", func() {}, errors.New("yt-dlp unavailable: https://media.example.test/video.mp4?token=secret")
+	}
+	t.Cleanup(func() { acquireYouTubeVideo = oldAcquire })
+	input, err := json.Marshal(platformReadInput{URL: "https://www.youtube.com/watch?v=test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := platformReadHandlerNamedWithConfig(ToolYouTubeVideoRead, youtubeDefaultDomains, nil, nil, func(_ context.Context, _ iplatform.ReadInput) (*iplatform.Content, error) {
+		return &iplatform.Content{
+			Platform: "youtube", ContentType: "video", SourceURL: "https://www.youtube.com/watch?v=test", Markdown: "page text",
+			Media: []iplatform.MediaItem{{Type: "video", URL: "https://media.example.test/signed.mp4?token=secret"}},
+		}, nil
+	}, runtimeCfg)
+	out, _, err := handler(context.Background(), &protocol.ToolCall{Type: protocol.TypeToolCall, ID: "failed-youtube-retention", Tool: ToolYouTubeVideoRead, Input: input})
+	if err == nil || err.Error() != "provider video download failed: download_failed" {
+		t.Fatal("failed retention unexpectedly succeeded")
+	}
+	meta, ok := out["platform_metadata"].(map[string]any)
+	if !ok || meta["video_download_status"] != "failed" || meta["video_download_count"] != 0 || meta["video_download_attempted_count"] != 1 || meta["video_download_failure_reason"] != "download_failed" {
+		t.Fatalf("failed retention must preserve partial output status: %+v", out)
+	}
+	if _, ok := out["media"]; ok {
+		t.Fatalf("failed retention must not expose media the caller did not request: %+v", out)
+	}
+}
+
+func TestYouTubeProviderRetentionSanitizesFailureWithExplicitMedia(t *testing.T) {
+	mediaDir := t.TempDir()
+	runtimeCfg := &config.Config{VideoDownload: config.VideoDownloadConfig{
+		Dir:       mediaDir,
+		Providers: map[string]bool{"youtube": true},
+	}}
+	oldAcquire := acquireYouTubeVideo
+	acquireYouTubeVideo = func(context.Context, string, int64, bool, string) (string, func(), error) {
+		return "", func() {}, errors.New("yt-dlp diagnostic https://media.example.test/video.mp4?token=secret")
+	}
+	t.Cleanup(func() { acquireYouTubeVideo = oldAcquire })
+	input, err := json.Marshal(platformReadInput{URL: "https://www.youtube.com/watch?v=test", IncludeMedia: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := platformReadHandlerNamedWithConfig(ToolYouTubeVideoRead, youtubeDefaultDomains, nil, nil, func(_ context.Context, _ iplatform.ReadInput) (*iplatform.Content, error) {
+		return &iplatform.Content{
+			Platform: "youtube", ContentType: "video", SourceURL: "https://www.youtube.com/watch?v=test",
+			Media: []iplatform.MediaItem{{Type: "video", URL: "https://media.example.test/video.mp4?token=explicit"}},
+		}, nil
+	}, runtimeCfg)
+	out, _, err := handler(context.Background(), &protocol.ToolCall{Type: protocol.TypeToolCall, ID: "failed-youtube-explicit-media", Tool: ToolYouTubeVideoRead, Input: input})
+	if err == nil || err.Error() != "provider video download failed: download_failed" || strings.Contains(err.Error(), "token=secret") {
+		t.Fatalf("retention error=%v", err)
+	}
+	media, ok := out["media"].([]iplatform.MediaItem)
+	if !ok || len(media) != 1 || !strings.Contains(media[0].URL, "token=explicit") {
+		t.Fatalf("explicit media response contract changed: %+v", out)
 	}
 }
 

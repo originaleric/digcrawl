@@ -63,7 +63,7 @@ digcrawl mcp --config "$HOME/.config/digcrawl/digcrawl-skill.yaml"
 
 配置完成后，只需把支持的 URL 发给 Agent，并要求它读取、总结、比较、引用，或在明确请求时转写视频。Agent 会在本机调用 DigCrawl，并保留需要登录、验证码、频控等结构化结果。
 
-对于 MCP 在富化过程中下载的平台视频，如需调整本地视频偏好，可以直接对 Agent 说“保存影片”“处理后删除影片”或“将视频下载上限调到 512 MiB”。Skill 会通过本机配置工具仅更新用户 profile 中既有的保留或大小设置，不需要指定平台路径，也不会在对话中直接编辑 profile。保留成功后，视频工具会在 `platform_metadata.retained_media_relative_path` 中返回相对媒体目录的路径，避免暴露本机绝对路径。对于本地文件或直链媒体，使用 `digcrawl video`；单次执行是否保留下载文件由 `--keep <path>` 控制。
+如需保存支持平台的视频，直接告诉 Agent 要保存哪个平台的视频。Skill 仅会在用户 profile 的 `VideoDownload.Providers` 中启用该平台，并可使用用户给定的绝对目录或 profile 同级默认目录；Bilibili、抖音、Instagram、快手、Threads、头条、微博、小红书、YouTube 和知乎可用，X、Reddit、微信公众号不在此保存路径。成功后视频工具只在 `platform_metadata.retained_media_relative_path(s)` 中返回相对 `VideoDownload.Dir` 的路径，避免暴露本机绝对路径。对于本地文件或直链媒体，使用 `digcrawl video`；单次执行是否保留下载文件由 `--keep <path>` 控制。
 
 Skill 不包含 API Key，也不会暴露浏览器 Cookie。路由规则详见 [Agent Skill](./.agents/skills/digcrawl/)；安全细节详见[在 AI Agent 中使用](#在-ai-agent-中使用)。
 
@@ -206,6 +206,7 @@ DigCrawl 在用户机器上运行，并将访问边界保持可见：
 
 | 时间 | 更新 | 对使用者的意义 |
 | --- | --- | --- |
+| 2026-09-06 | 新增按平台显式 opt-in 的本地视频保存。 | 用户可只为支持的平台保存一个经过校验的本地视频；API 正文仍是来源真相，保存失败也不会阻止 Collect 导出已成功读取的内容。 |
 | 2026-09-04 | 统一本地 ASR 安装、配置域与健康检查。 | 发布版无需 Go 即可安装 faster-whisper；setup、转写与 `asr check` 共用 root/Skill 缓存域，自定义 runner 会明确标记为外部管理，不再误报 ready。 |
 | 2026-08-31 | 稳定浏览器登录态与 Watchlist 登录恢复。 | 规范会话不会再被后台读取覆盖；所有 Watchlist 入口都基于运行中的 executable 和已加载配置生成恢复命令。 |
 | 2026-08-30 | 新增本地文件与直链媒体的视频解析。 | `digcrawl video` 复用有边界的 ASR 与抽帧 OCR；直链默认清理，并能使用用户 Skill profile 而不削弱显式项目配置。 |

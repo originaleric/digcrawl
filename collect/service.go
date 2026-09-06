@@ -127,7 +127,7 @@ func (s *Service) waitForPlatformRateLimit(ctx context.Context, platform string)
 	}
 }
 
-func (s *Service) collectTimeoutMs() int {
+func (s *Service) collectTimeoutMs(platform string) int {
 	totalSec := s.cfg.LocalBrowser.TotalTimeoutSec
 	if totalSec <= 0 {
 		totalSec = 90
@@ -137,6 +137,12 @@ func (s *Service) collectTimeoutMs() int {
 	// the caller's context, so it is not included here.
 	if s.cfg.Collect.DownloadMedia != nil && *s.cfg.Collect.DownloadMedia && (s.cfg.Collect.IncludeMedia == nil || *s.cfg.Collect.IncludeMedia) {
 		totalSec += s.cfg.Collect.MediaTimeoutSec
+	}
+	// Provider retention requests media internally even when Collect's public
+	// include_media setting is false. Its own configured deadline therefore
+	// needs a matching outer Runtime budget.
+	if config.IsSupportedVideoDownloadProvider(platform) && s.cfg.VideoDownload.EnabledFor(platform) {
+		totalSec += s.cfg.VideoDownload.TimeoutSecOrDefault()
 	}
 	return (totalSec + 30) * 1000
 }
@@ -170,7 +176,7 @@ func (s *Service) CollectURLWithOptions(ctx context.Context, url string, formats
 		Formats:         formats,
 		IncludeMedia:    s.cfg.Collect.IncludeMedia == nil || *s.cfg.Collect.IncludeMedia,
 		Match:           match,
-		TimeoutMs:       s.collectTimeoutMs(),
+		TimeoutMs:       s.collectTimeoutMs(match.Platform),
 		UseCookieDomain: strings.TrimSpace(opts.UseCookieDomain),
 	})
 	if err != nil {
@@ -189,7 +195,12 @@ func (s *Service) CollectURLWithOptions(ctx context.Context, url string, formats
 }
 
 func (s *Service) export(ctx context.Context, out map[string]any, root string, formats []string) (ExportResult, error) {
-	opts, paths, err := prepareExport(out, s.exportOpts(root, formats))
+	exportOpts := s.exportOpts(root, formats)
+	// Platform execution marks only requests that actually entered the
+	// provider-retention path. An empty provider policy must not change the
+	// long-standing Collect.DownloadMedia behavior for unrelated videos.
+	exportOpts.SkipVideoDownload = providerVideoRetentionHandled(out)
+	opts, paths, err := prepareExport(out, exportOpts)
 	if err != nil {
 		return ExportResult{}, err
 	}
@@ -199,6 +210,15 @@ func (s *Service) export(ctx context.Context, out map[string]any, root string, f
 	}
 	defer release()
 	return exportToPaths(ctx, out, opts, paths)
+}
+
+func providerVideoRetentionHandled(out map[string]any) bool {
+	switch providerVideoDownloadStatus(out) {
+	case "saved", "partial", "not_available":
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *Service) reserveOutputPaths(paths OutputPaths, formats []string) (OutputPaths, func(), error) {

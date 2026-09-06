@@ -75,6 +75,40 @@ func TestSkillMediaRetainDownloadedVideoDefaultsOff(t *testing.T) {
 	}
 }
 
+func TestSkillVideoDownloadSnapshotDoesNotAliasProviderPolicy(t *testing.T) {
+	skillMu.Lock()
+	original := defaultCfg
+	defaultCfg.VideoDownload = VideoDownloadConfig{Providers: map[string]bool{"douyin": true}}
+	skillMu.Unlock()
+	t.Cleanup(func() {
+		skillMu.Lock()
+		defaultCfg = original
+		skillMu.Unlock()
+	})
+
+	_, snapshot := SkillVideoDownload()
+	snapshot.Providers["douyin"] = false
+	_, current := SkillVideoDownload()
+	if !current.EnabledFor("douyin") {
+		t.Fatal("provider policy snapshot must not alias mutable global configuration")
+	}
+}
+
+func TestLoadUsesCustomProfileDirectoryForOmittedVideoDownloadDir(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "custom-skill.yaml")
+	if err := os.WriteFile(path, []byte("VideoDownload:\n  Providers:\n    douyin: true\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Validate(path)
+	if err != nil {
+		t.Fatalf("validate custom provider profile: %v", err)
+	}
+	want := filepath.Join(filepath.Dir(path), "media")
+	if cfg.VideoDownload.Dir != want || cfg.VideoDownload.DirOrDefault() != want {
+		t.Fatalf("video directory=%q fallback=%q want %q", cfg.VideoDownload.Dir, cfg.VideoDownload.DirOrDefault(), want)
+	}
+}
+
 func TestUpdateDefaultSkillMediaPreservesIndependentProfileSettings(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	skillMu.Lock()
@@ -530,6 +564,12 @@ func TestDigCrawlSkillExampleUsesReadOnlyToolProfile(t *testing.T) {
 	}
 	if cfg.Skill.Media.RetainDownloadedVideo {
 		t.Fatal("skill profile should clean up downloaded video unless the user opts in")
+	}
+	if len(cfg.VideoDownload.Providers) != 0 || cfg.VideoDownload.MaxBytes != DefaultVideoDownloadMaxBytes || cfg.VideoDownload.TimeoutSec != DefaultVideoDownloadTimeoutSec {
+		t.Fatalf("provider video retention must remain explicit and bounded: %+v", cfg.VideoDownload)
+	}
+	if !examplePathIsPortableAbsolute(cfg.VideoDownload.Dir) {
+		t.Fatal("skill profile provider video directory should be absolute")
 	}
 	if !examplePathIsPortableAbsolute(cfg.Skill.Media.Dir) {
 		t.Fatal("skill profile media directory should be absolute")

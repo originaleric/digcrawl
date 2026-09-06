@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"sync"
 
@@ -26,6 +27,7 @@ type Config struct {
 	Collector       CollectorConfig     `yaml:"Collector" json:"Collector"`
 	Collect         CollectConfig       `yaml:"Collect" json:"Collect"`
 	LocalBrowser    LocalBrowserConfig  `yaml:"LocalBrowser" json:"LocalBrowser"`
+	VideoDownload   VideoDownloadConfig `yaml:"VideoDownload" json:"VideoDownload,omitempty"`
 	RuntimeEnv      RuntimeEnvConfig    `yaml:"RuntimeEnv" json:"RuntimeEnv,omitempty"`
 	Skill           SkillConfig         `yaml:"Skill" json:"Skill,omitempty"`
 	Platform        PlatformConfig      `yaml:"Platform" json:"Platform"`
@@ -37,6 +39,100 @@ type Config struct {
 	Notifications   NotificationsConfig `yaml:"Notifications" json:"Notifications"`
 	Providers       ProvidersConfig     `yaml:"Providers" json:"Providers"`
 	Social          SocialConfig        `yaml:"Social" json:"Social,omitempty"`
+}
+
+// VideoDownloadConfig controls explicit, provider-scoped retention of videos
+// that platform readers have already resolved to downloadable media. It is
+// separate from Skill.Media, whose settings govern temporary ASR/OCR inputs.
+// A missing Providers map means no new provider retention policy was set.
+type VideoDownloadConfig struct {
+	Dir        string          `yaml:"Dir" json:"Dir,omitempty"`
+	Providers  map[string]bool `yaml:"Providers" json:"Providers,omitempty"`
+	MaxBytes   int64           `yaml:"MaxBytes" json:"MaxBytes,omitempty"`
+	TimeoutSec int             `yaml:"TimeoutSec" json:"TimeoutSec,omitempty"`
+}
+
+const (
+	DefaultVideoDownloadMaxBytes   int64 = 512 * 1024 * 1024
+	DefaultVideoDownloadTimeoutSec       = 300
+)
+
+var supportedVideoDownloadProviders = map[string]struct{}{
+	"bilibili": {}, "douyin": {}, "instagram": {}, "kuaishou": {},
+	"threads": {}, "toutiao": {}, "weibo": {}, "xiaohongshu": {},
+	"youtube": {}, "zhihu": {},
+}
+
+// IsSupportedVideoDownloadProvider reports whether a normalized platform name
+// participates in explicit provider-video retention. Configuration validation
+// and runtime routing share this single allowlist.
+func IsSupportedVideoDownloadProvider(provider string) bool {
+	_, ok := supportedVideoDownloadProviders[strings.ToLower(strings.TrimSpace(provider))]
+	return ok
+}
+
+// EnabledFor reports whether the caller explicitly opted this platform into
+// durable local video retention. Unknown names intentionally stay disabled.
+func (c VideoDownloadConfig) EnabledFor(platform string) bool {
+	if c.Providers == nil {
+		return false
+	}
+	return c.Providers[strings.ToLower(strings.TrimSpace(platform))]
+}
+
+func (c VideoDownloadConfig) DirOrDefault() string {
+	if dir := strings.TrimSpace(c.Dir); dir != "" {
+		return dir
+	}
+	return filepath.Join(filepath.Dir(DefaultSkillProfilePath()), "media")
+}
+
+func (c VideoDownloadConfig) MaxBytesOrDefault() int64 {
+	if c.MaxBytes > 0 {
+		return c.MaxBytes
+	}
+	return DefaultVideoDownloadMaxBytes
+}
+
+func (c VideoDownloadConfig) TimeoutSecOrDefault() int {
+	if c.TimeoutSec > 0 {
+		return c.TimeoutSec
+	}
+	return DefaultVideoDownloadTimeoutSec
+}
+
+func validateVideoDownloadConfig(c VideoDownloadConfig) error {
+	for provider := range c.Providers {
+		name := strings.TrimSpace(provider)
+		if provider != name {
+			return fmt.Errorf("VideoDownload.Providers key %q must not contain surrounding whitespace", provider)
+		}
+		if name != strings.ToLower(name) {
+			return fmt.Errorf("VideoDownload.Providers key %q must be lowercase", provider)
+		}
+		if !IsSupportedVideoDownloadProvider(name) {
+			return fmt.Errorf("VideoDownload.Providers key %q is unsupported", provider)
+		}
+	}
+	if c.MaxBytes < 0 {
+		return fmt.Errorf("VideoDownload.MaxBytes must be zero or positive")
+	}
+	if c.TimeoutSec < 0 {
+		return fmt.Errorf("VideoDownload.TimeoutSec must be zero or positive")
+	}
+	if anyVideoDownloadProviderEnabled(c.Providers) && strings.TrimSpace(c.Dir) != "" && !filepath.IsAbs(c.Dir) {
+		return fmt.Errorf("VideoDownload.Dir must be an absolute path when a provider is enabled")
+	}
+	return nil
+}
+
+func anyVideoDownloadProviderEnabled(providers map[string]bool) bool {
+	for _, enabled := range providers {
+		if enabled {
+			return true
+		}
+	}
+	return false
 }
 
 // SkillConfig controls the independently deployable agent Skill enhancement pipeline.
@@ -1575,6 +1671,23 @@ func Skill() SkillConfig {
 	return defaultCfg.Skill
 }
 
+// SkillVideoDownload returns the two local media settings that a running MCP
+// request consumes as one coherent snapshot. Provider retention is updated by
+// the same local configuration operation as Skill.Media, so callers must not
+// read its mutable map directly from the global config.
+func SkillVideoDownload() (SkillConfig, VideoDownloadConfig) {
+	skillMu.RLock()
+	defer skillMu.RUnlock()
+	videoDownload := defaultCfg.VideoDownload
+	if defaultCfg.VideoDownload.Providers != nil {
+		videoDownload.Providers = make(map[string]bool, len(defaultCfg.VideoDownload.Providers))
+		for provider, enabled := range defaultCfg.VideoDownload.Providers {
+			videoDownload.Providers[provider] = enabled
+		}
+	}
+	return defaultCfg.Skill, videoDownload
+}
+
 // SetSkill replaces the active Skill configuration. It is used by the local
 // Skill opt-in and by tests that exercise Skill-owned enhancement behavior.
 func SetSkill(cfg SkillConfig) {
@@ -1613,9 +1726,19 @@ func load(path string, applyRuntimeEnv bool) (*Config, error) {
 		return nil, err
 	}
 	mergeDefaults(&cfg)
+	cfg.SourcePath = normalizedConfigPath(path)
+	// A profile that opts a provider in but omits its directory still needs a
+	// deterministic, profile-owned destination. Resolve it while loading so
+	// every runtime (including an explicit --config profile) uses its own
+	// sibling media directory rather than the standard Skill profile's path.
+	if strings.TrimSpace(cfg.VideoDownload.Dir) == "" && cfg.SourcePath != "" {
+		cfg.VideoDownload.Dir = filepath.Join(filepath.Dir(cfg.SourcePath), "media")
+	}
+	if err := validateVideoDownloadConfig(cfg.VideoDownload); err != nil {
+		return nil, err
+	}
 	cfg.HasRootASR = hasRootASR
 	cfg.HasSkillProfile = hasSkillProfile
-	cfg.SourcePath = normalizedConfigPath(path)
 	normalizeSkillASRPaths(&cfg)
 	if applyRuntimeEnv {
 		if err := mergeLocalFeishuConfig(&cfg); err != nil {
@@ -2404,8 +2527,73 @@ func UpdateDefaultSkillMediaContext(ctx context.Context, retainDownloadedVideo *
 	if retainDownloadedVideo == nil && maxBytes == nil {
 		return nil, fmt.Errorf("at least one Skill.Media setting is required")
 	}
+	return UpdateDefaultSkillMediaConfigurationContext(ctx, retainDownloadedVideo, maxBytes, nil, nil)
+}
+
+// UpdateDefaultVideoDownloadContext changes only the explicit provider video
+// retention policy in the standard user Skill profile. It leaves ASR/OCR
+// settings and Collect's independent archive policy untouched.
+func UpdateDefaultVideoDownloadContext(ctx context.Context, providers *map[string]bool, dir *string) (*Config, error) {
+	if providers == nil && dir == nil {
+		return nil, fmt.Errorf("at least one VideoDownload setting is required")
+	}
+	return UpdateDefaultSkillMediaConfigurationContext(ctx, nil, nil, providers, dir)
+}
+
+// UpdateDefaultSkillMediaConfigurationContext applies the existing
+// Skill.Media controls and explicit provider-video retention in one profile
+// mutation. It is kept for callers that only need the original controls.
+func UpdateDefaultSkillMediaConfigurationContext(ctx context.Context, retainDownloadedVideo *bool, maxBytes *int64, providers *map[string]bool, dir *string) (*Config, error) {
+	return updateDefaultSkillMediaConfigurationContext(ctx, retainDownloadedVideo, maxBytes, providers, dir, nil, nil)
+}
+
+// UpdateDefaultSkillMediaConfigurationWithVideoDownloadLimitsContext extends
+// the existing atomic profile mutation with the limits consumed by the new
+// provider-video retention path. It preserves the original exported API for
+// existing host integrations.
+func UpdateDefaultSkillMediaConfigurationWithVideoDownloadLimitsContext(ctx context.Context, retainDownloadedVideo *bool, maxBytes *int64, providers *map[string]bool, dir *string, videoDownloadMaxBytes *int64, videoDownloadTimeoutSec *int) (*Config, error) {
+	return updateDefaultSkillMediaConfigurationContext(ctx, retainDownloadedVideo, maxBytes, providers, dir, videoDownloadMaxBytes, videoDownloadTimeoutSec)
+}
+
+func updateDefaultSkillMediaConfigurationContext(ctx context.Context, retainDownloadedVideo *bool, maxBytes *int64, providers *map[string]bool, dir *string, videoDownloadMaxBytes *int64, videoDownloadTimeoutSec *int) (*Config, error) {
+	if retainDownloadedVideo == nil && maxBytes == nil && providers == nil && dir == nil && videoDownloadMaxBytes == nil && videoDownloadTimeoutSec == nil {
+		return nil, fmt.Errorf("at least one media setting is required")
+	}
 	if maxBytes != nil && *maxBytes <= 0 {
 		return nil, fmt.Errorf("Skill.Media.MaxBytes must be positive")
+	}
+	if videoDownloadMaxBytes != nil && *videoDownloadMaxBytes <= 0 {
+		return nil, fmt.Errorf("VideoDownload.MaxBytes must be positive")
+	}
+	if videoDownloadTimeoutSec != nil && *videoDownloadTimeoutSec <= 0 {
+		return nil, fmt.Errorf("VideoDownload.TimeoutSec must be positive")
+	}
+
+	var configuredDir *string
+	if dir != nil {
+		cleanedDir := strings.TrimSpace(*dir)
+		if cleanedDir == "" || !filepath.IsAbs(cleanedDir) {
+			return nil, fmt.Errorf("VideoDownload.Dir must be an absolute path")
+		}
+		configuredDir = &cleanedDir
+	}
+	if providers != nil || videoDownloadMaxBytes != nil || videoDownloadTimeoutSec != nil {
+		candidate := VideoDownloadConfig{}
+		if providers != nil {
+			candidate.Providers = *providers
+		}
+		if configuredDir != nil {
+			candidate.Dir = *configuredDir
+		}
+		if videoDownloadMaxBytes != nil {
+			candidate.MaxBytes = *videoDownloadMaxBytes
+		}
+		if videoDownloadTimeoutSec != nil {
+			candidate.TimeoutSec = *videoDownloadTimeoutSec
+		}
+		if err := validateVideoDownloadConfig(candidate); err != nil {
+			return nil, err
+		}
 	}
 
 	path := DefaultSkillProfilePath()
@@ -2415,7 +2603,17 @@ func UpdateDefaultSkillMediaContext(ctx context.Context, retainDownloadedVideo *
 	}
 	defer release()
 
-	persisted, err := updateDefaultSkillMedia(ctx, path, filepath.Join(filepath.Dir(path), "media"), retainDownloadedVideo, maxBytes)
+	persisted, err := updateDefaultSkillMediaConfiguration(
+		ctx,
+		path,
+		filepath.Join(filepath.Dir(path), "media"),
+		retainDownloadedVideo,
+		maxBytes,
+		providers,
+		configuredDir,
+		videoDownloadMaxBytes,
+		videoDownloadTimeoutSec,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -2423,7 +2621,8 @@ func UpdateDefaultSkillMediaContext(ctx context.Context, retainDownloadedVideo *
 	// written immediately before this update. Assigning it rather than a
 	// locally staged copy prevents this process from reverting that state.
 	skillMu.Lock()
-	defaultCfg.Skill = persisted
+	defaultCfg.Skill = persisted.Skill
+	defaultCfg.VideoDownload = persisted.VideoDownload
 	result := defaultCfg
 	skillMu.Unlock()
 	return &result, nil
@@ -2454,18 +2653,41 @@ func updateSkillASROptIn(ctx context.Context, path, mediaDir string) (SkillConfi
 	})
 }
 
-// updateDefaultSkillMedia preserves all YAML nodes outside the existing
-// Skill.Media settings owned by the host-facing configuration tool.
-func updateDefaultSkillMedia(ctx context.Context, path, mediaDir string, retainDownloadedVideo *bool, maxBytes *int64) (SkillConfig, error) {
-	return updateSkillProfile(ctx, path, func(root *yaml.Node) {
+// updateDefaultSkillMediaConfiguration preserves all YAML nodes outside the
+// two settings owned by the host-facing configuration tool, while keeping
+// their combined update in one atomic profile replacement.
+func updateDefaultSkillMediaConfiguration(ctx context.Context, path, mediaDir string, retainDownloadedVideo *bool, maxBytes *int64, providers *map[string]bool, dir *string, videoDownloadMaxBytes *int64, videoDownloadTimeoutSec *int) (Config, error) {
+	return updateSkillProfileConfig(ctx, path, func(root *yaml.Node) {
 		if retainDownloadedVideo != nil {
 			setYAMLBool(root, []string{"Skill", "Media", "RetainDownloadedVideo"}, *retainDownloadedVideo)
 		}
 		if maxBytes != nil {
 			setYAMLInt(root, []string{"Skill", "Media", "MaxBytes"}, *maxBytes)
 		}
-		if strings.TrimSpace(yamlString(root, []string{"Skill", "Media", "Dir"})) == "" {
-			setYAMLString(root, []string{"Skill", "Media", "Dir"}, mediaDir)
+		if retainDownloadedVideo != nil || maxBytes != nil {
+			if strings.TrimSpace(yamlString(root, []string{"Skill", "Media", "Dir"})) == "" {
+				setYAMLString(root, []string{"Skill", "Media", "Dir"}, mediaDir)
+			}
+		}
+		if providers != nil || dir != nil {
+			if providers != nil {
+				if len(*providers) == 0 {
+					setYAMLBoolMap(root, []string{"VideoDownload", "Providers"}, *providers)
+				} else {
+					setYAMLBoolMapEntries(root, []string{"VideoDownload", "Providers"}, *providers)
+				}
+			}
+			if dir != nil {
+				setYAMLString(root, []string{"VideoDownload", "Dir"}, *dir)
+			} else if strings.TrimSpace(yamlString(root, []string{"VideoDownload", "Dir"})) == "" {
+				setYAMLString(root, []string{"VideoDownload", "Dir"}, mediaDir)
+			}
+		}
+		if videoDownloadMaxBytes != nil {
+			setYAMLInt(root, []string{"VideoDownload", "MaxBytes"}, *videoDownloadMaxBytes)
+		}
+		if videoDownloadTimeoutSec != nil {
+			setYAMLInt(root, []string{"VideoDownload", "TimeoutSec"}, int64(*videoDownloadTimeoutSec))
 		}
 	})
 }
@@ -2475,43 +2697,54 @@ func updateDefaultSkillMedia(ctx context.Context, path, mediaDir string, retainD
 // and atomic replacement, so two MCP processes cannot lose independent
 // changes by serializing stale YAML documents.
 func updateSkillProfile(ctx context.Context, path string, mutate func(root *yaml.Node)) (SkillConfig, error) {
-	unlock, err := lockSkillProfile(ctx, path)
+	persisted, err := updateSkillProfileConfig(ctx, path, mutate)
 	if err != nil {
 		return SkillConfig{}, err
+	}
+	return persisted.Skill, nil
+}
+
+func updateSkillProfileConfig(ctx context.Context, path string, mutate func(root *yaml.Node)) (Config, error) {
+	unlock, err := lockSkillProfile(ctx, path)
+	if err != nil {
+		return Config{}, err
 	}
 	defer unlock()
 
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return SkillConfig{}, err
+		return Config{}, err
 	}
 	var document yaml.Node
 	if err := yaml.Unmarshal(data, &document); err != nil {
-		return SkillConfig{}, err
+		return Config{}, err
 	}
 	if len(document.Content) != 1 || document.Content[0].Kind != yaml.MappingNode {
-		return SkillConfig{}, fmt.Errorf("Skill profile must contain a YAML mapping")
+		return Config{}, fmt.Errorf("Skill profile must contain a YAML mapping")
 	}
 	root := document.Content[0]
 	mutate(root)
 	updated, err := yaml.Marshal(&document)
 	if err != nil {
-		return SkillConfig{}, err
+		return Config{}, err
 	}
-	if err := writeConfigAtomically(path, updated); err != nil {
-		return SkillConfig{}, err
-	}
-
-	// Rebuild from the document written while holding the process-wide lock.
-	// This makes the caller's live snapshot contain both its requested field
-	// and any independent field already persisted by another MCP process.
+	// Rebuild and validate the pending document before replacing the profile.
+	// This keeps an invalid combined request from persisting any of its fields,
+	// while the profile lock preserves independent fields written by another
+	// local MCP process immediately before this mutation.
 	var persisted Config
 	if err := yaml.Unmarshal(updated, &persisted); err != nil {
-		return SkillConfig{}, err
+		return Config{}, err
+	}
+	if err := validateVideoDownloadConfig(persisted.VideoDownload); err != nil {
+		return Config{}, err
+	}
+	if err := writeConfigAtomically(path, updated); err != nil {
+		return Config{}, err
 	}
 	persisted.SourcePath = normalizedConfigPath(path)
 	normalizeSkillASRPaths(&persisted)
-	return persisted.Skill, nil
+	return persisted, nil
 }
 
 func setYAMLBool(root *yaml.Node, path []string, value bool) {
@@ -2524,6 +2757,70 @@ func setYAMLString(root *yaml.Node, path []string, value string) {
 
 func setYAMLInt(root *yaml.Node, path []string, value int64) {
 	setYAMLScalar(root, path, "!!int", fmt.Sprintf("%d", value))
+}
+
+func setYAMLBoolMap(root *yaml.Node, path []string, values map[string]bool) {
+	current := root
+	for _, part := range path[:len(path)-1] {
+		current = yamlMappingValue(current, part, true)
+	}
+	key := path[len(path)-1]
+	value := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+	for _, name := range sortedBoolMapKeys(values) {
+		value.Content = append(value.Content,
+			&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: name},
+			&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!bool", Value: fmt.Sprintf("%t", values[name])},
+		)
+	}
+	for i := 0; i+1 < len(current.Content); i += 2 {
+		if current.Content[i].Value == key {
+			current.Content[i+1] = value
+			return
+		}
+	}
+	current.Content = append(current.Content,
+		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: key}, value,
+	)
+}
+
+// setYAMLBoolMapEntries changes only supplied policy keys. Provider settings
+// are independent opt-ins, so enabling one later must not silently disable
+// another provider already persisted in the same profile.
+func setYAMLBoolMapEntries(root *yaml.Node, path []string, values map[string]bool) {
+	current := root
+	for _, part := range path[:len(path)-1] {
+		current = yamlMappingValue(current, part, true)
+	}
+	key := path[len(path)-1]
+	policy := yamlMappingValue(current, key, true)
+	if policy == nil || policy.Kind != yaml.MappingNode {
+		return
+	}
+	for _, name := range sortedBoolMapKeys(values) {
+		updated := false
+		for i := 0; i+1 < len(policy.Content); i += 2 {
+			if policy.Content[i].Value == name {
+				policy.Content[i+1] = &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!bool", Value: fmt.Sprintf("%t", values[name])}
+				updated = true
+				break
+			}
+		}
+		if !updated {
+			policy.Content = append(policy.Content,
+				&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: name},
+				&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!bool", Value: fmt.Sprintf("%t", values[name])},
+			)
+		}
+	}
+}
+
+func sortedBoolMapKeys(values map[string]bool) []string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 func setYAMLScalar(root *yaml.Node, path []string, tag, value string) {

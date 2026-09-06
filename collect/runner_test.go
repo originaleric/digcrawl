@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/originaleric/digcrawl/protocol"
+	platformprov "github.com/originaleric/digcrawl/provider/platform"
 	"github.com/originaleric/digcrawl/runtime"
 	"github.com/originaleric/digcrawl/runtime/registry"
 )
@@ -121,4 +122,73 @@ func TestRunPassesCookieDomainToToolInput(t *testing.T) {
 	if gotCookieDomain != "www.threads.net" {
 		t.Fatalf("use_cookie_domain=%q", gotCookieDomain)
 	}
+}
+
+func TestRunPreservesSuccessfulContentAfterProviderVideoRetentionFailure(t *testing.T) {
+	reg := registry.New()
+	reg.Register(registry.Entry{
+		Descriptor: protocol.ToolDescriptor{Name: platformprov.ToolToutiaoVideoRead},
+		Handler: func(context.Context, *protocol.ToolCall) (map[string]any, []protocol.Artifact, error) {
+			return map[string]any{
+				"platform":     "toutiao",
+				"content_type": "video",
+				"title":        "已读取的视频",
+				"text":         "正文仍可归档",
+				"platform_metadata": map[string]any{
+					"video_download_status":         "failed",
+					"video_download_failure_reason": "download_failed",
+				},
+			}, nil, providerVideoRetentionTestError{}
+		},
+	})
+	rt := runtime.New(reg, runtime.Options{InstanceID: "test"})
+
+	out, result, err := Run(context.Background(), rt, RunOptions{
+		URL:   "https://www.toutiao.com/video/7667505035089101366/",
+		Match: Match{Platform: "toutiao", Tool: platformprov.ToolToutiaoVideoRead},
+	})
+	if err != nil {
+		t.Fatalf("provider retention failure must retain successful content for Collect: %v", err)
+	}
+	if result == nil || result.Status != "error" || result.Error == nil || result.Error.Code != platformprov.ProviderVideoDownloadFailedCode {
+		t.Fatalf("expected typed partial failure result, got %+v", result)
+	}
+	if out["text"] != "正文仍可归档" || out["_collect_platform"] != "toutiao" {
+		t.Fatalf("successful content was not preserved: %#v", out)
+	}
+}
+
+func TestRunDoesNotTreatOtherPartialErrorsAsRecoverable(t *testing.T) {
+	reg := registry.New()
+	reg.Register(registry.Entry{
+		Descriptor: protocol.ToolDescriptor{Name: platformprov.ToolToutiaoVideoRead},
+		Handler: func(context.Context, *protocol.ToolCall) (map[string]any, []protocol.Artifact, error) {
+			return map[string]any{
+				"platform_metadata": map[string]any{"video_download_status": "saved"},
+			}, nil, providerVideoRetentionTestError{}
+		},
+	})
+	rt := runtime.New(reg, runtime.Options{InstanceID: "test"})
+
+	_, _, err := Run(context.Background(), rt, RunOptions{
+		URL:   "https://www.toutiao.com/video/7667505035089101366/",
+		Match: Match{Platform: "toutiao", Tool: platformprov.ToolToutiaoVideoRead},
+	})
+	if err == nil {
+		t.Fatal("only an explicit failed retention status may be recovered")
+	}
+}
+
+type providerVideoRetentionTestError struct{}
+
+func (providerVideoRetentionTestError) Error() string {
+	return "provider video download failed: download_failed"
+}
+
+func (providerVideoRetentionTestError) ToolErrorCode() string {
+	return platformprov.ProviderVideoDownloadFailedCode
+}
+
+func (providerVideoRetentionTestError) ToolErrorMessage() string {
+	return "provider video download failed: download_failed"
 }

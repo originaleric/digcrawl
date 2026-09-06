@@ -19,4 +19,10 @@ const (
 	ToolZhihuContentRead     = "zhihu.content.read"
 	ToolYouTubeVideoRead     = "youtube.video.read"
 	ToolFeedRead             = "feed.read"
+
+	// ProviderVideoDownloadFailedCode identifies a failed optional video
+	// retention after the platform content itself was read successfully. Callers
+	// can preserve that successful content without treating arbitrary read
+	// failures as recoverable.
+	ProviderVideoDownloadFailedCode = "PROVIDER_VIDEO_DOWNLOAD_FAILED"
 )
