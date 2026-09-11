@@ -46,7 +46,18 @@ bash -c '
   uname() { printf "Linux\\n"; }
   test_home="$TEST_ROOT/linux-home"
   export test_home
-  systemctl() { case "$*" in *enable*) touch "$test_home/ready" ;; esac; }
+  systemctl() {
+    case "$*" in
+      *is-active*)
+        test -f "$test_home/registered" || return 4
+        test -f "$test_home/ready" && return 0
+        return 3
+        ;;
+      *" stop "*) test -f "$test_home/registered" || return 4; rm -f "$test_home/ready" ;;
+      *enable*) touch "$test_home/registered" "$test_home/ready" ;;
+      *disable*) rm -f "$test_home/registered" "$test_home/ready" ;;
+    esac
+  }
   curl() { test -f "$test_home/ready" || return 22; printf "{\"webSocketDebuggerUrl\":\"ws://127.0.0.1:9323/devtools/browser/test\"}"; }
   ps() { test -f "$test_home/ready" || return 0; printf "%s\n" "chrome --remote-debugging-port=9323 --user-data-dir=$test_home/.local/share/digcrawl/cdp-browser --no-first-run --mute-audio"; }
   export -f uname systemctl curl ps
@@ -63,7 +74,18 @@ bash -c '
   uname() { printf "Linux\\n"; }
   test_home="$TEST_ROOT/linux-discovery-home"
   export test_home
-  systemctl() { case "$*" in *enable*) touch "$test_home/ready" ;; esac; }
+  systemctl() {
+    case "$*" in
+      *is-active*)
+        test -f "$test_home/registered" || return 4
+        test -f "$test_home/ready" && return 0
+        return 3
+        ;;
+      *" stop "*) test -f "$test_home/registered" || return 4; rm -f "$test_home/ready" ;;
+      *enable*) touch "$test_home/registered" "$test_home/ready" ;;
+      *disable*) rm -f "$test_home/registered" "$test_home/ready" ;;
+    esac
+  }
   curl() { test -f "$test_home/ready" || return 22; printf "{\"webSocketDebuggerUrl\":\"ws://127.0.0.1:9323/devtools/browser/test\"}"; }
   ps() { test -f "$test_home/ready" || return 0; printf "%s\\n" "chrome --remote-debugging-port=9323 --user-data-dir=$test_home/.local/share/digcrawl/cdp-browser --no-first-run --mute-audio"; }
   export -f uname systemctl curl ps
@@ -80,7 +102,18 @@ bash -c '
   uname() { printf "Linux\\n"; }
   test_home="$TEST_ROOT/linux-custom-home"
   export test_home
-  systemctl() { case "$*" in *enable*) touch "$test_home/ready" ;; esac; }
+  systemctl() {
+    case "$*" in
+      *is-active*)
+        test -f "$test_home/registered" || return 4
+        test -f "$test_home/ready" && return 0
+        return 3
+        ;;
+      *" stop "*) test -f "$test_home/registered" || return 4; rm -f "$test_home/ready" ;;
+      *enable*) touch "$test_home/registered" "$test_home/ready" ;;
+      *disable*) rm -f "$test_home/registered" "$test_home/ready" ;;
+    esac
+  }
   curl() { test -f "$test_home/ready" || return 22; printf "{\"webSocketDebuggerUrl\":\"ws://127.0.0.1:19432/devtools/browser/test\"}"; }
   ps() { test -f "$test_home/ready" || return 0; printf "%s\n" "chrome --remote-debugging-port=19432 --user-data-dir=$test_home/.local/share/digcrawl/cdp-browser --no-first-run --mute-audio"; }
   export -f uname systemctl curl ps
@@ -97,7 +130,14 @@ bash -c '
   uname() { printf "Darwin\\n"; }
   test_home="$TEST_ROOT/macos-custom-home"
   export test_home
-  launchctl() { case "$*" in *bootout*) rm -f "$test_home/ready" ;; *kickstart*) touch "$test_home/ready" ;; esac; }
+  launchctl() {
+    case "$*" in
+      *bootstrap*) touch "$test_home/registered" ;;
+      *kickstart*) touch "$test_home/registered" "$test_home/ready" ;;
+      *bootout*) rm -f "$test_home/registered" "$test_home/ready" ;;
+      *print*) test -f "$test_home/registered" && return 0; echo "Could not find service" >&2; return 113 ;;
+    esac
+  }
   curl() { test -f "$test_home/ready" || return 22; printf "{\"webSocketDebuggerUrl\":\"ws://127.0.0.1:19433/devtools/browser/test\"}"; }
   ps() { test -f "$test_home/ready" || return 0; printf "%s\n" "Google Chrome --remote-debugging-port=19433 --user-data-dir=$test_home/.local/share/digcrawl/cdp-browser --no-first-run --mute-audio"; }
   export -f uname launchctl curl ps
@@ -114,10 +154,21 @@ bash -c '
   uname() { printf "Darwin\\n"; }
   test_home="$TEST_ROOT/macos-home"
   export test_home
-  launchctl() { case "$*" in *bootout*) rm -f "$test_home/ready" ;; *kickstart*) touch "$test_home/ready" ;; esac; }
+  launchctl() {
+    case "$*" in
+      *bootstrap*) touch "$test_home/registered" ;;
+      *kickstart*) touch "$test_home/registered" "$test_home/ready" "$test_home/chrome" ;;
+      *bootout*) rm -f "$test_home/registered" "$test_home/ready" ;;
+      *print*) test -f "$test_home/registered" && return 0; echo "Could not find service" >&2; return 113 ;;
+    esac
+  }
   curl() { test -f "$test_home/ready" || return 22; printf "{\"webSocketDebuggerUrl\":\"ws://127.0.0.1:9323/devtools/browser/test\"}"; }
-  ps() { test -f "$test_home/ready" || return 0; printf "%s\n" "Google Chrome --remote-debugging-port=9323 --user-data-dir=$test_home/.local/share/digcrawl/cdp-browser --no-first-run --mute-audio"; }
-  export -f uname launchctl curl ps
+  ps() { test -f "$test_home/chrome" || return 0; printf "%s\n" "Google Chrome --remote-debugging-port=9323 --user-data-dir=$test_home/.local/share/digcrawl/cdp-browser --no-first-run --mute-audio"; }
+  # launchd removes the CDP listener before Chrome has released its profile.
+  # The first wait iteration must observe that main process, then this fake
+  # completes its graceful exit.
+  sleep() { rm -f "$test_home/chrome"; }
+  export -f uname launchctl curl ps sleep
   HOME="$test_home" DIGCRAWL_CHROME_PATH="$TEST_ROOT/Chrome With Space" "$SERVICE_SCRIPT" install
   plist="$test_home/Library/LaunchAgents/com.digcrawl.cdp-browser.plist"
   launcher="$test_home/Library/Application Support/DigCrawl/bin/com.digcrawl.cdp-browser.sh"
@@ -131,7 +182,56 @@ bash -c '
   HOME="$test_home" "$SERVICE_SCRIPT" status 2>&1 | grep -F "staged launcher differs"
   HOME="$test_home" "$SERVICE_SCRIPT" restart
   cmp -s "$SERVICE_SCRIPT" "$launcher"
+  HOME="$test_home" "$SERVICE_SCRIPT" stop
+  test ! -e "$test_home/registered"
+  test ! -e "$test_home/ready"
+  test ! -e "$test_home/chrome"
 '
+
+# A launchd query failure is not proof that the KeepAlive job is absent.
+if bash -c '
+  set -euo pipefail
+  uname() { printf "Darwin\\n"; }
+  launchctl() { case "$*" in *print*) echo "launchd query failed" >&2; return 1 ;; esac; }
+  curl() { return 22; }
+  ps() { return 0; }
+  export -f uname launchctl curl ps
+  HOME="$TEST_ROOT/launchd-query-failure-home" "$SERVICE_SCRIPT" stop
+'; then
+  fail "a launchd query failure was accepted as a completed stop"
+fi
+
+# A systemd manager failure must never be mistaken for a completed stop.
+if bash -c '
+  set -euo pipefail
+  uname() { printf "Linux\\n"; }
+  systemctl() { return 1; }
+  curl() { return 22; }
+  ps() { return 0; }
+  export -f uname systemctl curl ps
+  HOME="$TEST_ROOT/systemd-failure-home" "$SERVICE_SCRIPT" stop
+'; then
+  fail "a systemd manager failure was accepted as a completed stop"
+fi
+
+# A service that is active but rejects the stop request must also fail rather
+# than relying on an absent CDP endpoint as evidence of a completed stop.
+if bash -c '
+  set -euo pipefail
+  uname() { printf "Linux\\n"; }
+  systemctl() {
+    case "$*" in
+      *is-active*) return 0 ;;
+      *" stop "*) return 1 ;;
+    esac
+  }
+  curl() { return 22; }
+  ps() { return 0; }
+  export -f uname systemctl curl ps
+  HOME="$TEST_ROOT/systemd-stop-failure-home" "$SERVICE_SCRIPT" stop
+'; then
+  fail "a rejected systemd stop was accepted as a completed stop"
+fi
 
 if bash -c '
   set -euo pipefail

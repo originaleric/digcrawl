@@ -1,11 +1,18 @@
 package mcpgw
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
+	"os"
+	"os/signal"
 	"strings"
+	"sync"
+	"syscall"
 	"time"
 
 	"github.com/google/uuid"
@@ -18,23 +25,349 @@ import (
 	"github.com/originaleric/digcrawl/runtime/version"
 )
 
+const (
+	// DefaultStdioIdleTimeout preserves the standard stdio-MCP lifecycle: a
+	// connected client owns the session until it closes stdin. Hosts can opt in
+	// to a positive timeout explicitly.
+	DefaultStdioIdleTimeout time.Duration = 0
+	// DefaultCodexStdioIdleTimeout bounds sessions from Codex after its MCP
+	// initialize request identifies the client. It lets existing Codex entries
+	// adopt the fix without changing the lifecycle of other MCP hosts.
+	DefaultCodexStdioIdleTimeout = 15 * time.Minute
+	// DefaultStdioInitializeTimeout only applies while the client has not sent
+	// MCP initialize. A conforming stdio client initializes immediately, so this
+	// recovers an abandoned pipe without imposing an idle limit on normal hosts.
+	DefaultStdioInitializeTimeout = time.Minute
+)
+
 // ServeStdio exposes DigEino tools as an MCP server over stdio (for IDE / Claude Desktop).
 func ServeStdio(rt *runtime.Runtime) error {
+	return ServeStdioWithIdleTimeout(rt, DefaultStdioIdleTimeout)
+}
+
+// ServeStdioWithIdleTimeout exposes DigEino tools as an MCP server over stdio.
+// A zero idleTimeout disables the guard for hosts that intentionally keep one
+// long-lived, inactive MCP session open.
+func ServeStdioWithIdleTimeout(rt *runtime.Runtime, idleTimeout time.Duration) error {
+	return serveRuntimeStdio(rt, idleTimeout, false)
+}
+
+// ServeStdioWithCodexRecovery serves standard MCP clients normally and
+// automatically bounds an abandoned Codex session after initialize identifies
+// it. It is intended for the CLI's default invocation so existing Codex
+// registrations adopt recovery without a configuration migration.
+func ServeStdioWithCodexRecovery(rt *runtime.Runtime) error {
+	return serveRuntimeStdio(rt, DefaultStdioIdleTimeout, true)
+}
+
+func serveRuntimeStdio(rt *runtime.Runtime, idleTimeout time.Duration, automaticCodexRecovery bool) error {
+	guard := newIdleGuard()
 	s := mcpserver.NewMCPServer(
 		version.RuntimeName,
 		version.RuntimeVersion,
 		mcpserver.WithToolCapabilities(true),
 	)
-	registerTools(s, rt)
-	return mcpserver.ServeStdio(s)
+	registerTools(s, rt, guard)
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	return serveStdioWithGuardOptions(ctx, s, os.Stdin, os.Stdout, idleTimeout, guard, automaticCodexRecovery, DefaultStdioInitializeTimeout, DefaultCodexStdioIdleTimeout)
 }
 
-func registerTools(s *mcpserver.MCPServer, rt *runtime.Runtime) {
+// serveStdio owns the process-level shutdown behavior separately from MCP
+// request handling so it can be exercised with in-memory streams in tests.
+func serveStdio(parent context.Context, server *mcpserver.MCPServer, stdin io.Reader, stdout io.Writer, idleTimeout time.Duration) error {
+	return serveStdioWithGuard(parent, server, stdin, stdout, idleTimeout, newIdleGuard())
+}
+
+func serveStdioWithGuard(parent context.Context, server *mcpserver.MCPServer, stdin io.Reader, stdout io.Writer, idleTimeout time.Duration, guard *idleGuard) error {
+	return serveStdioWithGuardOptions(parent, server, stdin, stdout, idleTimeout, guard, false, 0, 0)
+}
+
+func serveStdioWithAutomaticCodexRecovery(parent context.Context, server *mcpserver.MCPServer, stdin io.Reader, stdout io.Writer, guard *idleGuard, initializeTimeout, codexIdleTimeout time.Duration) error {
+	return serveStdioWithGuardOptions(parent, server, stdin, stdout, DefaultStdioIdleTimeout, guard, true, initializeTimeout, codexIdleTimeout)
+}
+
+func serveStdioWithGuardOptions(parent context.Context, server *mcpserver.MCPServer, stdin io.Reader, stdout io.Writer, idleTimeout time.Duration, guard *idleGuard, automaticCodexRecovery bool, initializeTimeout, codexIdleTimeout time.Duration) error {
+	ctx, cancel := context.WithCancel(parent)
+	defer cancel()
+
+	reader := newActivityReader(stdin, guard, automaticCodexRecovery)
+	if idleTimeout > 0 {
+		go cancelWhenIdle(ctx, cancel, guard, idleTimeout)
+	} else if automaticCodexRecovery {
+		go cancelUninitializedOrCodex(ctx, cancel, guard, initializeTimeout, codexIdleTimeout)
+	}
+
+	err := mcpserver.NewStdioServer(server).Listen(ctx, reader, stdout)
+	// SIGTERM, SIGINT, and the idle guard are expected lifecycle events, not
+	// server failures. In particular, returning nil avoids a noisy non-zero
+	// process exit when an abandoned pipe is reclaimed.
+	if errors.Is(err, context.Canceled) {
+		return nil
+	}
+	return err
+}
+
+// activityReader reports every non-empty read without changing stdio's byte
+// stream. Buffered readers may receive more than one MCP message at once; that
+// still counts as activity at the instant the client wrote to the pipe.
+type activityReader struct {
+	reader             io.Reader
+	guard              *idleGuard
+	observeInitialize  bool
+	partialMessageLine []byte
+	mu                 sync.Mutex
+}
+
+func newActivityReader(reader io.Reader, guard *idleGuard, observeInitialize bool) *activityReader {
+	return &activityReader{reader: reader, guard: guard, observeInitialize: observeInitialize}
+}
+
+func (r *activityReader) Read(p []byte) (int, error) {
+	n, err := r.reader.Read(p)
+	if n > 0 && r.guard != nil {
+		r.guard.touch()
+		if r.observeInitialize {
+			r.observeMCPMessages(p[:n])
+		}
+	}
+	return n, err
+}
+
+// observeMCPMessages only needs the initial JSON-RPC request. Stdio MCP is
+// line-delimited, while Reader.Read may split or combine messages arbitrarily.
+// Keep this observer bounded; the MCP server remains responsible for reporting
+// malformed input to the client.
+func (r *activityReader) observeMCPMessages(data []byte) {
+	const maxObservedMCPLineBytes = 1 << 20
+
+	r.mu.Lock()
+	r.partialMessageLine = append(r.partialMessageLine, data...)
+	for {
+		newline := bytes.IndexByte(r.partialMessageLine, '\n')
+		if newline < 0 {
+			if len(r.partialMessageLine) > maxObservedMCPLineBytes {
+				r.partialMessageLine = nil
+			}
+			r.mu.Unlock()
+			return
+		}
+		line := append([]byte(nil), r.partialMessageLine[:newline]...)
+		r.partialMessageLine = r.partialMessageLine[newline+1:]
+		r.mu.Unlock()
+		r.observeMCPInitialize(line)
+		r.mu.Lock()
+	}
+}
+
+func (r *activityReader) observeMCPInitialize(line []byte) {
+	var message struct {
+		Method string `json:"method"`
+		Params struct {
+			ClientInfo struct {
+				Name string `json:"name"`
+			} `json:"clientInfo"`
+		} `json:"params"`
+	}
+	if json.Unmarshal(line, &message) == nil && message.Method == "initialize" {
+		r.guard.noteMCPInitialize(message.Params.ClientInfo.Name)
+	}
+}
+
+// idleGuard tracks both incoming stdio traffic and in-flight tool work. A
+// long-running video or ASR call can legitimately be silent on stdio, so it
+// must prevent the abandoned-session guard from treating the process as idle.
+type idleGuard struct {
+	mu               sync.Mutex
+	activity         chan struct{}
+	initializeEvents chan string
+	initializedOnce  sync.Once
+	initialized      bool
+	clientName       string
+	lastActivity     time.Time
+	active           int
+}
+
+func newIdleGuard() *idleGuard {
+	return &idleGuard{
+		activity:         make(chan struct{}, 1),
+		initializeEvents: make(chan string, 1),
+		lastActivity:     time.Now(),
+	}
+}
+
+func (g *idleGuard) touch() {
+	if g == nil {
+		return
+	}
+	g.mu.Lock()
+	g.lastActivity = time.Now()
+	g.mu.Unlock()
+	g.notify()
+}
+
+func (g *idleGuard) notify() {
+	select {
+	case g.activity <- struct{}{}:
+	default:
+	}
+}
+
+func (g *idleGuard) startCall() func() {
+	if g == nil {
+		return func() {}
+	}
+	g.mu.Lock()
+	g.active++
+	g.lastActivity = time.Now()
+	g.mu.Unlock()
+	g.notify()
+	return func() {
+		g.mu.Lock()
+		g.active--
+		g.lastActivity = time.Now()
+		g.mu.Unlock()
+		g.notify()
+	}
+}
+
+func (g *idleGuard) noteMCPInitialize(clientName string) {
+	if g == nil {
+		return
+	}
+	g.initializedOnce.Do(func() {
+		clientName = strings.TrimSpace(clientName)
+		g.mu.Lock()
+		g.initialized = true
+		g.clientName = clientName
+		g.mu.Unlock()
+		g.initializeEvents <- clientName
+	})
+}
+
+func (g *idleGuard) initializedClient() (string, bool) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.clientName, g.initialized
+}
+
+func (g *idleGuard) shouldCancelForIdle(timeout time.Duration) bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.active == 0 && time.Since(g.lastActivity) >= timeout
+}
+
+func (g *idleGuard) nextIdleCheck(timeout time.Duration) time.Duration {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.active > 0 {
+		return timeout
+	}
+	remaining := timeout - time.Since(g.lastActivity)
+	if remaining < 0 {
+		return 0
+	}
+	return remaining
+}
+
+func (g *idleGuard) nextInitializationCheck(timeout time.Duration) time.Duration {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	remaining := timeout - time.Since(g.lastActivity)
+	if remaining < 0 {
+		return 0
+	}
+	return remaining
+}
+
+func (g *idleGuard) shouldCancelBeforeInitialize(timeout time.Duration) bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return !g.initialized && time.Since(g.lastActivity) >= timeout
+}
+
+func cancelWhenIdle(ctx context.Context, cancel context.CancelFunc, guard *idleGuard, timeout time.Duration) {
+	timer := time.NewTimer(0)
+	defer timer.Stop()
+
+	for {
+		delay := guard.nextIdleCheck(timeout)
+		if !timer.Stop() {
+			select {
+			case <-timer.C:
+			default:
+			}
+		}
+		timer.Reset(delay)
+		select {
+		case <-ctx.Done():
+			return
+		case <-guard.activity:
+		case <-timer.C:
+			// An input read can race this timer. shouldCancelForIdle takes the
+			// same lock as touch, so activity observed before this check wins
+			// even when select chose timer.C first.
+			if guard.shouldCancelForIdle(timeout) {
+				cancel()
+				return
+			}
+		}
+	}
+}
+
+func cancelUninitializedOrCodex(ctx context.Context, cancel context.CancelFunc, guard *idleGuard, initializeTimeout, codexIdleTimeout time.Duration) {
+	timer := time.NewTimer(0)
+	defer timer.Stop()
+
+	for {
+		if clientName, initialized := guard.initializedClient(); initialized {
+			if isCodexClient(clientName) {
+				cancelWhenIdle(ctx, cancel, guard, codexIdleTimeout)
+			}
+			return
+		}
+
+		delay := guard.nextInitializationCheck(initializeTimeout)
+		if !timer.Stop() {
+			select {
+			case <-timer.C:
+			default:
+			}
+		}
+		timer.Reset(delay)
+
+		select {
+		case <-ctx.Done():
+			return
+		case <-guard.activity:
+		case <-guard.initializeEvents:
+		case <-timer.C:
+			// touch and this predicate use the same lock. If an initialize
+			// request has been read, or bytes are still arriving to complete
+			// one, it wins over an equally-ready grace timer.
+			if guard.shouldCancelBeforeInitialize(initializeTimeout) {
+				cancel()
+				return
+			}
+		}
+	}
+}
+
+func isCodexClient(clientName string) bool {
+	name := strings.ToLower(strings.TrimSpace(clientName))
+	return name == "codex" || strings.HasPrefix(name, "codex ")
+}
+
+func registerTools(s *mcpserver.MCPServer, rt *runtime.Runtime, guard *idleGuard) {
 	manifest := rt.Manifest()
 	for _, desc := range manifest.Tools {
 		desc := desc
 		tool := buildMCPTool(desc)
 		s.AddTool(tool, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			done := guard.startCall()
+			defer done()
+
 			args := req.GetArguments()
 			input, err := json.Marshal(args)
 			if err != nil {
@@ -189,5 +522,5 @@ func mcpArtifactContent(ctx context.Context, artifacts []protocol.Artifact, stor
 // RegisterFromRegistry is a test helper to register tools from a registry directly.
 func RegisterFromRegistry(s *mcpserver.MCPServer, reg *registry.Registry, rt *runtime.Runtime) {
 	_ = reg
-	registerTools(s, rt)
+	registerTools(s, rt, nil)
 }

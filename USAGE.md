@@ -198,6 +198,8 @@ LocalBrowser:
 
 服务安装会把服务身份、端口、profile、日志目录和 Chrome 路径写入当前用户的私有状态目录，并记录“活动服务”。因此安装了自定义服务后，后续的 `start`、`status`、`logs`、`restart`、`uninstall` **不必再次传环境变量**。这些管理命令始终使用保存的运行配置，避免 shell 中残留的端口/profile 变量与已安装服务定义不一致；要修改运行配置请重新执行 `install`。macOS 的 `restart` 会同步当前脚本到 launchd 私有副本；`status` 会提示该副本落后于源码，或运行中的服务缺少 `--mute-audio`。安装和状态检查同时验证 CDP 响应与 Chrome 的 `--remote-debugging-port`、`--user-data-dir`：端口被其他 profile 占用时会明确失败，绝不会把对方的登录会话当成 DigCrawl 专用浏览器。macOS 使用 `DIGCRAWL_CDP_BROWSER_SERVICE_LABEL`，Linux/Windows 使用 `DIGCRAWL_CDP_BROWSER_SERVICE_NAME`；如需在多服务之间切换，可仅为该次命令显式传入对应身份。服务身份只接受字母、数字、`.`、`_`、`-`（Windows 额外允许空格），避免服务文件路径歧义。旧版本已安装的服务仍可按原默认值管理；重新执行一次 `install` 即可迁移到持久状态。
 
+不要在活动监视器直接强制退出这台 Chrome：服务的 `KeepAlive` 会把这类崩溃当作故障并重新拉起。使用 `./scripts/digcrawl-cdp-browser-service.sh stop` 会先注销服务管理器，再确认 CDP 端口和对应的 Chrome 主进程都已退出；需要让它在下次登录后也不再启动时，使用 `uninstall`。
+
 ### Platform（平台读取）
 
 | 字段 | 说明 |
@@ -972,6 +974,8 @@ digcrawl collector --server http://127.0.0.1:8790 --token dev
 ```
 
 启动后，IDE 内的 Agent 可通过 MCP 调用本机已注册工具（与 `gateway` 共用同一套 runtime / Provider）。
+
+未显式传 `--idle-timeout` 时，`digcrawl mcp` 会回收未发送 MCP `initialize` 且 stdin 连续空闲 1 分钟的管道；从 initialize 识别到 Codex 后自动启用 15 分钟空闲回收，避免 Codex 遗留 stdin 管道长期保留进程。其他已初始化客户端保持标准长连接。对任意宿主可显式传入正值启用超时；仅在确实需要关闭回收时传 `--idle-timeout=0`。
 
 ### Agent Skill 最小 profile
 

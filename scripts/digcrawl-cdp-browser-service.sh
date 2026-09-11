@@ -316,7 +316,11 @@ wait_for_cdp() {
 wait_for_cdp_to_stop() {
   local attempt
   for attempt in $(seq 1 10); do
-    cdp_ready || return 0
+    # Closing the CDP listener happens before Chrome has necessarily released
+    # its persistent profile. A start/restart must not race that main process.
+    if ! cdp_ready && ! browser_process_matches_config; then
+      return 0
+    fi
     sleep 1
   done
   return 1
@@ -325,12 +329,7 @@ wait_for_cdp_to_stop() {
 prepare_install() {
   # Reinstall is allowed, but it must first stop the service being replaced.
   # Never kill an arbitrary Chrome merely because it occupies the chosen port.
-  case "${OS_NAME}" in
-    Darwin) stop_macos ;;
-    Linux) systemctl --user stop "${SERVICE_NAME}" >/dev/null 2>&1 || true ;;
-    *) fail "unsupported OS: ${OS_NAME}" ;;
-  esac
-  wait_for_cdp_to_stop || fail "CDP port ${PORT} is already in use; stop the conflicting browser or choose a different DIGCRAWL_CDP_PORT"
+  stop_service || fail "CDP port ${PORT} is already in use; stop the conflicting browser or choose a different DIGCRAWL_CDP_PORT"
 }
 
 mac_plist_path() {
@@ -469,7 +468,55 @@ start_macos() {
 }
 
 stop_macos() {
-  launchctl bootout "gui/$(id -u)/${SERVICE_LABEL}" >/dev/null 2>&1 || true
+  local domain target plist
+  domain="gui/$(id -u)"
+  target="${domain}/${SERVICE_LABEL}"
+  plist="$(mac_plist_path)"
+
+  # A raw `kill` only asks launchd to apply KeepAlive and restart Chrome. Stop
+  # the manager first. Do not hide a bootout failure: otherwise the command can
+  # report success while launchd continues to own and restart the browser.
+  if ! launchctl_service_is_loaded "${target}"; then
+    return 0
+  fi
+  if launchctl bootout "${target}" >/dev/null 2>&1; then
+    :
+  elif [[ -f "${plist}" ]] && launchctl bootout "${domain}" "${plist}" >/dev/null 2>&1; then
+    :
+  else
+    fail "failed to unregister ${SERVICE_LABEL} from launchd; Chrome may be restarted automatically"
+  fi
+  if launchctl_service_is_loaded "${target}"; then
+    fail "${SERVICE_LABEL} is still registered with launchd after stop"
+  fi
+}
+
+launchctl_service_is_loaded() {
+  local target="$1" output query_exit
+  if output="$(launchctl print "${target}" 2>&1)"; then
+    return 0
+  else
+    query_exit=$?
+  fi
+  # launchctl uses EX_UNAVAILABLE (113) for a missing service. Do not turn a
+  # permission or launchd communication error into a successful stop: KeepAlive
+  # could still restart Chrome later.
+  if [[ "${query_exit}" -eq 113 && "${output}" == *"Could not find service"* ]]; then
+    return 1
+  fi
+  fail "unable to inspect ${SERVICE_LABEL} in launchd (launchctl exit ${query_exit}): ${output}"
+}
+
+stop_service() {
+  case "${OS_NAME}" in
+    Darwin) stop_macos ;;
+    Linux) stop_linux ;;
+    *) fail "unsupported OS: ${OS_NAME}" ;;
+  esac
+  # Do not claim that Chrome is stopped until its dedicated CDP listener has
+  # disappeared. This avoids returning before a KeepAlive restart race has
+  # settled, and makes `stop` safe for callers to rely on programmatically.
+  wait_for_cdp_to_stop || fail "CDP endpoint did not stop within 10 seconds"
 }
 
 status_macos() {
@@ -501,7 +548,7 @@ status_service() {
 }
 
 uninstall_macos() {
-  stop_macos
+  stop_service
   rm -f "$(mac_plist_path)"
   rm -f "$(mac_launcher_path)"
   remove_service_metadata
@@ -548,7 +595,29 @@ EOF
 }
 
 start_linux() { systemctl --user start "${SERVICE_NAME}"; }
-stop_linux() { systemctl --user stop "${SERVICE_NAME}"; }
+systemd_unit_is_inactive_or_missing() {
+  local status
+  if systemctl --user is-active --quiet "${SERVICE_NAME}"; then
+    return 1
+  else
+    status=$?
+  fi
+  # systemctl documents 3 for an inactive unit and 4 when it cannot find the
+  # unit. Any other status is a manager/permission failure, not evidence that
+  # it is safe to claim the browser service stopped.
+  case "${status}" in
+    3|4) return 0 ;;
+    *) fail "unable to determine whether ${SERVICE_NAME} is active (systemctl exit ${status})" ;;
+  esac
+}
+
+stop_linux() {
+  if systemd_unit_is_inactive_or_missing; then
+    return 0
+  fi
+  systemctl --user stop "${SERVICE_NAME}" || fail "failed to stop ${SERVICE_NAME}"
+  systemd_unit_is_inactive_or_missing || fail "${SERVICE_NAME} remains active after stop"
+}
 status_linux() {
   systemctl --user --no-pager status "${SERVICE_NAME}"
   if cdp_service_ready; then
@@ -573,8 +642,7 @@ restart_service() {
   # the already-saved service identity, Chrome path and browser profile.
   case "${OS_NAME}" in
     Darwin)
-      stop_macos
-	  wait_for_cdp_to_stop || fail "CDP endpoint did not stop within 10 seconds"
+      stop_service
       stage_macos_launcher >/dev/null
       start_macos
       ;;
@@ -585,9 +653,14 @@ restart_service() {
   status_service
 }
 uninstall_linux() {
-  systemctl --user disable --now "${SERVICE_NAME}" >/dev/null 2>&1 || true
-  rm -f "$(linux_unit_path)"
-  systemctl --user daemon-reload
+  stop_service
+  local unit
+  unit="$(linux_unit_path)"
+  if [[ -f "${unit}" ]]; then
+    systemctl --user disable "${SERVICE_NAME}" || fail "failed to disable ${SERVICE_NAME}"
+    rm -f "${unit}"
+  fi
+  systemctl --user daemon-reload || fail "failed to reload the user systemd manager"
   remove_service_metadata
 }
 
@@ -630,7 +703,7 @@ main() {
       wait_for_cdp || fail "CDP endpoint did not become ready within 15 seconds"
       status_service
       ;;
-    stop) case "${OS_NAME}" in Darwin) stop_macos ;; Linux) stop_linux ;; *) fail "unsupported OS: ${OS_NAME}" ;; esac ;;
+    stop) stop_service ;;
     restart) restart_service ;;
     status) status_service ;;
     logs) logs ;;

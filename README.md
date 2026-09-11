@@ -193,7 +193,7 @@ command = "/absolute/path/to/digcrawl"
 args = ["mcp", "--config", "/absolute/path/to/digcrawl-skill.yaml"]
 ```
 
-Codex and Claude Code examples are available in the [Skill directory](./.agents/skills/digcrawl/). Other MCP clients use the same stdio command in their own configuration format.
+Codex and Claude Code examples are available in the [Skill directory](./.agents/skills/digcrawl/). An unflagged `digcrawl mcp` recognizes Codex from its MCP `initialize` request and bounds its abandoned sessions, so existing Codex registrations adopt the fix after a normal host restart. Other initialized MCP clients keep the standard long-lived session. The Codex example also sets the same timeout explicitly; pass `--idle-timeout=0` only when deliberately disabling recovery.
 
 The default Skill is intentionally keyless. It uses the host agent’s multimodal model for page screenshots and image understanding; optional local ASR remains explicit and requires local dependencies and configuration.
 

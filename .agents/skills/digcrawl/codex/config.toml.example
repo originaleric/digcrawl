@@ -1,4 +1,7 @@
 # Add to the user's local Codex configuration.
 [mcp_servers.digcrawl]
 command = "/absolute/path/to/digcrawl"
-args = ["mcp", "--config", "/absolute/path/to/digcrawl-skill.yaml"]
+# Codex opens a short-lived MCP session for some tool runs without closing its
+# stdin pipe. Bound those abandoned sessions without changing standard MCP
+# behavior for other hosts.
+args = ["mcp", "--idle-timeout", "15m", "--config", "/absolute/path/to/digcrawl-skill.yaml"]

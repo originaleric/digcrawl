@@ -186,7 +186,7 @@ command = "/absolute/path/to/digcrawl"
 args = ["mcp", "--config", "/absolute/path/to/digcrawl-skill.yaml"]
 ```
 
-Codex 与 Claude Code 的示例位于 [Skill 目录](./.agents/skills/digcrawl/)。其他 MCP 客户端也使用同一条 stdio 命令，只需按各自配置格式填写。
+Codex 与 Claude Code 的示例位于 [Skill 目录](./.agents/skills/digcrawl/)。未显式传超时参数的 `digcrawl mcp` 会从 MCP `initialize` 识别 Codex 并回收其遗留会话，因此已有 Codex 注册在宿主正常重启后即可生效；其他已初始化 MCP 客户端保持标准长连接。Codex 示例仍显式设置同一超时；只有明确要关闭回收时才传 `--idle-timeout=0`。
 
 默认 Skill 不含密钥。页面截图与图片理解优先交给宿主 Agent 的多模态模型；可选本地 ASR 是显式能力，需要自行准备依赖和配置。
 

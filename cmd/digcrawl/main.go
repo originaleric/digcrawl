@@ -229,7 +229,17 @@ func runDevHost(args []string) {
 func runMCP(args []string) {
 	fs := flag.NewFlagSet("mcp", flag.ExitOnError)
 	configPath := fs.String("config", "", "path to profile (default: user skill profile)")
+	idleTimeout := fs.Duration("idle-timeout", mcpgw.DefaultStdioIdleTimeout, "exit after this much inactive stdio time (explicit 0 disables recovery)")
 	_ = fs.Parse(args)
+	idleTimeoutExplicit := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "idle-timeout" {
+			idleTimeoutExplicit = true
+		}
+	})
+	if *idleTimeout < 0 {
+		log.Fatal("mcp: --idle-timeout must be zero or positive")
+	}
 
 	profilePath := profilePathForMCP(*configPath)
 	cfg, err := loadRequiredConfig(profilePath)
@@ -242,8 +252,14 @@ func runMCP(args []string) {
 		log.Fatalf("runtime: %v", err)
 	}
 	log.Printf("DigCrawl MCP server on stdio (instance=%s)", cfg.Gateway.InstanceID)
-	if err := mcpgw.ServeStdio(rt); err != nil {
-		log.Fatalf("mcp: %v", err)
+	var serveErr error
+	if idleTimeoutExplicit {
+		serveErr = mcpgw.ServeStdioWithIdleTimeout(rt, *idleTimeout)
+	} else {
+		serveErr = mcpgw.ServeStdioWithCodexRecovery(rt)
+	}
+	if serveErr != nil {
+		log.Fatalf("mcp: %v", serveErr)
 	}
 }
 
