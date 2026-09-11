@@ -4,14 +4,239 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"io"
 	"testing"
 	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
+	mcpserver "github.com/mark3labs/mcp-go/server"
 	"github.com/originaleric/digcrawl/protocol"
 	"github.com/originaleric/digcrawl/runtime"
 	"github.com/originaleric/digcrawl/runtime/artifact"
 )
+
+func TestServeStdioReclaimsAbandonedOpenPipe(t *testing.T) {
+	stdin, client := io.Pipe()
+	t.Cleanup(func() { _ = client.Close() })
+
+	done := make(chan error, 1)
+	go func() {
+		server := mcpserver.NewMCPServer("test", "1.0.0")
+		done <- serveStdio(context.Background(), server, stdin, io.Discard, 40*time.Millisecond)
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("idle stdio server returned error: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("idle stdio server did not exit while its client pipe stayed open")
+	}
+}
+
+func TestDefaultStdioIdleTimeoutKeepsAnOpenSessionAlive(t *testing.T) {
+	stdin, client := io.Pipe()
+	t.Cleanup(func() { _ = client.Close() })
+
+	done := make(chan error, 1)
+	go func() {
+		server := mcpserver.NewMCPServer("test", "1.0.0")
+		done <- serveStdio(context.Background(), server, stdin, io.Discard, DefaultStdioIdleTimeout)
+	}()
+
+	select {
+	case err := <-done:
+		t.Fatalf("default stdio session closed without EOF: %v", err)
+	case <-time.After(120 * time.Millisecond):
+	}
+
+	if err := client.Close(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("stdio server returned error after EOF: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("stdio server did not exit after EOF")
+	}
+}
+
+func TestAutomaticCodexRecoveryReclaimsExistingCodexRegistration(t *testing.T) {
+	stdin, client := io.Pipe()
+	t.Cleanup(func() { _ = client.Close() })
+
+	done := make(chan error, 1)
+	go func() {
+		server := mcpserver.NewMCPServer("test", "1.0.0")
+		done <- serveStdioWithAutomaticCodexRecovery(context.Background(), server, stdin, io.Discard, newIdleGuard(), time.Second, 40*time.Millisecond)
+	}()
+	writeMCPInitialize(t, client, "Codex")
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("automatic Codex recovery returned error: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Codex session was not reclaimed after its idle deadline")
+	}
+}
+
+func TestAutomaticCodexRecoveryKeepsOtherInitializedClientsAlive(t *testing.T) {
+	stdin, client := io.Pipe()
+	t.Cleanup(func() { _ = client.Close() })
+
+	done := make(chan error, 1)
+	go func() {
+		server := mcpserver.NewMCPServer("test", "1.0.0")
+		done <- serveStdioWithAutomaticCodexRecovery(context.Background(), server, stdin, io.Discard, newIdleGuard(), 40*time.Millisecond, 40*time.Millisecond)
+	}()
+	writeMCPInitialize(t, client, "Claude Code")
+
+	select {
+	case err := <-done:
+		t.Fatalf("non-Codex session closed without EOF: %v", err)
+	case <-time.After(120 * time.Millisecond):
+	}
+
+	if err := client.Close(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("non-Codex session returned error after EOF: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("non-Codex session did not exit after EOF")
+	}
+}
+
+func TestAutomaticCodexRecoveryReclaimsUninitializedOpenPipe(t *testing.T) {
+	stdin, client := io.Pipe()
+	t.Cleanup(func() { _ = client.Close() })
+
+	done := make(chan error, 1)
+	go func() {
+		server := mcpserver.NewMCPServer("test", "1.0.0")
+		done <- serveStdioWithAutomaticCodexRecovery(context.Background(), server, stdin, io.Discard, newIdleGuard(), 40*time.Millisecond, time.Second)
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("uninitialized pipe recovery returned error: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("uninitialized open pipe was not reclaimed")
+	}
+}
+
+func TestIdleGuardActivityWinsOverAnExpiredTimer(t *testing.T) {
+	guard := newIdleGuard()
+	guard.mu.Lock()
+	guard.lastActivity = time.Now().Add(-time.Minute)
+	guard.mu.Unlock()
+
+	// This models a read that has already completed when timer.C and activity
+	// are both selectable. The cancellation predicate must use the fresh
+	// timestamp, not which select arm happened to win.
+	guard.touch()
+	if guard.shouldCancelForIdle(time.Second) {
+		t.Fatal("fresh stdio activity was treated as idle")
+	}
+}
+
+func TestIdleGuardActivityWinsOverAnExpiredInitializeTimer(t *testing.T) {
+	guard := newIdleGuard()
+	guard.mu.Lock()
+	guard.lastActivity = time.Now().Add(-time.Minute)
+	guard.mu.Unlock()
+
+	// An initialize line may be observed just as its grace timer becomes ready.
+	// Fresh bytes must win even before the observer finishes decoding that line.
+	guard.touch()
+	if guard.shouldCancelBeforeInitialize(time.Second) {
+		t.Fatal("fresh initialize activity was treated as an abandoned pipe")
+	}
+}
+
+func writeMCPInitialize(t *testing.T, writer io.Writer, clientName string) {
+	t.Helper()
+	if _, err := io.WriteString(writer, `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"`+clientName+`","version":"test"}}}`+"\n"); err != nil {
+		t.Fatalf("write MCP initialize request: %v", err)
+	}
+}
+
+func TestServeStdioIdleTimeoutResetsWhenClientWrites(t *testing.T) {
+	stdin, client := io.Pipe()
+	t.Cleanup(func() { _ = client.Close() })
+
+	const idleTimeout = 120 * time.Millisecond
+	done := make(chan error, 1)
+	go func() {
+		server := mcpserver.NewMCPServer("test", "1.0.0")
+		done <- serveStdio(context.Background(), server, stdin, io.Discard, idleTimeout)
+	}()
+
+	// This is a valid request, and arrives just before the original deadline.
+	// Keeping the pipe open afterward verifies that incoming bytes reset the
+	// watchdog rather than merely postponing process startup.
+	time.Sleep(70 * time.Millisecond)
+	if _, err := io.WriteString(client, `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"test","version":"1"}}}`+"\n"); err != nil {
+		t.Fatalf("write MCP initialize request: %v", err)
+	}
+
+	select {
+	case err := <-done:
+		t.Fatalf("server stopped before reset idle deadline: %v", err)
+	case <-time.After(80 * time.Millisecond):
+	}
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("idle stdio server returned error: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("server did not exit after the reset idle deadline")
+	}
+}
+
+func TestServeStdioIdleTimeoutWaitsForInFlightTool(t *testing.T) {
+	stdin, client := io.Pipe()
+	t.Cleanup(func() { _ = client.Close() })
+
+	const idleTimeout = 50 * time.Millisecond
+	guard := newIdleGuard()
+	finishTool := guard.startCall()
+	done := make(chan error, 1)
+	go func() {
+		server := mcpserver.NewMCPServer("test", "1.0.0")
+		done <- serveStdioWithGuard(context.Background(), server, stdin, io.Discard, idleTimeout, guard)
+	}()
+
+	// The stdin pipe is otherwise silent. The guard must keep the server alive
+	// while a legitimate long-running tool call is in flight.
+	select {
+	case err := <-done:
+		t.Fatalf("server stopped while tool was active: %v", err)
+	case <-time.After(2 * idleTimeout):
+	}
+
+	finishTool()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("idle stdio server returned error: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("server did not exit after the in-flight tool completed")
+	}
+}
 
 func TestMCPTimeoutUsesBoundRuntimeExecutionPolicy(t *testing.T) {
 	const want = 23 * time.Minute

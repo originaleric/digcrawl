@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -58,7 +57,7 @@ func DownloadAssets(ctx context.Context, assetsDir string, out map[string]any, o
 		if opts.TimeoutSec <= 0 {
 			opts.TimeoutSec = 30
 		}
-		client := &http.Client{Timeout: time.Duration(opts.TimeoutSec) * time.Second}
+		client := coremedia.NewSafeHTTPClient(time.Duration(opts.TimeoutSec) * time.Second)
 		referer := refererForDownload(out)
 		for i, item := range items {
 			mediaType, _ := item["type"].(string)
@@ -80,7 +79,7 @@ func DownloadAssets(ctx context.Context, assetsDir string, out map[string]any, o
 			if rawURL == "" || !strings.HasPrefix(rawURL, "http") {
 				continue
 			}
-			if err := validateRemoteAssetURL(rawURL); err != nil {
+			if err := coremedia.ValidateRemoteURL(rawURL); err != nil {
 				manifest = append(manifest, map[string]any{
 					"type": item["type"], "url": rawURL, "error": err.Error(),
 				})
@@ -124,7 +123,7 @@ func copyMediaArtifact(ctx context.Context, store artifact.Store, artifactID, as
 	}
 	name := assetFilename("", mediaType, index)
 	dest := filepath.Join(assetsDir, name)
-	contentType, err := coremedia.CopyArtifactToFile(ctx, store, artifactID, dest, maxBytes)
+	contentType, err := coremedia.CopyArtifactToFile(ctx, store, artifactID, dest, mediaType, maxBytes)
 	if err != nil {
 		return "", err
 	}
@@ -133,35 +132,6 @@ func copyMediaArtifact(ctx context.Context, store artifact.Store, artifactID, as
 		return "", err
 	}
 	return finalName, nil
-}
-
-func validateRemoteAssetURL(rawURL string) error {
-	u, err := url.Parse(rawURL)
-	if err != nil {
-		return err
-	}
-	if u.Scheme != "http" && u.Scheme != "https" {
-		return fmt.Errorf("unsupported asset scheme %q", u.Scheme)
-	}
-	host := strings.TrimSpace(u.Hostname())
-	if host == "" {
-		return fmt.Errorf("asset URL missing host")
-	}
-	if ip := net.ParseIP(host); ip != nil {
-		if isPrivateOrLocalIP(ip) {
-			return fmt.Errorf("asset host %q is private/local", host)
-		}
-		return nil
-	}
-	lower := strings.ToLower(host)
-	if lower == "localhost" || strings.HasSuffix(lower, ".localhost") {
-		return fmt.Errorf("asset host %q is local", host)
-	}
-	return nil
-}
-
-func isPrivateOrLocalIP(ip net.IP) bool {
-	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified()
 }
 
 func copyScreenshotArtifact(store artifact.Store, out map[string]any, assetsDir string) (string, error) {

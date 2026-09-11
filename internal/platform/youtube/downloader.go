@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/originaleric/digcrawl/internal/media"
 )
 
 var ytDLPCommand = "yt-dlp"
@@ -53,6 +55,11 @@ func DownloadVideo(ctx context.Context, rawURL string, maxBytes int64, retain bo
 	cleanup = removeDownload
 	outputTemplate := filepath.Join(dir, "video.%(ext)s")
 	args := []string{
+		// The canonical URL is the only user-derived network input. Ignore
+		// user/system yt-dlp configuration so it cannot add a proxy,
+		// downloader, or command hook outside this provider boundary.
+		"--ignore-config",
+		"--proxy", "",
 		"--no-playlist", "--no-progress", "--no-warnings",
 		"--remux-video", "mp4",
 		// ASR and frame OCR need a playable file, not a high-resolution archive.
@@ -109,6 +116,14 @@ func DownloadVideo(ctx context.Context, rawURL string, maxBytes int64, retain bo
 	if info.Size() <= 0 || info.Size() > maxBytes {
 		removeDownload()
 		return "", func() {}, fmt.Errorf("downloaded YouTube video size %d exceeds allowed maximum %d", info.Size(), maxBytes)
+	}
+	// yt-dlp controls the final extension, but a successful command alone is
+	// not proof that the retained file is playable video. Use the same
+	// format-level check as the direct provider-media downloader so every
+	// durable video result honors one definition of "video".
+	if err := media.ValidateVideoFile(path); err != nil {
+		removeDownload()
+		return "", func() {}, fmt.Errorf("downloaded YouTube media is not a recognized video file: %w", err)
 	}
 	if retain {
 		cleanup = func() {}

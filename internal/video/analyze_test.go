@@ -2,16 +2,14 @@ package video
 
 import (
 	"context"
-	"net"
-	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/originaleric/digcrawl/config"
 	"github.com/originaleric/digcrawl/internal/asr"
+	"github.com/originaleric/digcrawl/internal/media"
 	"github.com/originaleric/digcrawl/internal/ocr"
 )
 
@@ -61,11 +59,11 @@ func TestRemoteURLValidationAndExtension(t *testing.T) {
 		"https://user:pass@example.com/video.mp4",
 		"file:///tmp/video.mp4",
 	} {
-		if err := validateRemoteURL(raw); err == nil {
-			t.Fatalf("validateRemoteURL(%q) succeeded", raw)
+		if err := media.ValidateRemoteURL(raw); err == nil {
+			t.Fatalf("ValidateRemoteURL(%q) succeeded", raw)
 		}
 	}
-	if err := validateRemoteURL("https://cdn.example.com/video.mp4?token=a"); err != nil {
+	if err := media.ValidateRemoteURL("https://cdn.example.com/video.mp4?token=a"); err != nil {
 		t.Fatal(err)
 	}
 	if got := safeExtension("/asset.webm"); got != ".webm" {
@@ -99,23 +97,6 @@ func TestDurationProbeUsesActiveProcessorAndIsAdvisory(t *testing.T) {
 	cancel()
 	if duration, warning := probeVideoDuration(cancelled, path, cfg, false, true); duration != 0 || !strings.Contains(warning, "video duration unavailable") {
 		t.Fatalf("cancelled duration=%s warning=%q", duration, warning)
-	}
-}
-
-func TestResolvePublicHostRejectsPrivateLiterals(t *testing.T) {
-	for _, host := range []string{"127.0.0.1", "10.0.0.1", "169.254.169.254", "::1"} {
-		if _, err := resolvePublicHost(context.Background(), host); err == nil {
-			t.Fatalf("resolvePublicHost(%q) succeeded", host)
-		}
-	}
-	ips, err := resolvePublicHost(context.Background(), "8.8.8.8")
-	if err != nil || len(ips) != 1 || !ips[0].Equal(net.ParseIP("8.8.8.8")) {
-		t.Fatalf("ips=%v err=%v", ips, err)
-	}
-	client := newSafeHTTPClient(time.Second)
-	transport, ok := client.Transport.(*http.Transport)
-	if !ok || transport.Proxy != nil || transport.DialContext == nil {
-		t.Fatalf("safe transport not installed: %#v", client.Transport)
 	}
 }
 

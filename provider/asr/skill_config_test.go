@@ -175,6 +175,174 @@ func TestConfigureSkillMediaAddsPortableDefaultDirectoryForLegacyProfile(t *test
 	}
 }
 
+func TestConfigureSkillMediaUpdatesProviderVideoRetentionAtomically(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	path := config.DefaultSkillProfilePath()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	original := []byte("# preserve this comment\nUnrelated: keep\nSkill:\n  Media:\n    DownloadMedia: false\n")
+	if err := os.WriteFile(path, original, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := config.Load(path); err != nil {
+		t.Fatal(err)
+	}
+	mediaDir := filepath.Join(t.TempDir(), "saved-videos")
+	input, err := json.Marshal(map[string]any{
+		"media_dir": mediaDir,
+		"video_download_providers": map[string]bool{
+			"douyin":  true,
+			"toutiao": false,
+		},
+		"video_download_max_bytes":   268435456,
+		"video_download_timeout_sec": 90,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, _, err := ConfigureSkillMediaEntry().Handler(context.Background(), &protocol.ToolCall{Input: input})
+	if err != nil {
+		t.Fatalf("configure provider video retention: %v", err)
+	}
+	if out["video_download_dir"] != mediaDir {
+		t.Fatalf("video download dir=%q want %q", out["video_download_dir"], mediaDir)
+	}
+	if out["video_download_max_bytes"] != int64(268435456) || out["video_download_timeout_sec"] != 90 {
+		t.Fatalf("video download limits=%#v", out)
+	}
+	persisted, err := config.Validate(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if persisted.VideoDownload.Dir != mediaDir || persisted.VideoDownload.MaxBytes != 268435456 || persisted.VideoDownload.TimeoutSec != 90 || !persisted.VideoDownload.EnabledFor("douyin") || persisted.VideoDownload.EnabledFor("toutiao") {
+		t.Fatalf("persisted provider retention=%+v", persisted.VideoDownload)
+	}
+	updated, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"# preserve this comment", "Unrelated: keep", "VideoDownload:", "douyin: true", "toutiao: false"} {
+		if !strings.Contains(string(updated), want) {
+			t.Fatalf("profile rewrite lost %q:\n%s", want, updated)
+		}
+	}
+}
+
+func TestConfigureSkillMediaUsesProfileLocalVideoDirectoryByDefault(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	path := config.DefaultSkillProfilePath()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("Skill:\n  Media:\n    DownloadMedia: false\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := config.Load(path); err != nil {
+		t.Fatal(err)
+	}
+	out, _, err := ConfigureSkillMediaEntry().Handler(context.Background(), &protocol.ToolCall{Input: []byte(`{"video_download_providers":{"douyin":true}}`)})
+	if err != nil {
+		t.Fatalf("configure provider retention with default directory: %v", err)
+	}
+	wantDir := filepath.Join(filepath.Dir(path), "media")
+	if out["video_download_dir"] != wantDir {
+		t.Fatalf("video download directory=%q want %q", out["video_download_dir"], wantDir)
+	}
+	persisted, err := config.Validate(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if persisted.VideoDownload.Dir != wantDir || !persisted.VideoDownload.EnabledFor("douyin") {
+		t.Fatalf("default provider retention=%+v", persisted.VideoDownload)
+	}
+}
+
+func TestConfigureSkillMediaMergesProviderPolicyKeys(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	path := config.DefaultSkillProfilePath()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("VideoDownload:\n  Providers:\n    douyin: true\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := config.Load(path); err != nil {
+		t.Fatal(err)
+	}
+	out, _, err := ConfigureSkillMediaEntry().Handler(context.Background(), &protocol.ToolCall{Input: []byte(`{"video_download_providers":{"toutiao":true}}`)})
+	if err != nil {
+		t.Fatalf("merge provider retention: %v", err)
+	}
+	providers, ok := out["video_download_providers"].(map[string]bool)
+	if !ok || !providers["douyin"] || !providers["toutiao"] {
+		t.Fatalf("merged provider policy=%#v", out["video_download_providers"])
+	}
+	persisted, err := config.Validate(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !persisted.VideoDownload.EnabledFor("douyin") || !persisted.VideoDownload.EnabledFor("toutiao") {
+		t.Fatalf("persisted provider policy=%+v", persisted.VideoDownload)
+	}
+}
+
+func TestConfigureSkillMediaRejectsUnsupportedProviderWithoutWriting(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	path := config.DefaultSkillProfilePath()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	original := []byte("Skill:\n  Media:\n    DownloadMedia: false\n")
+	if err := os.WriteFile(path, original, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := config.Load(path); err != nil {
+		t.Fatal(err)
+	}
+	for _, input := range [][]byte{
+		[]byte(`{"video_download_providers":{"x":true}}`),
+		[]byte(`{"video_download_providers":{" toutiao":true}}`),
+	} {
+		if _, _, err := ConfigureSkillMediaEntry().Handler(context.Background(), &protocol.ToolCall{Input: input}); err == nil {
+			t.Fatalf("invalid provider policy %s unexpectedly succeeded", input)
+		}
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(original) {
+		t.Fatalf("invalid provider rewrote profile:\n%s", got)
+	}
+}
+
+func TestConfigureSkillMediaRejectsInvalidCombinedUpdateWithoutWriting(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	path := config.DefaultSkillProfilePath()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	original := []byte("Skill:\n  Media:\n    RetainDownloadedVideo: false\n")
+	if err := os.WriteFile(path, original, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := config.Load(path); err != nil {
+		t.Fatal(err)
+	}
+	input := []byte(`{"retain_downloaded_video":true,"video_download_providers":{"x":true}}`)
+	if _, _, err := ConfigureSkillMediaEntry().Handler(context.Background(), &protocol.ToolCall{Input: input}); err == nil {
+		t.Fatal("invalid combined media update unexpectedly succeeded")
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(original) {
+		t.Fatalf("invalid combined update partially rewrote profile:\n%s", got)
+	}
+}
+
 func TestEnableSkillASRAndConcurrentSkillReadsUseStableSnapshots(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	path := config.DefaultSkillProfilePath()

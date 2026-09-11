@@ -17,6 +17,8 @@
 
 `digcrawl mcp --config <profile>` 通过 stdio 暴露 MCP。仓库级 Skill 位于 [`../.agents/skills/digcrawl/`](../.agents/skills/digcrawl/)，并提供 Codex、Claude Code 配置示例及最小 profile [`../config/digcrawl-skill.example.yaml`](../config/digcrawl-skill.example.yaml)。该 profile 默认只暴露链接读取工具；Cookie、artifact 与登录态均由用户本机目录保存。
 
+标准 MCP stdio 会话会保持到客户端关闭 stdin。未显式传 `--idle-timeout` 时，`digcrawl mcp` 仅回收尚未发送 MCP `initialize` 且 stdin 连续空闲 1 分钟的管道；收到 Codex 的 initialize 后会自动启用 15 分钟空闲回收，其他已初始化客户端保持标准会话。正值 `--idle-timeout` 为任意宿主显式启用回收，`--idle-timeout=0` 明确关闭回收；`codex/config.toml.example` 已采用显式选项。
+
 ## 宿主 HTTP 客户端
 
 业务宿主若需**主动请求**用户本机 Gateway（而非 Collector 反向连接），请使用仓库顶层 [`client/`](../client/) 包，而非 `transport` 下的实现。

@@ -30,6 +30,15 @@ func TestWriteAndValidateSkillProfile(t *testing.T) {
 	if !filepath.IsAbs(cfg.Skill.Media.Dir) {
 		t.Fatalf("new Skill profile media directory must be absolute: %q", cfg.Skill.Media.Dir)
 	}
+	if !filepath.IsAbs(cfg.VideoDownload.Dir) || len(cfg.VideoDownload.Providers) != 0 {
+		t.Fatalf("new Skill profile video retention must remain disabled with an absolute directory: %+v", cfg.VideoDownload)
+	}
+	if got, want := cfg.VideoDownload.MaxBytes, config.DefaultVideoDownloadMaxBytes; got != want {
+		t.Fatalf("new Skill profile video download max bytes=%d want %d", got, want)
+	}
+	if got, want := cfg.VideoDownload.TimeoutSec, config.DefaultVideoDownloadTimeoutSec; got != want {
+		t.Fatalf("new Skill profile video download timeout=%d want %d", got, want)
+	}
 	if got, want := cfg.Skill.Media.MaxBytes, int64(128*1024*1024); got != want {
 		t.Fatalf("new Skill profile media limit=%d want %d", got, want)
 	}

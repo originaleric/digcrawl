@@ -51,7 +51,8 @@ func TestDownloadAssetsUsesVideoArtifactForASR(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.Put(context.Background(), "youtube-video", "video/mp4", "video.mp4", []byte("video")); err != nil {
+	validMP4 := []byte{0, 0, 0, 24, 'f', 't', 'y', 'p', 'i', 's', 'o', 'm'}
+	if _, err := store.Put(context.Background(), "youtube-video", "video/mp4", "video.mp4", validMP4); err != nil {
 		t.Fatal(err)
 	}
 	assetsDir := t.TempDir()
@@ -61,12 +62,13 @@ func TestDownloadAssetsUsesVideoArtifactForASR(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if data, err := os.ReadFile(filepath.Join(assetsDir, "001.mp4")); err != nil || string(data) != "video" {
+	if data, err := os.ReadFile(filepath.Join(assetsDir, "001.mp4")); err != nil || string(data) != string(validMP4) {
 		t.Fatalf("artifact video=%q err=%v", data, err)
 	}
 }
 
 func TestDownloadFilePrefersCompatibleImageFormatsOnlyForOCRAssets(t *testing.T) {
+	validMP4 := []byte{0, 0, 0, 24, 'f', 't', 'y', 'p', 'i', 's', 'o', 'm'}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/image":
@@ -80,7 +82,7 @@ func TestDownloadFilePrefersCompatibleImageFormatsOnlyForOCRAssets(t *testing.T)
 				t.Fatalf("video Accept=%q; image preference must not affect video downloads", got)
 			}
 			w.Header().Set("Content-Type", "video/mp4")
-			_, _ = w.Write([]byte("mp4"))
+			_, _ = w.Write(validMP4)
 		default:
 			t.Fatalf("unexpected path %q", r.URL.Path)
 		}
@@ -91,7 +93,7 @@ func TestDownloadFilePrefersCompatibleImageFormatsOnlyForOCRAssets(t *testing.T)
 		path, mediaType, want string
 	}{
 		{path: "/image", mediaType: "image", want: "jpeg"},
-		{path: "/video", mediaType: "video", want: "mp4"},
+		{path: "/video", mediaType: "video", want: string(validMP4)},
 	} {
 		t.Run(tc.mediaType, func(t *testing.T) {
 			dest := filepath.Join(t.TempDir(), "asset")
@@ -113,7 +115,8 @@ func TestEnhanceVideoFrameOCRUsesDownloadedVideoArtifact(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.Put(context.Background(), "youtube-video", "video/mp4", "video.mp4", []byte("video")); err != nil {
+	validMP4 := []byte{0, 0, 0, 24, 'f', 't', 'y', 'p', 'i', 's', 'o', 'm'}
+	if _, err := store.Put(context.Background(), "youtube-video", "video/mp4", "video.mp4", validMP4); err != nil {
 		t.Fatal(err)
 	}
 	assetsDir := t.TempDir()
@@ -173,7 +176,11 @@ func TestEnhanceVideoFrameOCRSelectsVideoAheadOfAudio(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, item := range []struct{ id, mediaType, name string }{{"audio", "audio/mpeg", "audio.mp3"}, {"video", "video/mp4", "video.mp4"}} {
-		if _, err := store.Put(context.Background(), item.id, item.mediaType, item.name, []byte(item.id)); err != nil {
+		body := []byte(item.id)
+		if item.id == "video" {
+			body = []byte{0, 0, 0, 24, 'f', 't', 'y', 'p', 'i', 's', 'o', 'm'}
+		}
+		if _, err := store.Put(context.Background(), item.id, item.mediaType, item.name, body); err != nil {
 			t.Fatal(err)
 		}
 	}

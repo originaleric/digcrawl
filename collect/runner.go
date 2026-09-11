@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/originaleric/digcrawl/protocol"
 	browserprov "github.com/originaleric/digcrawl/provider/browser"
+	platformprov "github.com/originaleric/digcrawl/provider/platform"
 	"github.com/originaleric/digcrawl/runtime"
 	"github.com/originaleric/digcrawl/runtime/executor"
 )
@@ -53,13 +54,6 @@ func Run(ctx context.Context, rt *runtime.Runtime, opts RunOptions) (map[string]
 		call.Policy.TimeoutMs = opts.TimeoutMs
 	}
 	result := rt.Execute(executor.WithCollectExecution(ctx), call)
-	if result.Status != "success" {
-		msg := "tool execution failed"
-		if result.Error != nil {
-			msg = result.Error.Message
-		}
-		return nil, result, fmt.Errorf("%s", msg)
-	}
 
 	var out map[string]any
 	if len(result.Output) > 0 {
@@ -69,6 +63,14 @@ func Run(ctx context.Context, rt *runtime.Runtime, opts RunOptions) (map[string]
 	}
 	if out == nil {
 		out = map[string]any{}
+	}
+
+	if result.Status != "success" && !isRecoverableProviderVideoRetentionFailure(result, out) {
+		msg := "tool execution failed"
+		if result.Error != nil {
+			msg = result.Error.Message
+		}
+		return nil, result, fmt.Errorf("%s", msg)
 	}
 	if code, message := structuredPlatformError(out); code != "" {
 		if message == "" {
@@ -81,6 +83,23 @@ func Run(ctx context.Context, rt *runtime.Runtime, opts RunOptions) (map[string]
 		out["source_url"] = opts.URL
 	}
 	return out, result, nil
+}
+
+// isRecoverableProviderVideoRetentionFailure recognizes only the explicit
+// provider-retention boundary. It deliberately does not turn generic handler
+// errors, platform errors, or malformed partial output into successful Collect
+// executions.
+func isRecoverableProviderVideoRetentionFailure(result *protocol.ToolResult, out map[string]any) bool {
+	if result == nil || result.Error == nil || result.Error.Code != platformprov.ProviderVideoDownloadFailedCode {
+		return false
+	}
+	return providerVideoDownloadStatus(out) == "failed"
+}
+
+func providerVideoDownloadStatus(out map[string]any) string {
+	meta, _ := out["platform_metadata"].(map[string]any)
+	status, _ := meta["video_download_status"].(string)
+	return strings.ToLower(strings.TrimSpace(status))
 }
 
 func buildToolInput(match Match, opts RunOptions) (map[string]any, error) {

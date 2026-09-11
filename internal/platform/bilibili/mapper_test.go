@@ -45,6 +45,59 @@ func TestMapAPIResponse(t *testing.T) {
 	}
 }
 
+func TestAPIContentNeedsBrowserVideoCaptureWhenMediaRequested(t *testing.T) {
+	content, err := mapAPIResponse(platform.ReadInput{IncludeMedia: true}, &platform.NormalizedURL{
+		OriginalURL:  "https://www.bilibili.com/video/BV1xx411c7mD",
+		PlatformID:   "BV1xx411c7mD",
+		ContentKind:  "bv",
+		CanonicalURL: "https://www.bilibili.com/video/BV1xx411c7mD",
+	}, &viewResponse{Data: viewData{BVID: "BV1xx411c7mD", Title: "B站测试视频", Pic: "https://i0.hdslb.com/cover.jpg"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !needsBrowserVideoCapture(platform.ReadInput{IncludeMedia: true}, content) {
+		t.Fatalf("cover-only API media must request browser video capture: %+v", content.Media)
+	}
+	content.Media = append(content.Media, platform.MediaItem{Type: "video", URL: "https://cdn.example/video.mp4"})
+	if needsBrowserVideoCapture(platform.ReadInput{IncludeMedia: true}, content) {
+		t.Fatal("a resolved video reference must not force browser capture")
+	}
+	if needsBrowserVideoCapture(platform.ReadInput{}, content) {
+		t.Fatal("a caller that did not request media must keep API-first behavior")
+	}
+}
+
+func TestBrowserVideoCaptureKeepsAPIContentAsSourceOfTruth(t *testing.T) {
+	apiContent := &platform.Content{
+		Title:    "API title",
+		Text:     "API body",
+		Markdown: "API markdown",
+		Media:    []platform.MediaItem{{Type: "image", URL: "https://i0.hdslb.com/cover.jpg"}},
+	}
+	loginShell := &platform.Content{
+		Title:    "登录 - 哔哩哔哩",
+		Text:     "请登录",
+		Markdown: "请登录",
+		Media:    []platform.MediaItem{{Type: "image", URL: "https://i0.hdslb.com/login.jpg"}},
+	}
+	appendBrowserVideoMedia(apiContent, loginShell)
+	if apiContent.Title != "API title" || apiContent.Text != "API body" || apiContent.Markdown != "API markdown" || len(apiContent.Media) != 1 {
+		t.Fatalf("browser shell must not replace API content: %+v", apiContent)
+	}
+
+	videoCapture := &platform.Content{
+		Title: "browser title must not replace API",
+		Media: []platform.MediaItem{
+			{Type: "image", URL: "https://i0.hdslb.com/browser.jpg"},
+			{Type: "video", URL: "https://media.example/video.mp4"},
+		},
+	}
+	appendBrowserVideoMedia(apiContent, videoCapture)
+	if apiContent.Title != "API title" || apiContent.Text != "API body" || len(apiContent.Media) != 2 || apiContent.Media[1].URL != "https://media.example/video.mp4" {
+		t.Fatalf("browser capture must only enrich API content with video: %+v", apiContent)
+	}
+}
+
 func TestBuildSummaryInputKeepsTitleWhenDescriptionIsThin(t *testing.T) {
 	t.Parallel()
 

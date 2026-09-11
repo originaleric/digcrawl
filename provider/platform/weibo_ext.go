@@ -1,6 +1,7 @@
 package platformprov
 
 import (
+	"github.com/originaleric/digcrawl/config"
 	"github.com/originaleric/digcrawl/internal/platform/weibo"
 	"github.com/originaleric/digcrawl/runtime/artifact"
 	"github.com/originaleric/digcrawl/runtime/registry"
@@ -8,8 +9,8 @@ import (
 
 var weiboDefaultDomains = []string{"weibo.com", "www.weibo.com", "m.weibo.cn"}
 
-func WeiboPostReadEntry(configDomains []string, artStore artifact.Store) registry.Entry {
-	return platformReadEntry(
+func WeiboPostReadEntry(configDomains []string, artStore artifact.Store, runtimeCfg ...*config.Config) registry.Entry {
+	return platformReadEntryWithConfig(
 		ToolWeiboPostRead,
 		"Read a Weibo post page API-first with local browser fallback and structured output.",
 		[]string{"browser", "weibo", "cookie.local", "platform.read"},
@@ -17,5 +18,6 @@ func WeiboPostReadEntry(configDomains []string, artStore artifact.Store) registr
 		configDomains,
 		artStore,
 		weibo.ReadPost,
+		optionalRuntimeConfig(runtimeCfg),
 	)
 }
