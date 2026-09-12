@@ -5,9 +5,9 @@ Usage:
   .\scripts\digcrawl-cdp-browser-service.ps1 install
   .\scripts\digcrawl-cdp-browser-service.ps1 start|stop|restart|status|logs|uninstall
 
-The Scheduled Task runs at the current user's logon and restarts its managed
-Chrome process if it exits. It discovers system Chrome/Chromium and never
-uses Playwright's versioned browser cache.
+The Scheduled Task stores a manually started, dedicated Chrome definition.
+It has no logon trigger and does not restart Chrome if it exits. It discovers
+system Chrome/Chromium and never uses Playwright's versioned browser cache.
 #>
 
 [CmdletBinding()]
@@ -34,6 +34,13 @@ $ActiveServicePath = Join-Path $ServiceStateDir 'active-service.txt'
 $LegacyServiceConfigPath = Join-Path $DataRoot 'cdp-browser-service.json'
 $ServiceConfigPath = $null
 $ScriptPath = $PSCommandPath
+# Keep caller-supplied runtime values separate from the mutable service state.
+# During reconfiguration the saved (old) port/profile must remain active until
+# its Chrome process has fully exited.
+$ExplicitPort = $Port
+$ExplicitUserDataDir = $UserDataDir
+$ExplicitLogDir = $LogDir
+$ExplicitChromePath = if ($ChromePathExplicit) { $env:DIGCRAWL_CHROME_PATH } else { $null }
 
 function Fail([string]$Message) {
     throw "error: $Message"
@@ -121,27 +128,34 @@ function Test-ServiceCdpReady {
 
 function Wait-CdpStopped {
     for ($attempt = 1; $attempt -le 10; $attempt++) {
-        if (-not (Test-CdpReady)) { return $true }
+        # Chrome can close its CDP listener before it has released the profile.
+        # Require both the endpoint and the configured main process to vanish
+        # before a replacement service is allowed to use that profile.
+        if (-not (Test-CdpReady) -and @(Get-ManagedChromeProcesses).Count -eq 0) { return $true }
         Start-Sleep -Seconds 1
     }
     return $false
+}
+
+function Stop-ManagedService {
+    Stop-Service
+    if (-not (Wait-CdpStopped)) {
+        Fail 'CDP endpoint or managed Chrome did not stop within 10 seconds'
+    }
 }
 
 function Prepare-Install {
     # Reinstall must reclaim the selected service's Chrome child as well as its
     # Task Scheduler wrapper. Stop-Service is safe here because its process
     # predicate requires the full configured port/profile argument pair.
-    Stop-Service
-    if (-not (Wait-CdpStopped)) {
-        Fail "CDP port $Port is already in use; stop the conflicting browser or choose a different DIGCRAWL_CDP_PORT"
-    }
+    Stop-ManagedService
 }
 
 function Ensure-Directories {
     New-Item -ItemType Directory -Force -Path $UserDataDir, $LogDir | Out-Null
 }
 
-function Import-ServiceConfig([string]$Path = $ServiceConfigPath, [bool]$PreserveExplicitRuntime = $false) {
+function Import-ServiceConfig([string]$Path = $ServiceConfigPath) {
     if (-not $Path -or -not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $false }
     try {
         $saved = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json -ErrorAction Stop
@@ -149,10 +163,10 @@ function Import-ServiceConfig([string]$Path = $ServiceConfigPath, [bool]$Preserv
             Fail "service configuration at $Path names a different service"
         }
         if (-not $ServiceNameExplicit -and -not [string]::IsNullOrWhiteSpace([string]$saved.service_name)) { $script:ServiceName = [string]$saved.service_name }
-        if ((-not $PreserveExplicitRuntime -or -not $PortExplicit) -and $null -ne $saved.port) { $script:Port = [int]$saved.port }
-        if ((-not $PreserveExplicitRuntime -or -not $UserDataDirExplicit) -and -not [string]::IsNullOrWhiteSpace([string]$saved.user_data_dir)) { $script:UserDataDir = [string]$saved.user_data_dir }
-        if ((-not $PreserveExplicitRuntime -or -not $LogDirExplicit) -and -not [string]::IsNullOrWhiteSpace([string]$saved.log_dir)) { $script:LogDir = [string]$saved.log_dir }
-        if ((-not $PreserveExplicitRuntime -or -not $ChromePathExplicit) -and -not [string]::IsNullOrWhiteSpace([string]$saved.chrome_path)) { $env:DIGCRAWL_CHROME_PATH = [string]$saved.chrome_path }
+        if ($null -ne $saved.port) { $script:Port = [int]$saved.port }
+        if (-not [string]::IsNullOrWhiteSpace([string]$saved.user_data_dir)) { $script:UserDataDir = [string]$saved.user_data_dir }
+        if (-not [string]::IsNullOrWhiteSpace([string]$saved.log_dir)) { $script:LogDir = [string]$saved.log_dir }
+        if (-not [string]::IsNullOrWhiteSpace([string]$saved.chrome_path)) { $env:DIGCRAWL_CHROME_PATH = [string]$saved.chrome_path }
         Validate-ServiceName
         Validate-Config
         return $true
@@ -161,11 +175,35 @@ function Import-ServiceConfig([string]$Path = $ServiceConfigPath, [bool]$Preserv
     }
 }
 
-function Resolve-ManagedService([bool]$PreserveExplicitRuntime = $false) {
+function Apply-ExplicitRuntimeOverrides {
+    if ($PortExplicit) { $script:Port = $ExplicitPort }
+    if ($UserDataDirExplicit) { $script:UserDataDir = $ExplicitUserDataDir }
+    if ($LogDirExplicit) { $script:LogDir = $ExplicitLogDir }
+    if ($ChromePathExplicit) { $env:DIGCRAWL_CHROME_PATH = $ExplicitChromePath }
+}
+
+function Validate-ExplicitRuntimeOverrides {
+    $savedPort = $Port
+    $savedUserDataDir = $UserDataDir
+    $savedLogDir = $LogDir
+    $hadChromePath = Test-Path Env:DIGCRAWL_CHROME_PATH
+    $savedChromePath = $env:DIGCRAWL_CHROME_PATH
+    try {
+        Apply-ExplicitRuntimeOverrides
+        Validate-Config
+    } finally {
+        $script:Port = $savedPort
+        $script:UserDataDir = $savedUserDataDir
+        $script:LogDir = $savedLogDir
+        if ($hadChromePath) { $env:DIGCRAWL_CHROME_PATH = $savedChromePath } else { Remove-Item Env:DIGCRAWL_CHROME_PATH -ErrorAction SilentlyContinue }
+    }
+}
+
+function Resolve-ManagedService {
     Validate-ServiceName
     if ($ServiceNameExplicit) {
         $script:ServiceConfigPath = Get-ServiceConfigPath
-        Import-ServiceConfig $ServiceConfigPath $PreserveExplicitRuntime | Out-Null
+        Import-ServiceConfig $ServiceConfigPath | Out-Null
         return
     }
     if (Test-Path -LiteralPath $ActiveServicePath -PathType Leaf) {
@@ -173,7 +211,7 @@ function Resolve-ManagedService([bool]$PreserveExplicitRuntime = $false) {
         $script:ServiceName = $activeName
         Validate-ServiceName
         $script:ServiceConfigPath = Get-ServiceConfigPath
-        if (-not (Import-ServiceConfig $ServiceConfigPath $PreserveExplicitRuntime)) { Fail "active service metadata is missing at $ServiceConfigPath; reinstall the CDP browser service" }
+        if (-not (Import-ServiceConfig $ServiceConfigPath)) { Fail "active service metadata is missing at $ServiceConfigPath; reinstall the CDP browser service" }
         if ($ServiceName -ne $activeName) { Fail "active service metadata at $ServiceConfigPath names a different service; reinstall the CDP browser service" }
         return
     }
@@ -181,11 +219,11 @@ function Resolve-ManagedService([bool]$PreserveExplicitRuntime = $false) {
     # metadata existed. A later install adopts it into the new state layout.
     if (Test-Path -LiteralPath $LegacyServiceConfigPath -PathType Leaf) {
         $script:ServiceConfigPath = $LegacyServiceConfigPath
-        Import-ServiceConfig $ServiceConfigPath $PreserveExplicitRuntime | Out-Null
+        Import-ServiceConfig $ServiceConfigPath | Out-Null
         return
     }
     $script:ServiceConfigPath = Get-ServiceConfigPath
-    Import-ServiceConfig $ServiceConfigPath $PreserveExplicitRuntime | Out-Null
+    Import-ServiceConfig $ServiceConfigPath | Out-Null
 }
 
 function Save-ServiceConfig([string]$ChromePath) {
@@ -271,6 +309,9 @@ function Install-Service {
     Validate-Config
     Validate-ServiceName
     Prepare-Install
+    Apply-ExplicitRuntimeOverrides
+    Validate-Config
+    Validate-ServiceName
     Ensure-Directories
     $chrome = Get-ChromePath
     # Task Scheduler does not inherit the installer's transient environment.
@@ -278,23 +319,19 @@ function Install-Service {
     # profile so every later task start uses the same source of truth.
     Save-ServiceConfig $chrome
     # The scheduled Task executes a fresh PowerShell process without this
-    # installer's environment. Publish the active identity before starting it
-    # so that process resolves exactly the configuration saved above.
+    # installer's environment. Publish the active identity before a later
+    # explicit start so that process resolves exactly the configuration saved
+    # above.
     Set-ActiveService
     $powershell = (Get-Command powershell.exe -ErrorAction Stop).Source
     $arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$ScriptPath`" run-foreground"
     $action = New-ScheduledTaskAction -Execute $powershell -Argument $arguments
-    $taskUser = if ($env:USERDOMAIN) { "$env:USERDOMAIN\$env:USERNAME" } else { $env:USERNAME }
-    $trigger = New-ScheduledTaskTrigger -AtLogOn -User $taskUser
-    $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit (New-TimeSpan -Seconds 0)
-    Register-ScheduledTask -TaskName $ServiceName -Action $action -Trigger $trigger -Settings $settings -Description 'Dedicated local Chrome CDP browser for DigCrawl' -Force | Out-Null
-    Start-ScheduledTask -TaskName $ServiceName
-    for ($attempt = 1; $attempt -le 15; $attempt++) {
-        if (Test-ServiceCdpReady) { break }
-        Start-Sleep -Seconds 1
-    }
-    if (-not (Test-ServiceCdpReady)) { Fail 'CDP endpoint did not become ready within 15 seconds with the configured service profile' }
-    Write-Output "installed CDP browser Scheduled Task: $ServiceName"
+    # Register-ScheduledTask permits an action without a trigger. The task is
+    # then runnable only through the explicit `start` command, and a Chrome
+    # crash cannot cause Task Scheduler to create another browser process.
+    $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -RestartCount 0 -ExecutionTimeLimit (New-TimeSpan -Seconds 0)
+    Register-ScheduledTask -TaskName $ServiceName -Action $action -Settings $settings -Description 'Dedicated local Chrome CDP browser for DigCrawl' -Force | Out-Null
+    Write-Output "installed CDP browser Scheduled Task: $ServiceName; run start to launch it"
 }
 
 function Start-Service {
@@ -316,10 +353,7 @@ function Restart-ManagedService {
     # Keep restart on the same lifecycle boundary as install: task stop and
     # Chrome termination are asynchronous, so a replacement must not race the
     # old process for its CDP port or persistent profile.
-    Stop-Service
-    if (-not (Wait-CdpStopped)) {
-        Fail "CDP endpoint did not stop within 10 seconds"
-    }
+    Stop-ManagedService
     Start-Service
 }
 
@@ -352,22 +386,25 @@ function Show-Logs {
 # CIM/Task Scheduler commands. Production execution never sets this variable.
 if ($env:DIGCRAWL_CDP_BROWSER_SERVICE_TEST -eq '1') { return }
 
-Resolve-ManagedService ($Command -eq 'install')
+Resolve-ManagedService
 
 if ($Command -eq 'install') {
     # Existing v1 installations used one global file. Reinstalling adopts the
     # selected service into the per-service state directory without deleting
     # another legacy/default task that might still be intentionally present.
     $script:ServiceConfigPath = Get-ServiceConfigPath
+    # Validate caller overrides before stopping the current browser, then defer
+    # applying them until Install-Service has retired the saved old process.
+    Validate-ExplicitRuntimeOverrides
 }
 
 switch ($Command) {
-    'install' { Install-Service; Show-Status }
+    'install' { Install-Service }
     'start' { Start-Service; Show-Status }
-    'stop' { Stop-Service }
+    'stop' { Stop-ManagedService }
     'restart' { Restart-ManagedService }
     'status' { Show-Status }
     'logs' { Show-Logs }
-    'uninstall' { Stop-Service; Unregister-ScheduledTask -TaskName $ServiceName -Confirm:$false -ErrorAction SilentlyContinue; Remove-Item -LiteralPath $ServiceConfigPath -Force -ErrorAction SilentlyContinue; Remove-ActiveServiceIfCurrent }
+    'uninstall' { Stop-ManagedService; Unregister-ScheduledTask -TaskName $ServiceName -Confirm:$false -ErrorAction SilentlyContinue; Remove-Item -LiteralPath $ServiceConfigPath -Force -ErrorAction SilentlyContinue; Remove-ActiveServiceIfCurrent }
     'run-foreground' { Run-Foreground }
 }

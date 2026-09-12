@@ -36,6 +36,13 @@ USER_DATA_DIR="${DIGCRAWL_CDP_USER_DATA_DIR:-${HOME}/.local/share/digcrawl/cdp-b
 LOG_DIR="${DIGCRAWL_CDP_LOG_DIR:-${HOME}/.local/state/digcrawl/cdp-browser}"
 CHROME_PATH="${DIGCRAWL_CHROME_PATH:-}"
 SELF_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/$(basename "${BASH_SOURCE[0]}")"
+# Keep invocation-supplied runtime values separate from the mutable launch
+# configuration. A reconfiguration must stop the old browser using its saved
+# port/profile before these values become the new definition.
+EXPLICIT_PORT_VALUE="${PORT}"
+EXPLICIT_USER_DATA_DIR_VALUE="${USER_DATA_DIR}"
+EXPLICIT_LOG_DIR_VALUE="${LOG_DIR}"
+EXPLICIT_CHROME_PATH_VALUE="${CHROME_PATH}"
 
 usage() {
   cat <<EOF
@@ -174,7 +181,28 @@ load_service_metadata() {
   validate_service_identity
 }
 
+apply_explicit_runtime_overrides() {
+  if (( PORT_EXPLICIT )); then PORT="${EXPLICIT_PORT_VALUE}"; fi
+  if (( USER_DATA_DIR_EXPLICIT )); then USER_DATA_DIR="${EXPLICIT_USER_DATA_DIR_VALUE}"; fi
+  if (( LOG_DIR_EXPLICIT )); then LOG_DIR="${EXPLICIT_LOG_DIR_VALUE}"; fi
+  if (( CHROME_PATH_EXPLICIT )); then CHROME_PATH="${EXPLICIT_CHROME_PATH_VALUE}"; fi
+}
+
+validate_explicit_runtime_overrides() {
+  local saved_port="${PORT}" saved_user_data_dir="${USER_DATA_DIR}" saved_log_dir="${LOG_DIR}" saved_chrome_path="${CHROME_PATH}"
+  apply_explicit_runtime_overrides
+  validate_config
+  if (( USER_DATA_DIR_EXPLICIT )); then validate_metadata_value "DIGCRAWL_CDP_USER_DATA_DIR" "${USER_DATA_DIR}"; fi
+  if (( LOG_DIR_EXPLICIT )); then validate_metadata_value "DIGCRAWL_CDP_LOG_DIR" "${LOG_DIR}"; fi
+  if (( CHROME_PATH_EXPLICIT )); then validate_metadata_value "DIGCRAWL_CHROME_PATH" "${CHROME_PATH}"; fi
+  PORT="${saved_port}"
+  USER_DATA_DIR="${saved_user_data_dir}"
+  LOG_DIR="${saved_log_dir}"
+  CHROME_PATH="${saved_chrome_path}"
+}
+
 load_managed_service() {
+  local load_default_metadata="${1:-0}"
   local target active identity require_metadata=0
   validate_service_identity
   case "${OS_NAME}" in
@@ -198,6 +226,13 @@ load_managed_service() {
       target="$(metadata_path)"
       require_metadata=1
     fi
+  fi
+  # An interrupted legacy migration can leave the default definition's
+  # metadata behind without an active-service pointer. It still describes the
+  # same default identity, so prefer it to silently resetting its port/profile
+  # during a later bare install.
+  if [[ -z "${target}" && "${load_default_metadata}" == "1" ]]; then
+    target="$(metadata_path)"
   fi
   # Services created before metadata support remain operable with their
   # original default/environment configuration. Reinstall once to adopt the
@@ -251,7 +286,7 @@ cdp_url() {
 cdp_ready() {
   command -v curl >/dev/null 2>&1 || fail "curl is required to check the CDP endpoint"
   local version
-  if ! version="$(curl --fail --silent --show-error --max-time 2 "$(cdp_url)")"; then
+  if ! version="$(curl --fail --silent --max-time 2 "$(cdp_url)")"; then
     return 1
   fi
   # A bare HTTP 200 is not enough: another local service could occupy the
@@ -446,16 +481,16 @@ install_macos() {
     <key>DIGCRAWL_CDP_LOG_DIR</key><string>$(xml_escape "${LOG_DIR}")</string>
     <key>DIGCRAWL_CHROME_PATH</key><string>$(xml_escape "${chrome}")</string>
   </dict>
-  <key>RunAtLoad</key><true/><key>KeepAlive</key><true/>
   <key>StandardOutPath</key><string>$(xml_escape "${LOG_DIR}/stdout.log")</string>
   <key>StandardErrorPath</key><string>$(xml_escape "${LOG_DIR}/stderr.log")</string>
 </dict></plist>
 EOF
   local domain="gui/$(id -u)"
-  launchctl bootout "${domain}/${SERVICE_LABEL}" >/dev/null 2>&1 || true
   launchctl bootstrap "${domain}" "${plist}"
-  launchctl kickstart -k "${domain}/${SERVICE_LABEL}"
-  echo "installed CDP browser launchd service: ${plist}"
+  # A CDP browser must be an explicit user choice. In particular, do not set
+  # RunAtLoad or KeepAlive here: a headless Chrome that starts at login can be
+  # treated by macOS as the user's running Chrome application.
+  echo "installed CDP browser launchd service: ${plist}; run $0 start to launch it"
 }
 
 start_macos() {
@@ -473,9 +508,9 @@ stop_macos() {
   target="${domain}/${SERVICE_LABEL}"
   plist="$(mac_plist_path)"
 
-  # A raw `kill` only asks launchd to apply KeepAlive and restart Chrome. Stop
-  # the manager first. Do not hide a bootout failure: otherwise the command can
-  # report success while launchd continues to own and restart the browser.
+  # Older installations used KeepAlive, so stop the manager before its Chrome
+  # child. Do not hide a bootout failure: otherwise an upgraded installation
+  # can report success while launchd continues to own and restart the browser.
   if ! launchctl_service_is_loaded "${target}"; then
     return 0
   fi
@@ -486,9 +521,16 @@ stop_macos() {
   else
     fail "failed to unregister ${SERVICE_LABEL} from launchd; Chrome may be restarted automatically"
   fi
-  if launchctl_service_is_loaded "${target}"; then
-    fail "${SERVICE_LABEL} is still registered with launchd after stop"
+  if wait_for_launchctl_service_to_unload "${target}"; then
+    return 0
   fi
+  # `bootout gui/<uid>/<label>` can acknowledge before launchd has removed an
+  # older job definition. Retry through the plist form only after that bounded
+  # wait, then require the manager to actually forget the job.
+  if [[ -f "${plist}" ]] && launchctl bootout "${domain}" "${plist}" >/dev/null 2>&1 && wait_for_launchctl_service_to_unload "${target}"; then
+    return 0
+  fi
+  fail "${SERVICE_LABEL} is still registered with launchd after stop"
 }
 
 launchctl_service_is_loaded() {
@@ -507,6 +549,20 @@ launchctl_service_is_loaded() {
   fail "unable to inspect ${SERVICE_LABEL} in launchd (launchctl exit ${query_exit}): ${output}"
 }
 
+wait_for_launchctl_service_to_unload() {
+  local target="$1" attempt
+  # launchctl can report a just-booted-out job for a brief propagation window.
+  # Waiting here makes `stop` a reliable lifecycle boundary without treating a
+  # manager communication failure as a successful unregister.
+  for attempt in $(seq 1 10); do
+    if ! launchctl_service_is_loaded "${target}"; then
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
+}
+
 stop_service() {
   case "${OS_NAME}" in
     Darwin) stop_macos ;;
@@ -514,8 +570,8 @@ stop_service() {
     *) fail "unsupported OS: ${OS_NAME}" ;;
   esac
   # Do not claim that Chrome is stopped until its dedicated CDP listener has
-  # disappeared. This avoids returning before a KeepAlive restart race has
-  # settled, and makes `stop` safe for callers to rely on programmatically.
+  # disappeared. This avoids returning before an old manager's restart race
+  # has settled, and makes `stop` safe for callers to rely on programmatically.
   wait_for_cdp_to_stop || fail "CDP endpoint did not stop within 10 seconds"
 }
 
@@ -563,6 +619,12 @@ install_linux() {
   ensure_private_dirs "${USER_DATA_DIR}" "${LOG_DIR}"
   local unit
   unit="$(linux_unit_path)"
+  # Remove the enablement left by the old persistent unit before replacing it.
+  # A stale Wants= symlink would otherwise preserve login startup even though
+  # the new unit intentionally has no [Install] section.
+  if [[ -f "${unit}" ]] && grep -Fq 'WantedBy=' "${unit}"; then
+    systemctl --user disable "${SERVICE_NAME}" || fail "failed to disable the previous ${SERVICE_NAME} auto-start unit"
+  fi
   cat >"${unit}" <<EOF
 [Unit]
 Description=DigCrawl dedicated Chrome CDP browser
@@ -570,28 +632,15 @@ Description=DigCrawl dedicated Chrome CDP browser
 [Service]
 Type=simple
 ExecStart=$(systemd_quote "${SELF_PATH}") run-foreground
-Restart=always
-RestartSec=2
 Environment=$(systemd_quote "DIGCRAWL_CDP_PORT=${PORT}")
 Environment=$(systemd_quote "DIGCRAWL_CDP_USER_DATA_DIR=${USER_DATA_DIR}")
 Environment=$(systemd_quote "DIGCRAWL_CDP_LOG_DIR=${LOG_DIR}")
 Environment=$(systemd_quote "DIGCRAWL_CHROME_PATH=${chrome}")
 StandardOutput=journal
 StandardError=journal
-
-[Install]
-WantedBy=default.target
 EOF
   systemctl --user daemon-reload
-  systemctl --user enable --now "${SERVICE_NAME}"
-  if command -v loginctl >/dev/null 2>&1; then
-    local linger
-    linger="$(loginctl show-user "$(id -un)" --property=Linger --value 2>/dev/null || true)"
-    if [[ "${linger}" != "yes" ]]; then
-      echo "warning: this is a systemd user service and starts after login; for unattended startup run: loginctl enable-linger $(id -un)" >&2
-    fi
-  fi
-  echo "installed CDP browser systemd user service: ${unit}"
+  echo "installed CDP browser systemd user service: ${unit}; run $0 start to launch it"
 }
 
 start_linux() { systemctl --user start "${SERVICE_NAME}"; }
@@ -657,7 +706,9 @@ uninstall_linux() {
   local unit
   unit="$(linux_unit_path)"
   if [[ -f "${unit}" ]]; then
-    systemctl --user disable "${SERVICE_NAME}" || fail "failed to disable ${SERVICE_NAME}"
+    if grep -Fq 'WantedBy=' "${unit}"; then
+      systemctl --user disable "${SERVICE_NAME}" || fail "failed to disable ${SERVICE_NAME}"
+    fi
     rm -f "${unit}"
   fi
   systemctl --user daemon-reload || fail "failed to reload the user systemd manager"
@@ -681,7 +732,15 @@ main() {
   # `run-foreground` is executed by the service manager with the validated
   # launch environment already embedded in its definition. Every operator
   # command instead resolves the active installed service before acting.
-  if [[ "${command}" != "install" && "${command}" != "run-foreground" ]]; then
+  if [[ "${command}" == "install" ]]; then
+    # A bare reinstall updates the current active definition, including a
+    # custom identity, so its old auto-start wrapper is the one that gets
+    # disabled. Keep the saved runtime configuration until that old browser
+    # has fully exited; explicit runtime values are applied immediately before
+    # writing the replacement definition below.
+    load_managed_service 1
+    validate_explicit_runtime_overrides
+  elif [[ "${command}" != "run-foreground" ]]; then
     load_managed_service
   fi
   case "${command}" in
@@ -689,13 +748,14 @@ main() {
       validate_config
       validate_service_identity
       prepare_install
+      apply_explicit_runtime_overrides
+      validate_config
+      validate_service_identity
       case "${OS_NAME}" in Darwin) install_macos ;; Linux) install_linux ;; *) fail "unsupported OS: ${OS_NAME}" ;; esac
-      # Persist the selected identity after the platform manager accepted the
-      # service. If browser readiness later fails, the saved record still lets
-      # the operator inspect, stop, or uninstall the partially installed unit.
+      # Installation only records an explicit service configuration. Browser
+      # startup is a separate, user-requested action so a login or a Chrome
+      # crash can never take over the ordinary Chrome application.
       save_service_metadata
-      wait_for_cdp || fail "CDP endpoint did not become ready within 15 seconds"
-      status_service
       activate_service
       ;;
     start)
