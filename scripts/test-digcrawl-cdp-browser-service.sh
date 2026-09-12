@@ -54,7 +54,7 @@ bash -c '
         return 3
         ;;
       *" stop "*) test -f "$test_home/registered" || return 4; rm -f "$test_home/ready" ;;
-      *enable*) touch "$test_home/registered" "$test_home/ready" ;;
+      *" start "*) touch "$test_home/registered" "$test_home/ready" ;;
       *disable*) rm -f "$test_home/registered" "$test_home/ready" ;;
     esac
   }
@@ -65,6 +65,35 @@ bash -c '
   unit="$test_home/.config/systemd/user/digcrawl-cdp-browser.service"
   test -f "$unit"
   grep -F "Environment=\"DIGCRAWL_CHROME_PATH=$TEST_ROOT/Chrome With Space\"" "$unit"
+  ! grep -Fq "Restart=" "$unit"
+  ! grep -Fq "WantedBy=" "$unit"
+  test ! -e "$test_home/ready"
+  HOME="$test_home" "$SERVICE_SCRIPT" start
+  test -e "$test_home/ready"
+'
+
+# Reinstalling over the previous enabled unit must remove its default-target
+# symlink before writing the manual-only unit.
+bash -c '
+  set -euo pipefail
+  uname() { printf "Linux\\n"; }
+  test_home="$TEST_ROOT/linux-migration-home"
+  export test_home
+  mkdir -p "$test_home/.config/systemd/user"
+  printf "%s\\n" "[Install]" "WantedBy=default.target" > "$test_home/.config/systemd/user/digcrawl-cdp-browser.service"
+  systemctl() {
+    case "$*" in
+      *is-active*) return 4 ;;
+      *disable*) touch "$test_home/legacy-autostart-disabled" ;;
+    esac
+  }
+  curl() { return 22; }
+  ps() { return 0; }
+  export -f uname systemctl curl ps
+  HOME="$test_home" DIGCRAWL_CHROME_PATH="$TEST_ROOT/Chrome With Space" "$SERVICE_SCRIPT" install
+  unit="$test_home/.config/systemd/user/digcrawl-cdp-browser.service"
+  test -e "$test_home/legacy-autostart-disabled"
+  ! grep -Fq "WantedBy=" "$unit"
 '
 
 # Auto-discovery must update the persisted state as well as the generated unit;
@@ -82,7 +111,7 @@ bash -c '
         return 3
         ;;
       *" stop "*) test -f "$test_home/registered" || return 4; rm -f "$test_home/ready" ;;
-      *enable*) touch "$test_home/registered" "$test_home/ready" ;;
+      *" start "*) touch "$test_home/registered" "$test_home/ready" ;;
       *disable*) rm -f "$test_home/registered" "$test_home/ready" ;;
     esac
   }
@@ -92,6 +121,7 @@ bash -c '
   HOME="$test_home" PATH="$TEST_ROOT/bin:$PATH" "$SERVICE_SCRIPT" install
   metadata="$test_home/.local/state/digcrawl/cdp-browser-services/digcrawl-cdp-browser.tsv"
   grep -F "chrome_path	$TEST_ROOT/bin/google-chrome" "$metadata"
+  test ! -e "$test_home/ready"
 '
 
 # Service identity and the complete launch configuration must survive a fresh
@@ -101,7 +131,8 @@ bash -c '
   set -euo pipefail
   uname() { printf "Linux\\n"; }
   test_home="$TEST_ROOT/linux-custom-home"
-  export test_home
+  managed_port=19432
+  export test_home managed_port
   systemctl() {
     case "$*" in
       *is-active*)
@@ -110,16 +141,31 @@ bash -c '
         return 3
         ;;
       *" stop "*) test -f "$test_home/registered" || return 4; rm -f "$test_home/ready" ;;
-      *enable*) touch "$test_home/registered" "$test_home/ready" ;;
+      *" start "*) touch "$test_home/registered" "$test_home/ready" ;;
       *disable*) rm -f "$test_home/registered" "$test_home/ready" ;;
     esac
   }
   curl() { test -f "$test_home/ready" || return 22; printf "{\"webSocketDebuggerUrl\":\"ws://127.0.0.1:19432/devtools/browser/test\"}"; }
-  ps() { test -f "$test_home/ready" || return 0; printf "%s\n" "chrome --remote-debugging-port=19432 --user-data-dir=$test_home/.local/share/digcrawl/cdp-browser --no-first-run --mute-audio"; }
+  ps() { test -f "$test_home/ready" || return 0; printf "%s\n" "chrome --remote-debugging-port=$managed_port --user-data-dir=$test_home/.local/share/digcrawl/cdp-browser --no-first-run --mute-audio"; }
   export -f uname systemctl curl ps
   HOME="$test_home" DIGCRAWL_CDP_BROWSER_SERVICE_NAME="digcrawl-video" DIGCRAWL_CDP_PORT=19432 DIGCRAWL_CHROME_PATH="$TEST_ROOT/Chrome With Space" "$SERVICE_SCRIPT" install
-  HOME="$test_home" "$SERVICE_SCRIPT" status | grep -F "127.0.0.1:19432"
-  HOME="$test_home" DIGCRAWL_CDP_PORT=9323 "$SERVICE_SCRIPT" status | grep -F "127.0.0.1:19432"
+  test ! -e "$test_home/ready"
+  # A bare reinstall must retain the active custom identity. Otherwise an old
+  # custom auto-start unit would remain installed while a new default unit is
+  # created, allowing Chrome to reappear after login.
+  HOME="$test_home" "$SERVICE_SCRIPT" install
+  test -f "$test_home/.config/systemd/user/digcrawl-video.service"
+  test ! -e "$test_home/.config/systemd/user/digcrawl-cdp-browser.service"
+  grep -F "DIGCRAWL_CDP_PORT=19432" "$test_home/.config/systemd/user/digcrawl-video.service"
+  grep -Fx "digcrawl-video" "$test_home/.local/state/digcrawl/cdp-browser-services/active-service"
+  # Explicit runtime settings modify that same selected service rather than
+  # being discarded while loading its saved launch configuration.
+  HOME="$test_home" DIGCRAWL_CDP_PORT=19434 "$SERVICE_SCRIPT" install
+  grep -F "DIGCRAWL_CDP_PORT=19434" "$test_home/.config/systemd/user/digcrawl-video.service"
+  managed_port=19434
+  HOME="$test_home" "$SERVICE_SCRIPT" start
+  HOME="$test_home" "$SERVICE_SCRIPT" status | grep -F "127.0.0.1:19434"
+  HOME="$test_home" DIGCRAWL_CDP_PORT=9323 "$SERVICE_SCRIPT" status | grep -F "127.0.0.1:19434"
   HOME="$test_home" "$SERVICE_SCRIPT" uninstall
   test ! -e "$test_home/.config/systemd/user/digcrawl-video.service"
   test ! -e "$test_home/.local/state/digcrawl/cdp-browser-services/active-service"
@@ -129,21 +175,43 @@ bash -c '
   set -euo pipefail
   uname() { printf "Darwin\\n"; }
   test_home="$TEST_ROOT/macos-custom-home"
-  export test_home
+  managed_port=19433
+  export test_home managed_port
   launchctl() {
     case "$*" in
       *bootstrap*) touch "$test_home/registered" ;;
-      *kickstart*) touch "$test_home/registered" "$test_home/ready" ;;
+      *kickstart*) touch "$test_home/registered" "$test_home/ready" "$test_home/chrome" ;;
       *bootout*) rm -f "$test_home/registered" "$test_home/ready" ;;
       *print*) test -f "$test_home/registered" && return 0; echo "Could not find service" >&2; return 113 ;;
     esac
   }
   curl() { test -f "$test_home/ready" || return 22; printf "{\"webSocketDebuggerUrl\":\"ws://127.0.0.1:19433/devtools/browser/test\"}"; }
-  ps() { test -f "$test_home/ready" || return 0; printf "%s\n" "Google Chrome --remote-debugging-port=19433 --user-data-dir=$test_home/.local/share/digcrawl/cdp-browser --no-first-run --mute-audio"; }
-  export -f uname launchctl curl ps
+  ps() { test -f "$test_home/chrome" || return 0; printf "%s\n" "Google Chrome --remote-debugging-port=$managed_port --user-data-dir=$test_home/.local/share/digcrawl/cdp-browser --no-first-run --mute-audio"; }
+  # launchd unregisters before its Chrome child necessarily releases the old
+  # profile. An install that changes the port must wait for this old process,
+  # not probe only the replacement port.
+  sleep() { rm -f "$test_home/chrome"; }
+  export -f uname launchctl curl ps sleep
   HOME="$test_home" DIGCRAWL_CDP_BROWSER_SERVICE_LABEL="com.digcrawl.video" DIGCRAWL_CDP_PORT=19433 DIGCRAWL_CHROME_PATH="$TEST_ROOT/Chrome With Space" "$SERVICE_SCRIPT" install
-  HOME="$test_home" "$SERVICE_SCRIPT" status | grep -F "127.0.0.1:19433"
-  HOME="$test_home" DIGCRAWL_CDP_PORT=9323 "$SERVICE_SCRIPT" status | grep -F "127.0.0.1:19433"
+  plist="$test_home/Library/LaunchAgents/com.digcrawl.video.plist"
+  test ! -e "$test_home/ready"
+  ! grep -Fq "RunAtLoad" "$plist"
+  ! grep -Fq "KeepAlive" "$plist"
+  # macOS uses the label as its service identity, but must follow the same
+  # active-service migration rule as Linux on a bare install.
+  HOME="$test_home" "$SERVICE_SCRIPT" install
+  test -f "$plist"
+  test ! -e "$test_home/Library/LaunchAgents/com.digcrawl.cdp-browser.plist"
+  grep -F "DIGCRAWL_CDP_PORT</key><string>19433" "$plist"
+  grep -Fx "com.digcrawl.video" "$test_home/Library/Application Support/DigCrawl/cdp-browser-services/active-service"
+  HOME="$test_home" "$SERVICE_SCRIPT" start
+  HOME="$test_home" DIGCRAWL_CDP_PORT=19434 "$SERVICE_SCRIPT" install
+  test ! -e "$test_home/chrome"
+  grep -F "DIGCRAWL_CDP_PORT</key><string>19434" "$plist"
+  managed_port=19434
+  HOME="$test_home" "$SERVICE_SCRIPT" start
+  HOME="$test_home" "$SERVICE_SCRIPT" status | grep -F "127.0.0.1:19434"
+  HOME="$test_home" DIGCRAWL_CDP_PORT=9323 "$SERVICE_SCRIPT" status | grep -F "127.0.0.1:19434"
   HOME="$test_home" "$SERVICE_SCRIPT" uninstall
   test ! -e "$test_home/Library/LaunchAgents/com.digcrawl.video.plist"
   test ! -e "$test_home/Library/Application Support/DigCrawl/cdp-browser-services/active-service"
@@ -169,6 +237,11 @@ bash -c '
   # completes its graceful exit.
   sleep() { rm -f "$test_home/chrome"; }
   export -f uname launchctl curl ps sleep
+  # A reinstall must migrate an existing login-starting job rather than leave
+  # its old plist or loaded state to revive Chrome after the next login.
+  mkdir -p "$test_home/Library/LaunchAgents"
+  printf "%s\\n" "<plist><dict><key>RunAtLoad</key><true/><key>KeepAlive</key><true/></dict></plist>" > "$test_home/Library/LaunchAgents/com.digcrawl.cdp-browser.plist"
+  touch "$test_home/registered" "$test_home/ready" "$test_home/chrome"
   HOME="$test_home" DIGCRAWL_CHROME_PATH="$TEST_ROOT/Chrome With Space" "$SERVICE_SCRIPT" install
   plist="$test_home/Library/LaunchAgents/com.digcrawl.cdp-browser.plist"
   launcher="$test_home/Library/Application Support/DigCrawl/bin/com.digcrawl.cdp-browser.sh"
@@ -177,7 +250,11 @@ bash -c '
   cmp -s "$SERVICE_SCRIPT" "$launcher"
   grep -F "<string>$launcher</string><string>run-foreground</string>" "$plist"
   grep -F "<key>DIGCRAWL_CHROME_PATH</key><string>$TEST_ROOT/Chrome With Space</string>" "$plist"
+  test ! -e "$test_home/ready"
+  ! grep -Fq "RunAtLoad" "$plist"
+  ! grep -Fq "KeepAlive" "$plist"
   if command -v plutil >/dev/null 2>&1; then plutil -lint "$plist"; fi
+  HOME="$test_home" "$SERVICE_SCRIPT" start
   printf "stale" > "$launcher"
   HOME="$test_home" "$SERVICE_SCRIPT" status 2>&1 | grep -F "staged launcher differs"
   HOME="$test_home" "$SERVICE_SCRIPT" restart
@@ -186,6 +263,40 @@ bash -c '
   test ! -e "$test_home/registered"
   test ! -e "$test_home/ready"
   test ! -e "$test_home/chrome"
+'
+
+# launchctl can briefly acknowledge bootout while still reporting the old job.
+# Stop must wait for that state to converge instead of returning a false error.
+bash -c '
+  set -euo pipefail
+  uname() { printf "Darwin\\n"; }
+  test_home="$TEST_ROOT/macos-delayed-bootout-home"
+  export test_home
+  launchctl() {
+    case "$*" in
+      *bootstrap*) touch "$test_home/registered" ;;
+      *bootout*) touch "$test_home/bootout-requested" ;;
+      *print*)
+        if ! test -f "$test_home/registered"; then echo "Could not find service" >&2; return 113; fi
+        if test -f "$test_home/bootout-requested"; then
+          if test -f "$test_home/bootout-observed"; then
+            rm -f "$test_home/registered"
+            echo "Could not find service" >&2
+            return 113
+          fi
+          touch "$test_home/bootout-observed"
+        fi
+        return 0
+        ;;
+    esac
+  }
+  curl() { return 22; }
+  ps() { return 0; }
+  sleep() { :; }
+  export -f uname launchctl curl ps sleep
+  HOME="$test_home" DIGCRAWL_CHROME_PATH="$TEST_ROOT/Chrome With Space" "$SERVICE_SCRIPT" install
+  HOME="$test_home" "$SERVICE_SCRIPT" stop
+  test ! -e "$test_home/registered"
 '
 
 # A launchd query failure is not proof that the KeepAlive job is absent.

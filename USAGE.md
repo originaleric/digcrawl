@@ -169,12 +169,13 @@ go install ./cmd/digcollect
 | `ProxyURL` | 浏览器代理地址，页面 fetch/API fallback 共用 |
 | `ExtraArgs` | 额外 Chromium 启动参数；适合配置 `--single-process`、`--no-zygote`、禁用 crashpad 等 headless 兼容参数 |
 
-### 持久 CDP 浏览器服务
+### 按需 CDP 浏览器服务
 
-如果本机需要长期使用 `CDPConnectExisting: true`，可使用专用服务启动系统 Chrome，而不是把 `ChromePath` 指向 Playwright 的版本化缓存目录：
+如果本机需要使用 `CDPConnectExisting: true`，可使用专用服务按需启动系统 Chrome，而不是把 `ChromePath` 指向 Playwright 的版本化缓存目录：
 
 ```bash
 ./scripts/digcrawl-cdp-browser-service.sh install
+./scripts/digcrawl-cdp-browser-service.sh start
 ./scripts/digcrawl-cdp-browser-service.sh status
 ```
 
@@ -182,10 +183,11 @@ Windows 使用 PowerShell 与当前用户的 Task Scheduler：
 
 ```powershell
 .\scripts\digcrawl-cdp-browser-service.ps1 install
+.\scripts\digcrawl-cdp-browser-service.ps1 start
 .\scripts\digcrawl-cdp-browser-service.ps1 status
 ```
 
-Bash 脚本在 macOS 使用用户级 `launchd`、在 Linux 使用 `systemd --user`；PowerShell 脚本在 Windows 使用 Task Scheduler。三者都会在异常退出后重启，Chrome 只监听 `127.0.0.1`，并使用持久 profile，且以 `--mute-audio` 启动，避免采集页自动播放时从用户设备发声。安装时会把已经验证的 Chrome 可执行路径与端口/profile 配置保存到服务定义，避免后台服务因没有交互式 `PATH` 而找不到浏览器；若主动移动自定义浏览器路径，重新执行一次 `install` 即可更新该定义。macOS 还会将启动脚本的私有副本写入 `~/Library/Application Support/DigCrawl/bin`，避免 LaunchAgent 被系统拒绝执行 `Documents` 等受保护目录中的项目脚本。默认端口为 `9323`，通过 `DIGCRAWL_CDP_PORT`、`DIGCRAWL_CDP_USER_DATA_DIR`、`DIGCRAWL_CDP_LOG_DIR` 和 `DIGCRAWL_CHROME_PATH` 覆盖。Skill profile 对应配置为：
+Bash 脚本在 macOS 使用用户级 `launchd`、在 Linux 使用 `systemd --user`；PowerShell 脚本在 Windows 使用 Task Scheduler。`install` 只保存和注册已验证的 Chrome 路径及端口/profile 配置，**不会**启动 Chrome、在登录后自启，或在 Chrome 退出后重启它；仅显式的 `start` 与 `restart` 会启动专用浏览器。Chrome 只监听 `127.0.0.1`，使用持久 profile，并以 `--mute-audio` 启动，避免采集页自动播放时从用户设备发声。macOS 还会将启动脚本的私有副本写入 `~/Library/Application Support/DigCrawl/bin`，避免 LaunchAgent 被系统拒绝执行 `Documents` 等受保护目录中的项目脚本。默认端口为 `9323`，通过 `DIGCRAWL_CDP_PORT`、`DIGCRAWL_CDP_USER_DATA_DIR`、`DIGCRAWL_CDP_LOG_DIR` 和 `DIGCRAWL_CHROME_PATH` 覆盖。Skill profile 对应配置为：
 
 ```yaml
 LocalBrowser:
@@ -194,9 +196,11 @@ LocalBrowser:
   CDPPort: 9323
 ```
 
-这些均为**当前用户**的服务：macOS 与 Windows 会在该用户登录后运行；Linux 的 `systemd --user` 若需在无人登录、重启后仍启动，需由管理员或该用户执行 `loginctl enable-linger <user>`。CDP 只绑定回环地址，但它仍允许同一台机器上能访问该端口的本地进程控制专用浏览器；不要在不受信任的多用户主机上复用这个 profile。
+这些均为**当前用户**的服务定义，不会在该用户登录或系统重启后自行运行。旧版本使用默认服务身份的自动服务会在重新执行一次 `install` 时被注销/禁用并迁移为按需启动。早于状态记录机制的自定义旧服务没有可安全推断的身份，首次迁移时请显式传入其原有的 label/name；无需手动删除服务。CDP 只绑定回环地址，但它仍允许同一台机器上能访问该端口的本地进程控制专用浏览器；不要在不受信任的多用户主机上复用这个 profile。
 
-服务安装会把服务身份、端口、profile、日志目录和 Chrome 路径写入当前用户的私有状态目录，并记录“活动服务”。因此安装了自定义服务后，后续的 `start`、`status`、`logs`、`restart`、`uninstall` **不必再次传环境变量**。这些管理命令始终使用保存的运行配置，避免 shell 中残留的端口/profile 变量与已安装服务定义不一致；要修改运行配置请重新执行 `install`。macOS 的 `restart` 会同步当前脚本到 launchd 私有副本；`status` 会提示该副本落后于源码，或运行中的服务缺少 `--mute-audio`。安装和状态检查同时验证 CDP 响应与 Chrome 的 `--remote-debugging-port`、`--user-data-dir`：端口被其他 profile 占用时会明确失败，绝不会把对方的登录会话当成 DigCrawl 专用浏览器。macOS 使用 `DIGCRAWL_CDP_BROWSER_SERVICE_LABEL`，Linux/Windows 使用 `DIGCRAWL_CDP_BROWSER_SERVICE_NAME`；如需在多服务之间切换，可仅为该次命令显式传入对应身份。服务身份只接受字母、数字、`.`、`_`、`-`（Windows 额外允许空格），避免服务文件路径歧义。旧版本已安装的服务仍可按原默认值管理；重新执行一次 `install` 即可迁移到持久状态。
+服务安装会把服务身份、端口、profile、日志目录和 Chrome 路径写入当前用户的私有状态目录，并记录“活动服务”。因此安装了自定义服务后，后续的 `start`、`status`、`logs`、`restart`、`uninstall` **不必再次传环境变量**。不带服务身份的 `install` 同样会更新这个活动服务，先注销/禁用它的旧定义，再迁移为按需启动；不会悄然新建默认服务而留下旧服务。若要创建或切换到另一服务，才在该次 `install` 显式传入 `DIGCRAWL_CDP_BROWSER_SERVICE_LABEL`（macOS）或 `DIGCRAWL_CDP_BROWSER_SERVICE_NAME`（Linux/Windows）。端口、profile、日志目录和 Chrome 路径也仅在该次显式提供时覆盖保存值。macOS 的 `restart` 会同步当前脚本到 launchd 私有副本；`status` 会提示该副本落后于源码，或运行中的服务缺少 `--mute-audio`。安装和状态检查同时验证 CDP 响应与 Chrome 的 `--remote-debugging-port`、`--user-data-dir`：端口被其他 profile 占用时会明确失败，绝不会把对方的登录会话当成 DigCrawl 专用浏览器。服务身份只接受字母、数字、`.`、`_`、`-`（Windows 额外允许空格），避免服务文件路径歧义。
+
+使用 `./scripts/digcrawl-cdp-browser-service.sh stop` 会停止专用浏览器，并确认 CDP 端口和对应的 Chrome 主进程都已退出；`uninstall` 会额外移除服务定义。无需在活动监视器中强制退出进程；重新执行一次 `install` 即可把旧版 `KeepAlive` / 登录自启配置迁移为按需启动。
 
 不要在活动监视器直接强制退出这台 Chrome：服务的 `KeepAlive` 会把这类崩溃当作故障并重新拉起。使用 `./scripts/digcrawl-cdp-browser-service.sh stop` 会先注销服务管理器，再确认 CDP 端口和对应的 Chrome 主进程都已退出；需要让它在下次登录后也不再启动时，使用 `uninstall`。
 
