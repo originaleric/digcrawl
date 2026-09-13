@@ -59,7 +59,9 @@ Add the same local MCP command to the Agent you use:
 | --- | --- |
 | Codex | [`codex/config.toml.example`](./.agents/skills/digcrawl/codex/config.toml.example) |
 | Claude Code | [`claude-code/.mcp.json.example`](./.agents/skills/digcrawl/claude-code/.mcp.json.example) |
-| Any MCP-compatible Agent | Configure `digcrawl mcp --config <absolute-profile-path>` as a local stdio server. |
+| Any MCP-compatible Agent | Follow the portable [MCP stdio contract](./.agents/skills/digcrawl/mcp/README.md): configure `digcrawl mcp --config <absolute-profile-path>` as a local stdio server. |
+
+The Agent Skills format makes the complete `SKILL.md` bundle portable; MCP makes its stdio tool contract portable. Neither standard defines one universal host configuration file or Skill discovery path, so the bundle is intentionally host-neutral and the small registration adapters remain host-specific.
 
 After configuration, simply give your Agent a supported URL and ask it to read, summarize, compare, quote, or—when explicitly requested—transcribe it. The Agent uses DigCrawl locally and preserves structured outcomes such as login required, captcha, or rate limiting.
 
@@ -75,16 +77,22 @@ Install the current verified release on macOS or Linux—**Go is not required**:
 curl -fsSL https://raw.githubusercontent.com/originaleric/digcrawl/main/scripts/install.sh | sh
 ```
 
-The installer detects the operating system and CPU architecture, downloads the matching GitHub Release, verifies it against `checksums.txt`, and installs only `digcrawl` to `~/.local/bin`. It never uses `sudo` or changes shell configuration. To review or pin the installer, download it first or pass a release tag:
+The installer detects the operating system and CPU architecture, downloads the matching GitHub Release, verifies it against `checksums.txt`, and installs `digcrawl` to `~/.local/bin`. It also installs the complete portable Agent Skill under `$XDG_DATA_HOME/digcrawl/skills/digcrawl` (or `~/.local/share/digcrawl/skills/digcrawl`), creates the keyless Skill profile when needed, and prints the standard MCP stdio launch contract. It installs the Claude Code Skill when Claude is detected, and atomically registers (or repairs) the Codex adapter at its effective user or project configuration, always using the stable installed binary rather than a build or temporary path. It never uses `sudo` or changes shell configuration. `--skip-codex` leaves the portable setup intact; use `--skip-agent-setup` for a binary-only install. To review or pin the installer, download it first or pass a release tag:
 
 ```bash
 curl -fsSLO https://raw.githubusercontent.com/originaleric/digcrawl/main/scripts/install.sh
 sh install.sh --version vX.Y.Z
+# Optional: keep the portable Skill but do not modify Codex.
+sh install.sh --skip-codex
+# Optional: install the binary only.
+sh install.sh --skip-agent-setup
 ```
 
 If `~/.local/bin` is not in `PATH`, add it using your shell’s normal configuration, then restart the shell. Windows users should download the matching `.zip` from [GitHub Releases](https://github.com/originaleric/digcrawl/releases). Full manual-install and checksum instructions are in the [usage guide](./USAGE.md).
 
-Confirm the binary, then initialize a local Agent/MCP profile:
+After the installer registers or repairs Codex, restart Codex Desktop and create a new task so it loads the new MCP tool catalog. Existing tasks cannot retroactively acquire an MCP server that failed during their startup.
+
+Confirm the binary and, if you used `--skip-agent-setup`, initialize a local Agent/MCP profile manually:
 
 ```bash
 digcrawl version
@@ -185,7 +193,9 @@ DigCrawl can persist collection records in `index.json`, SQLite, or both. Watchl
 
 The repository includes the official [DigCrawl Agent Skill](./.agents/skills/digcrawl/). It teaches compatible agents how to route links to the right local MCP tool, handle sign-in and rate-limit states, and avoid exposing a user’s cookies.
 
-Register the local MCP server with an absolute binary and profile path:
+Each Release archive contains the full portable Skill at `skills/digcrawl/`; the installer keeps a stable copy in its printed data directory. Copy or link that whole directory into the user or project Skill location documented by your host, rather than copying only `SKILL.md`. The installer can repair the Codex adapter and installs the Claude Code Skill when detected, but it does not guess other hosts' configuration files.
+
+For every MCP-capable host, register the local server with the absolute binary and profile path specified by the [generic stdio contract](./.agents/skills/digcrawl/mcp/README.md):
 
 ```toml
 [mcp_servers.digcrawl]
@@ -193,7 +203,7 @@ command = "/absolute/path/to/digcrawl"
 args = ["mcp", "--config", "/absolute/path/to/digcrawl-skill.yaml"]
 ```
 
-Codex and Claude Code examples are available in the [Skill directory](./.agents/skills/digcrawl/). An unflagged `digcrawl mcp` recognizes Codex from its MCP `initialize` request and bounds its abandoned sessions, so existing Codex registrations adopt the fix after a normal host restart. Other initialized MCP clients keep the standard long-lived session. The Codex example also sets the same timeout explicitly; pass `--idle-timeout=0` only when deliberately disabling recovery.
+Codex and Claude Code examples are available in the [Skill directory](./.agents/skills/digcrawl/). An unflagged `digcrawl mcp` recognizes Codex from its MCP `initialize` request and bounds its abandoned sessions, so existing Codex registrations adopt the fix after a normal host restart. Other initialized MCP clients keep the standard long-lived session. The Codex adapter sets an explicit idle timeout; do not copy that host-specific setting into a generic MCP registration.
 
 The default Skill is intentionally keyless. It uses the host agent’s multimodal model for page screenshots and image understanding; optional local ASR remains explicit and requires local dependencies and configuration.
 

@@ -59,7 +59,9 @@ digcrawl mcp --config "$HOME/.config/digcrawl/digcrawl-skill.yaml"
 | --- | --- |
 | Codex | [`codex/config.toml.example`](./.agents/skills/digcrawl/codex/config.toml.example) |
 | Claude Code | [`claude-code/.mcp.json.example`](./.agents/skills/digcrawl/claude-code/.mcp.json.example) |
-| 任意兼容 MCP 的 Agent | 将 `digcrawl mcp --config <profile-absolute-path>` 配置为本地 stdio 服务。 |
+| 任意兼容 MCP 的 Agent | 遵循可移植的 [MCP stdio 启动契约](./.agents/skills/digcrawl/mcp/README.md)：将 `digcrawl mcp --config <profile-absolute-path>` 配置为本地 stdio 服务。 |
+
+Agent Skills 格式让完整 `SKILL.md` bundle 可移植，MCP 让 stdio 工具契约可移植；但两项标准都不规定所有宿主共用同一个配置文件或 Skill 发现目录。因此 bundle 保持宿主无关，少量注册适配器才按宿主区分。
 
 配置完成后，只需把支持的 URL 发给 Agent，并要求它读取、总结、比较、引用，或在明确请求时转写视频。Agent 会在本机调用 DigCrawl，并保留需要登录、验证码、频控等结构化结果。
 
@@ -75,16 +77,22 @@ Skill 不包含 API Key，也不会暴露浏览器 Cookie。路由规则详见 [
 curl -fsSL https://raw.githubusercontent.com/originaleric/digcrawl/main/scripts/install.sh | sh
 ```
 
-安装脚本会识别系统和 CPU 架构，下载匹配的 GitHub Release，以 `checksums.txt` 校验后仅将 `digcrawl` 安装到 `~/.local/bin`。它不会使用 `sudo`，也不会修改 shell 配置。需要审查脚本或固定版本时，先下载脚本，或传入 Release tag：
+安装脚本会识别系统和 CPU 架构，下载匹配的 GitHub Release，以 `checksums.txt` 校验后将 `digcrawl` 安装到 `~/.local/bin`。它还会把完整的可移植 Agent Skill 安装到 `$XDG_DATA_HOME/digcrawl/skills/digcrawl`（未设置时为 `~/.local/share/digcrawl/skills/digcrawl`），按需创建无密钥 Skill profile，并输出标准 MCP stdio 启动契约。检测到 Claude Code 时会安装其 Skill；Codex 则会以原子方式注册（或修复）实际生效的用户级或项目级配置，且始终指向刚安装的稳定二进制，不会指向构建产物或临时目录。它不会使用 `sudo`，也不会修改 shell 配置。`--skip-codex` 保留通用安装；只想安装二进制时才使用 `--skip-agent-setup`。需要审查脚本或固定版本时，先下载脚本，或传入 Release tag：
 
 ```bash
 curl -fsSLO https://raw.githubusercontent.com/originaleric/digcrawl/main/scripts/install.sh
 sh install.sh --version vX.Y.Z
+# 可选：保留通用 Skill，但不修改 Codex。
+sh install.sh --skip-codex
+# 可选：仅安装二进制。
+sh install.sh --skip-agent-setup
 ```
 
 若 `~/.local/bin` 不在 `PATH` 中，请按当前 shell 的常规方式添加后重启 shell。Windows 用户请从 [GitHub Releases](https://github.com/originaleric/digcrawl/releases) 下载对应的 `.zip`。手动安装和 checksum 校验详见[使用说明](./USAGE.md)。
 
-确认二进制可用后，初始化本地 Agent/MCP profile：
+安装器注册或修复 Codex 后，请重启 Codex Desktop 并新建 task，让它加载新的 MCP 工具目录；已在启动时加载失败的旧 task 无法追溯性地获得该 MCP server。
+
+确认二进制可用后；若安装时传了 `--skip-agent-setup`，再手动初始化本地 Agent/MCP profile：
 
 ```bash
 digcrawl version
@@ -178,7 +186,9 @@ DigCrawl 可将采集记录写入 `index.json`、SQLite 或两者；Watchlist �
 
 仓库内包含官方 [DigCrawl Agent Skill](./.agents/skills/digcrawl/)。它指导兼容的 Agent 将链接路由到正确的本地 MCP 工具，处理登录与频控状态，并避免暴露用户 Cookie。
 
-在 Agent 配置中，以二进制和 profile 的绝对路径注册本地 MCP 服务：
+每个 Release 归档都携带完整可移植 Skill（`skills/digcrawl/`）；安装器也会在输出提示的数据目录保留稳定副本。请把完整目录复制或链接到所用宿主文档规定的用户级或项目级 Skill 目录，而不是只复制 `SKILL.md`。安装器可以修复 Codex 适配器，检测到 Claude Code 时会安装其 Skill；其它宿主的配置文件不会被猜测或改写。
+
+所有兼容 MCP 的宿主均可按[通用 stdio 启动契约](./.agents/skills/digcrawl/mcp/README.md)，以二进制和 profile 的绝对路径注册本地 MCP 服务：
 
 ```toml
 [mcp_servers.digcrawl]
@@ -186,7 +196,7 @@ command = "/absolute/path/to/digcrawl"
 args = ["mcp", "--config", "/absolute/path/to/digcrawl-skill.yaml"]
 ```
 
-Codex 与 Claude Code 的示例位于 [Skill 目录](./.agents/skills/digcrawl/)。未显式传超时参数的 `digcrawl mcp` 会从 MCP `initialize` 识别 Codex 并回收其遗留会话，因此已有 Codex 注册在宿主正常重启后即可生效；其他已初始化 MCP 客户端保持标准长连接。Codex 示例仍显式设置同一超时；只有明确要关闭回收时才传 `--idle-timeout=0`。
+Codex 与 Claude Code 的示例位于 [Skill 目录](./.agents/skills/digcrawl/)。未显式传超时参数的 `digcrawl mcp` 会从 MCP `initialize` 识别 Codex 并回收其遗留会话，因此已有 Codex 注册在宿主正常重启后即可生效；其他已初始化 MCP 客户端保持标准长连接。Codex 适配器显式设置超时；通用 MCP 注册不应复制该宿主专用参数。
 
 默认 Skill 不含密钥。页面截图与图片理解优先交给宿主 Agent 的多模态模型；可选本地 ASR 是显式能力，需要自行准备依赖和配置。
 

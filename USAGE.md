@@ -18,16 +18,18 @@ macOS / Linux 可使用仓库内的安装脚本：
 curl -fsSL https://raw.githubusercontent.com/originaleric/digcrawl/main/scripts/install.sh | sh
 ```
 
-脚本自动识别系统与 CPU 架构，从 GitHub Release 下载对应压缩包与 `checksums.txt`，完成 SHA-256 校验后安装到 `~/.local/bin`。它不会使用 `sudo`、修改 shell 配置或写入隐藏状态。要固定版本或先审查脚本：
+脚本自动识别系统与 CPU 架构，从 GitHub Release 下载对应压缩包与 `checksums.txt`，完成 SHA-256 校验后安装到 `~/.local/bin`。随后它会创建缺失的 Skill profile，把完整可移植 Agent Skill 安装到 `$XDG_DATA_HOME/digcrawl/skills/digcrawl`（未设置时为 `~/.local/share/digcrawl/skills/digcrawl`），并输出通用 MCP stdio 启动契约。它会在 Claude Code 已存在时安装 Claude Skill，并以原子方式替换 Codex 实际生效配置中的 `mcp_servers.digcrawl`，确保命令使用刚安装的稳定二进制而非临时构建路径；其它 Codex 设置与 MCP server 保留不变。MCP 和 Agent Skills 并不规定所有宿主共用的注册文件，因此安装器不会猜测或改写其它宿主配置。它不会使用 `sudo` 或修改 shell 配置。`--skip-codex` 只跳过 Codex；仅需二进制时传 `--skip-agent-setup`。要固定版本或先审查脚本：
 
 ```bash
 curl -fsSLO https://raw.githubusercontent.com/originaleric/digcrawl/main/scripts/install.sh
 sh install.sh --version vX.Y.Z
+sh install.sh --skip-codex
+sh install.sh --skip-agent-setup
 ```
 
 也可以从 [GitHub Releases](https://github.com/originaleric/digcrawl/releases) 手动下载当前系统与 CPU 架构对应的压缩包，并用 Release 中的 `checksums.txt` 校验。Windows 用户请使用对应的 `.zip`。Homebrew tap 发布后可使用 `brew install --cask originaleric/tap/digcrawl`；它只是同一 GitHub Release 的便捷安装入口。
 
-安装后执行：
+安装后执行（若未传 `--skip-agent-setup`，前两步已经由安装器完成）：
 
 ```bash
 digcrawl version
@@ -35,6 +37,8 @@ digcrawl init --profile skill
 digcrawl config validate --config "$HOME/.config/digcrawl/digcrawl-skill.yaml"
 digcrawl doctor --config "$HOME/.config/digcrawl/digcrawl-skill.yaml"
 ```
+
+安装器注册或修复 Codex 后，请重启 Codex Desktop 并新建 task，使其重新加载 MCP 工具目录；旧 task 不会追溯性地加载启动时不可用的 MCP server。
 
 ### 浏览器能力（按需）
 
@@ -964,7 +968,7 @@ digcrawl collector --server http://127.0.0.1:8790 --token dev
 
 ## 6. IDE 集成（MCP）
 
-在 Codex、Claude Code、Cursor、WorkBuddy 等支持 MCP 的客户端中，将 DigCrawl 注册为 stdio 服务。先运行 `digcrawl init --profile skill`，再用 `digcrawl config validate --config <profile>` 和 `digcrawl doctor --config <profile>` 检查本机 profile。新安装时 `digcrawl mcp` 不传 `--config` 会发现用户级 `digcrawl-skill.yaml`；在宿主配置中仍建议显式传入 profile 的绝对路径：
+在 Codex、Claude Code、Cursor、WorkBuddy 等支持 MCP 的客户端中，将 DigCrawl 注册为 stdio 服务。Release 安装器会创建缺失的 Skill profile、保留完整的可移植 Skill bundle，并自动修复 Codex 的有效 `mcp_servers.digcrawl` 配置；检测到 Claude Code 时会安装其 Skill。手动解压 Release 或使用 `--skip-agent-setup` 时，先运行 `digcrawl init --profile skill`，再用 `digcrawl config validate --config <profile>` 和 `digcrawl doctor --config <profile>` 检查本机 profile。新安装时 `digcrawl mcp` 不传 `--config` 会发现用户级 `digcrawl-skill.yaml`；在宿主配置中仍建议显式传入 profile 的绝对路径：
 
 ```json
 {
@@ -978,6 +982,8 @@ digcrawl collector --server http://127.0.0.1:8790 --token dev
 ```
 
 启动后，IDE 内的 Agent 可通过 MCP 调用本机已注册工具（与 `gateway` 共用同一套 runtime / Provider）。
+
+除 Codex 外，安装器不会猜测宿主的 MCP 配置文件。请将完整 `skills/digcrawl/` 目录复制或链接到宿主规定的 Skill 目录，并按[通用 stdio 启动契约](./.agents/skills/digcrawl/mcp/README.md)登记上面的 `command` 与 `args`；不要只复制 `SKILL.md`。Codex 的适配器额外设置了空闲回收参数，通用 MCP 配置不应照抄该参数。
 
 未显式传 `--idle-timeout` 时，`digcrawl mcp` 会回收未发送 MCP `initialize` 且 stdin 连续空闲 1 分钟的管道；从 initialize 识别到 Codex 后自动启用 15 分钟空闲回收，避免 Codex 遗留 stdin 管道长期保留进程。其他已初始化客户端保持标准长连接。对任意宿主可显式传入正值启用超时；仅在确实需要关闭回收时传 `--idle-timeout=0`。
 
