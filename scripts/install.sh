@@ -169,7 +169,7 @@ select_codex_config() {
 }
 
 resolve_codex_config_target() {
-  [ -L "$codex_config" ] || return
+  [ -L "$codex_config" ] || return 0
 
   link_target=$(readlink "$codex_config") || fail "could not resolve symbolic link $codex_config"
   [ -n "$link_target" ] || fail "could not resolve symbolic link $codex_config"

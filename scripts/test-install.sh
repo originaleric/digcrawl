@@ -61,7 +61,8 @@ done <"$skill_file_list"
 mkdir -p "$fixture_dir/skills"
 cp -R "$repo_root/.agents/skills/digcrawl" "$fixture_dir/skills/digcrawl"
 tar -czf "$fixture_dir/$archive_name" -C "$fixture_dir" digcrawl skills
-tar -tzf "$fixture_dir/$archive_name" | grep -Fqx 'skills/digcrawl/SKILL.md' || fail "release archive fixture does not contain the Agent Skill"
+tar -tzf "$fixture_dir/$archive_name" >"$test_root/archive-files"
+grep -Fqx 'skills/digcrawl/SKILL.md' "$test_root/archive-files" || fail "release archive fixture does not contain the Agent Skill"
 if command -v shasum >/dev/null 2>&1; then
   checksum=$(shasum -a 256 "$fixture_dir/$archive_name" | awk '{ print $1 }')
 else
