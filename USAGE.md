@@ -150,7 +150,7 @@ go install ./cmd/digcollect
 | `OutputDir` | 导出根目录，默认 `collect-output` |
 | `InboxDir` | 收件箱目录，默认 `collect-inbox` |
 | `DefaultFormats` | 默认导出格式：`md`、`html`、`json` |
-| `DownloadMedia` | 是否下载正文中的媒体到 `.assets/` |
+| `DownloadMedia` | 是否下载正文中的媒体到 `.assets/`；这与 Provider `ImageDownload` 本地保存独立 |
 | `PersistMode` | 持久化方案：`files`（仅文件）/ `index`（默认，+ index.json）/ `sqlite`（+ collect.db）/ `both` |
 | `DBPath` | SQLite 库路径，默认 `storage/digcrawl/collect.db` |
 | `IndexEnabled` | `index`/`both` 模式下是否写 `index.json`（同 URL 覆盖更新） |
@@ -219,7 +219,17 @@ LocalBrowser:
 
 微信公众号公开文章默认优先使用 HTTP HTML 静态解析，成功时会在 `platform_metadata` 中标记 `read_channel=http`、`extraction_source=html`。只有网络 transient 或解析状态不确定时才进入 Browser 兜底；验证码、频控、删除、私密、登录要求和最终 URL 跳出微信域名会直接返回结构化错误。
 
-X 单帖读取默认先尝试官方 Tweet lookup API；当 API 读权限或套餐不足时，会尝试公开 oEmbed 端点，成功时 `platform_metadata.read_channel=api`、`platform_metadata.extraction_source=oembed`。Browser 仅作为最后兜底，登录墙、删除、不可见和空壳页会返回结构化错误。
+X 单帖读取默认先尝试公开 Syndication 分发端点，无需 Cookie、账号或付费 API；成功时会解析正文、公开图片以及可用的最佳直链 MP4 引用。该端点限流、不可用、返回内容 ID 不匹配或结构变化时，继续既有 Tweet lookup API、公开 oEmbed 和 Browser 兜底。Browser 仅作为最后兜底，登录墙、删除、不可见和空壳页会返回结构化错误；这些链路都不会读取私密或登录受限内容。
+
+`Platform.X` 可保留默认值；仅在需要关闭或为受控环境替换公开端点时配置：
+
+```yaml
+Platform:
+  X:
+    SyndicationEnabled: true
+    SyndicationURL: "https://cdn.syndication.twimg.com/tweet-result"
+    SyndicationTimeoutSec: 15
+```
 
 Reddit 读取默认先走官方 OAuth API，支持 `reddit.post.read`、`reddit.subreddit.read`、`reddit.user.read`。单帖工具会读取 selftext、外链、score、upvote ratio、评论数、评论树和 `more` 评论占位；评论读取受 `comment_limit`、`comment_depth`、`comment_sort` 控制。API 不可用时会先尝试 Reddit `.rss` 公开 feed，RSS 不可用时才按配置进入浏览器兜底。浏览器兜底只用于公开页面，401/403/429、私有社区、登录墙和受限内容不会通过浏览器绕过。
 
@@ -299,6 +309,23 @@ VideoDownload:
 ```
 
 MCP 宿主应仅在用户明确要求后调用 `skill.media.configure`，例如 `{"video_download_providers":{"toutiao":true},"media_dir":"/absolute/path/to/digcrawl/videos","video_download_max_bytes":268435456,"video_download_timeout_sec":90}`。调用中的 provider 键会与已有策略合并，`false` 关闭指定平台，空对象 `{}` 清空整个策略。不传 `media_dir` 时保留 profile 的默认目录；传入时必须为绝对路径。`video_download_max_bytes` 与 `video_download_timeout_sec` 分别写入新保存路径实际使用的 `VideoDownload.MaxBytes` 和 `VideoDownload.TimeoutSec`。结果的 `platform_metadata.video_download_status` 为 `saved`、`partial`、`failed` 或 `not_available`；只有成功保存的条目会返回相对于 `VideoDownload.Dir` 的 `retained_media_relative_path(s)`，不会返回本机绝对路径。失败时会附带脱敏的 `video_download_failure_reason` 与 `video_download_attempted_count`；这些诊断和返回错误不会包含签名媒体 URL 或本机绝对路径。若 Collect 已成功解析正文但 provider 保存失败，Collect 仍会导出正文，并按原有 `Collect.DownloadMedia` 路径尝试媒体归档；只有实际保存成功、部分成功或确认无视频时才跳过重复视频导出。调用者若显式请求 `include_media=true`，仍按既有媒体引用契约取得 provider 返回的 URL。空 provider 策略或未启用的平台保持原有 `Collect.DownloadMedia` 行为，图片和其他媒体导出也不受影响。旧 `Skill.Media.RetainDownloadedVideo` / `MaxBytes` 仅保留给未声明 `VideoDownload` 的旧 YouTube 配置兼容，不能用来开启新的 provider 保存。
+
+### Provider 图片持久保存
+
+`ImageDownload` 是全部单内容读取渠道共用的本地原图保存开关，与 `VideoDownload`、OCR 和 Collect `.assets` 相互独立。仅当 `Providers` 中的 provider 显式为 `true` 时，DigCrawl 才会保存读取结果中已解析的 HTTP(S) 原图。通用平台、Reddit 和 `browser.browse` 已接入；浏览器仅使用已渲染 `<img>` 的 HTTP(S) 地址，不把截图当作下载原图。每次读取在 `ImageDownload.Dir` 下创建私有目录：一条内容的图片要么全部在 `MaxBytes`、`MaxItems` 与 `TimeoutSec` 约束内保存，要么回滚，不留下半套结果。成功路径只以相对 `ImageDownload.Dir` 的路径返回，失败原因会脱敏，不泄露本机绝对路径或签名 URL。启用它本身不会启动 OCR；若同次读取显式启用 OCR，则复用已保存的本地图片。Collect 的 `DownloadMedia` 仍控制自己的 `.assets`；Provider 图片保存成功且 Collect OCR 关闭时才会跳过重复图片下载，其他情形维持既有 Collect 行为。
+
+```yaml
+ImageDownload:
+  Dir: "/absolute/path/to/digcrawl/images"
+  Providers:
+    x: true
+    reddit: true
+    wechat: true
+    web: true
+  MaxBytes: 10485760
+  MaxItems: 8
+  TimeoutSec: 60
+```
 
 ```yaml
 OCR:
@@ -989,7 +1016,7 @@ digcrawl collector --server http://127.0.0.1:8790 --token dev
 
 ### Agent Skill 最小 profile
 
-使用仓库级 `digcrawl` Skill 时，优先通过 `digcrawl init --profile skill` 创建用户目录中的最小 profile；也可复制 `config/digcrawl-skill.example.yaml` 自行维护。`init` 会生成 profile 同级、跨平台的绝对 `Skill.Media.Dir` 与 `VideoDownload.Dir`，宿主配置只保存二进制和 profile 的绝对路径。图片文字和页面视觉理解优先由宿主 Agent 读取 MCP 返回的截图附件；`media` URL 只作来源引用。宿主也负责基于 Markdown、图片观察和 `asr_text` 完成总结。仅视频转写使用本地 `Skill.ASR`，用户明确请求时才需启用 `Skill.Media.DownloadMedia`、配置媒体目录和 ASR 依赖；下载的 MP4 默认只在本次理解期间存在。用户明确要求保存支持平台的视频时，host agent 应调用 `skill.media.configure`，以 `video_download_providers` 指定平台；命名项与已有策略合并，`false` 关闭一个平台，`{}` 清空策略，`media_dir` 仅接受绝对路径。不要编辑 YAML，也不要用旧的 `retain_downloaded_video` / `max_bytes` 开启新平台保存；它们只兼容未声明 `VideoDownload` 的旧 YouTube profile。保存状态见 `platform_metadata.video_download_status`，成功文件只以相对于 `VideoDownload.Dir` 的路径返回，宿主不得要求或显示绝对路径。配置写入会同时受同进程准入和跨进程 profile 锁保护；若另一项本地配置更新尚未完成，请根据可重试的 `SKILL_PROFILE_BUSY` 稍后重试。`skill.asr.enable` 会在写入两个基础 opt-in 开关前检查 ffmpeg 与当前 provider，缺失依赖时不会写入配置。默认 Skill profile 不包含 OCR 或 LLM API Key，也不使用 DigFlow。
+使用仓库级 `digcrawl` Skill 时，优先通过 `digcrawl init --profile skill` 创建用户目录中的最小 profile；也可复制 `config/digcrawl-skill.example.yaml` 自行维护。`init` 会生成 profile 同级、跨平台的绝对 `Skill.Media.Dir`、`VideoDownload.Dir` 与 `ImageDownload.Dir`，宿主配置只保存二进制和 profile 的绝对路径。图片文字和页面视觉理解优先由宿主 Agent 读取 MCP 返回的截图附件；`media` URL 只作来源引用。宿主也负责基于 Markdown、图片观察和 `asr_text` 完成总结。仅视频转写使用本地 `Skill.ASR`，用户明确请求时才需启用 `Skill.Media.DownloadMedia`、配置媒体目录和 ASR 依赖；下载的 MP4 默认只在本次理解期间存在。用户明确要求保存支持平台的视频时，host agent 应调用 `skill.media.configure`，以 `video_download_providers` 指定平台；命名项与已有策略合并，`false` 关闭一个平台，`{}` 清空策略，`media_dir` 仅接受绝对路径。图片保存使用同一工具的 `image_download_providers`、`image_download_dir`、`image_download_max_bytes`、`image_download_max_items` 和 `image_download_timeout_sec`；它同样只应在用户明确要求后启用，且不等同于开启 OCR。不要编辑 YAML，也不要用旧的 `retain_downloaded_video` / `max_bytes` 开启新平台保存；它们只兼容未声明 `VideoDownload` 的旧 YouTube profile。保存状态见 `platform_metadata.video_download_status`，成功文件只以相对于 `VideoDownload.Dir` 的路径返回，宿主不得要求或显示绝对路径。配置写入会同时受同进程准入和跨进程 profile 锁保护；若另一项本地配置更新尚未完成，请根据可重试的 `SKILL_PROFILE_BUSY` 稍后重试。`skill.asr.enable` 会在写入两个基础 opt-in 开关前检查 ffmpeg 与当前 provider，缺失依赖时不会写入配置。默认 Skill profile 不包含 OCR 或 LLM API Key，也不使用 DigFlow。
 
 ---
 

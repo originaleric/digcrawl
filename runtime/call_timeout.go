@@ -33,20 +33,24 @@ func RecommendedCallTimeout(cfg *config.Config, call *protocol.ToolCall) time.Du
 	skillOCREnabled := false
 	videoFrameOCREnabled := false
 	videoDownloadSeconds := 0
+	imageDownloadSeconds := 0
 	if cfg != nil {
 		var skillCfg config.SkillConfig
 		var videoDownloadCfg config.VideoDownloadConfig
+		var imageDownloadCfg config.ImageDownloadConfig
 		if cfg == config.Get() {
 			// The standard Skill profile can be changed by a local configuration
 			// tool while MCP workers are being dispatched. Read its mutable
 			// section through the synchronized snapshot accessor so the timeout
 			// matches one coherent media configuration.
 			skillCfg, videoDownloadCfg = config.SkillVideoDownload()
+			_, imageDownloadCfg = config.SkillImageDownload()
 		} else {
 			// Collect and focused tests inject an execution-local config that is
 			// immutable for that execution.
 			skillCfg = cfg.Skill
 			videoDownloadCfg = cfg.VideoDownload
+			imageDownloadCfg = cfg.ImageDownload
 		}
 		if cfg.LocalBrowser.TotalTimeoutSec > 0 {
 			browserSeconds = cfg.LocalBrowser.TotalTimeoutSec
@@ -66,6 +70,9 @@ func RecommendedCallTimeout(cfg *config.Config, call *protocol.ToolCall) time.Du
 			provider, _, hasProvider := strings.Cut(strings.ToLower(strings.TrimSpace(call.Tool)), ".")
 			if hasProvider && config.IsSupportedVideoDownloadProvider(provider) && videoDownloadCfg.EnabledFor(provider) {
 				videoDownloadSeconds = videoDownloadCfg.TimeoutSecOrDefault()
+			}
+			if hasProvider && config.IsSupportedImageDownloadProvider(provider) && imageDownloadCfg.EnabledFor(provider) {
+				imageDownloadSeconds = imageDownloadCfg.TimeoutSecOrDefault()
 			}
 		}
 	}
@@ -114,6 +121,6 @@ func RecommendedCallTimeout(cfg *config.Config, call *protocol.ToolCall) time.Du
 	// local enrichment. It has its own user-configured operation deadline, so
 	// reserve that complete phase even when include_media was omitted: the
 	// retention opt-in itself requests media internally.
-	seconds += videoDownloadSeconds
+	seconds += videoDownloadSeconds + imageDownloadSeconds
 	return time.Duration(seconds) * time.Second
 }

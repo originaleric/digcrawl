@@ -67,6 +67,37 @@ func TestDownloadAssetsUsesVideoArtifactForASR(t *testing.T) {
 	}
 }
 
+func TestEnhanceUsesCompleteRetainedLocalImagesWithoutExportingPath(t *testing.T) {
+	enabled := true
+	root := t.TempDir()
+	image := filepath.Join(root, "retained.jpg")
+	if err := os.WriteFile(image, []byte("not-used-by-stub"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out := map[string]any{"media": []any{map[string]any{"type": "image", "url": "https://example.com/retained.jpg"}}}
+	err := Enhance(context.Background(), out, config.SkillConfig{Media: config.SkillMediaConfig{DownloadMedia: true, Dir: root}, OCR: config.OCRConfig{Enabled: &enabled, Provider: "stub"}}, EnhanceOptions{IncludeOCR: true, LocalImages: []LocalImageInput{{Path: image, SourceURL: "https://example.com/retained.jpg", Type: "image"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta := platformMetadata(out)
+	results, _ := meta["ocr_results"].([]map[string]any)
+	if len(results) != 1 || results[0]["source_url"] != "https://example.com/retained.jpg" {
+		t.Fatalf("results=%+v", results)
+	}
+	if _, leaked := results[0]["local_path"]; leaked {
+		t.Fatalf("OCR result leaked retained local path: %+v", results[0])
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if entry.Name() != "retained.jpg" {
+			t.Fatalf("complete local coverage must not download a duplicate: %s", entry.Name())
+		}
+	}
+}
+
 func TestDownloadFilePrefersCompatibleImageFormatsOnlyForOCRAssets(t *testing.T) {
 	validMP4 := []byte{0, 0, 0, 24, 'f', 't', 'y', 'p', 'i', 's', 'o', 'm'}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

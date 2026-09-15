@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -170,13 +171,14 @@ func platformReadHandlerNamedWithConfig(
 			return nil, nil, err
 		}
 		isCollect := executor.IsCollectExecution(ctx)
-		skillCfg, videoDownloadCfg := activeSkillVideoDownloadConfig(runtimeCfg)
+		skillCfg, videoDownloadCfg, imageDownloadCfg := activeSkillMediaRetentionConfig(runtimeCfg)
 		retainProviderVideos := shouldRetainProviderVideos(videoDownloadCfg, skillCfg, name)
+		retainProviderImages := shouldRetainProviderImages(imageDownloadCfg, name)
 		// Retention needs media internally, but must not broaden the response
 		// contract for a caller that did not ask for media or an enhancement
 		// that already requires media.
 		returnMedia := in.IncludeMedia || in.IncludeOCR || in.IncludeASR || in.IncludeSummary
-		if retainProviderVideos {
+		if retainProviderVideos || retainProviderImages {
 			// A provider may only expose media when this flag is set. The explicit
 			// local retention policy is itself a request for that media.
 			in.IncludeMedia = true
@@ -192,6 +194,7 @@ func platformReadHandlerNamedWithConfig(
 		}
 		var artifacts []protocol.Artifact
 		var localVideoPaths []string
+		var localImages []skill.LocalImageInput
 		youtubeVideoNeeded := name == ToolYouTubeVideoRead && (shouldDownloadYouTubeMediaWithVideoDownload(runtimeCfg, videoDownloadCfg, skillCfg, isCollect, in) || retainProviderVideos)
 		if youtubeVideoNeeded {
 			legacyCollectArtifact := isCollect && shouldDownloadYouTubeMediaWithVideoDownload(runtimeCfg, videoDownloadCfg, skillCfg, isCollect, in) && !retainProviderVideos
@@ -210,7 +213,7 @@ func platformReadHandlerNamedWithConfig(
 					content.PlatformMetadata = iplatform.EnsureMeta(content.PlatformMetadata)
 					retainErr := providerVideoDownloadFailure(content.PlatformMetadata, 1, retainedVideoFailureReason(downloadErr.Error()))
 					out := iplatform.ApplyFormats(content, in.Format)
-					if !returnMedia {
+					if !returnMedia && !isCollect {
 						delete(out, "media")
 					}
 					return out, artifacts, retainErr
@@ -235,7 +238,7 @@ func platformReadHandlerNamedWithConfig(
 				if err != nil {
 					retainErr := providerVideoDownloadFailure(content.PlatformMetadata, 1, "local_storage_failed")
 					out := iplatform.ApplyFormats(content, in.Format)
-					if !returnMedia {
+					if !returnMedia && !isCollect {
 						delete(out, "media")
 					}
 					return out, artifacts, retainErr
@@ -253,7 +256,7 @@ func platformReadHandlerNamedWithConfig(
 		if retainProviderVideos && name != ToolYouTubeVideoRead {
 			paths, retainErr := retainResolvedProviderVideos(ctx, out, videoDownloadCfg, artStore)
 			if retainErr != nil {
-				if !returnMedia {
+				if !returnMedia && !isCollect {
 					delete(out, "media")
 				}
 				return out, artifacts, retainErr
@@ -262,17 +265,29 @@ func platformReadHandlerNamedWithConfig(
 				localVideoPaths = append(localVideoPaths, paths...)
 			}
 		}
+		if retainProviderImages {
+			inputs, retainErr := RetainResolvedProviderImages(ctx, out, imageDownloadCfg, artStore)
+			if retainErr != nil {
+				if !returnMedia && !isCollect {
+					delete(out, "media")
+				}
+				return out, artifacts, retainErr
+			}
+			if !isCollect {
+				localImages = append(localImages, inputs...)
+			}
+		}
 		if !isCollect && skillEnhancement {
 			if err := skill.Enhance(ctx, out, skillCfg, skill.EnhanceOptions{
 				IncludeOCR: in.IncludeOCR, IncludeASR: in.IncludeASR,
-				IncludeSummary: in.IncludeSummary, SourceText: content.Text, ScreenshotBase64: content.ScreenshotBase64, ArtifactStore: artStore, LocalVideoPaths: localVideoPaths,
+				IncludeSummary: in.IncludeSummary, SourceText: content.Text, ScreenshotBase64: content.ScreenshotBase64, ArtifactStore: artStore, LocalVideoPaths: localVideoPaths, LocalImages: localImages,
 			}); err != nil {
 				// Direct video understanding returns its partial text/metadata only;
 				// the provider-owned MP4 is never an output artifact in this path.
 				return out, artifacts, err
 			}
 		}
-		if retainProviderVideos && !returnMedia {
+		if (retainProviderVideos || retainProviderImages) && !returnMedia && !isCollect {
 			delete(out, "media")
 		}
 		if content.ScreenshotBase64 != "" {
@@ -339,14 +354,16 @@ func validatePlatformURL(rawURL string, call *protocol.ToolCall, configDomains, 
 	return policy.ValidateURLDomain(rawURL, domains, nil)
 }
 
-// activeSkillVideoDownloadConfig takes the local media settings used by a
-// direct provider call as one coherent snapshot. Injected configurations are
-// immutable for Collect and focused tests.
-func activeSkillVideoDownloadConfig(cfg *config.Config) (config.SkillConfig, config.VideoDownloadConfig) {
+// activeSkillMediaRetentionConfig takes the local media settings used by a
+// direct provider call. Injected configurations are immutable for Collect and
+// focused tests.
+func activeSkillMediaRetentionConfig(cfg *config.Config) (config.SkillConfig, config.VideoDownloadConfig, config.ImageDownloadConfig) {
 	if cfg == config.Get() {
-		return config.SkillVideoDownload()
+		skillCfg, videoCfg := config.SkillVideoDownload()
+		_, imageCfg := config.SkillImageDownload()
+		return skillCfg, videoCfg, imageCfg
 	}
-	return cfg.Skill, cfg.VideoDownload
+	return cfg.Skill, cfg.VideoDownload, cfg.ImageDownload
 }
 
 func shouldRetainProviderVideos(videoDownloadCfg config.VideoDownloadConfig, skillCfg config.SkillConfig, tool string) bool {
@@ -363,12 +380,28 @@ func shouldRetainProviderVideos(videoDownloadCfg config.VideoDownloadConfig, ski
 	return provider == "youtube" && skillCfg.Media.RetainDownloadedVideo
 }
 
+func shouldRetainProviderImages(imageDownloadCfg config.ImageDownloadConfig, tool string) bool {
+	provider := imageDownloadProviderForTool(tool)
+	return provider != "" && imageDownloadCfg.EnabledFor(provider)
+}
+
 func videoDownloadProviderForTool(tool string) string {
 	provider, _, ok := strings.Cut(strings.ToLower(strings.TrimSpace(tool)), ".")
 	if !ok {
 		return ""
 	}
 	if config.IsSupportedVideoDownloadProvider(provider) {
+		return provider
+	}
+	return ""
+}
+
+func imageDownloadProviderForTool(tool string) string {
+	provider, _, ok := strings.Cut(strings.ToLower(strings.TrimSpace(tool)), ".")
+	if !ok {
+		return ""
+	}
+	if config.IsSupportedImageDownloadProvider(provider) {
 		return provider
 	}
 	return ""
@@ -477,6 +510,224 @@ func retainResolvedProviderVideos(ctx context.Context, out map[string]any, cfg c
 	}
 	return paths, nil
 }
+
+// retainResolvedProviderImages mirrors the explicit video-retention boundary
+// for the complete image set of one content item. It intentionally has no
+// partial state: either every selected remote image is retained or the whole
+// private directory is removed.
+func RetainResolvedProviderImages(ctx context.Context, out map[string]any, cfg config.ImageDownloadConfig, artStore artifact.Store) ([]skill.LocalImageInput, error) {
+	meta := outputPlatformMetadata(out)
+	candidates := outputImageMedia(out)
+	if len(candidates) == 0 {
+		meta["image_download_status"] = "not_available"
+		return nil, nil
+	}
+	if len(candidates) > cfg.MaxItemsOrDefault() {
+		return nil, providerImageDownloadFailure(meta, 0, "item_limit_exceeded")
+	}
+	root := cfg.DirOrDefault()
+	if !filepath.IsAbs(root) || os.MkdirAll(root, 0o750) != nil {
+		return nil, providerImageDownloadFailure(meta, 0, "local_storage_failed")
+	}
+	dir, err := os.MkdirTemp(root, "digcrawl-image-*")
+	if err != nil {
+		return nil, providerImageDownloadFailure(meta, 0, "local_storage_failed")
+	}
+	fail := func(attempted int, reason string) ([]skill.LocalImageInput, error) {
+		_ = os.RemoveAll(dir)
+		return nil, providerImageDownloadFailure(meta, attempted, reason)
+	}
+	downloadInput := map[string]any{"media": candidates, "platform": out["platform"], "source_url": out["source_url"], "canonical_url": out["canonical_url"]}
+	downloadCtx, cancel := context.WithTimeout(ctx, time.Duration(cfg.TimeoutSecOrDefault())*time.Second)
+	defer cancel()
+	if _, err := skill.DownloadAssets(downloadCtx, dir, downloadInput, skill.AssetDownloadOptions{MaxBytes: cfg.MaxBytesOrDefault(), TimeoutSec: cfg.TimeoutSecOrDefault(), ArtifactStore: artStore, ImagesOnly: true}); err != nil {
+		return fail(len(candidates), "local_storage_failed")
+	}
+	summary, err := readRetainedImageDownloadSummary(filepath.Join(dir, "media.json"))
+	if err != nil {
+		return fail(len(candidates), "local_storage_failed")
+	}
+	if summary.attempted != len(candidates) || summary.saved != len(candidates) || summary.failureReason != "" {
+		return fail(summary.attempted, firstNonEmpty(summary.failureReason, "download_failed"))
+	}
+	paths := make([]string, 0, len(summary.savedImages))
+	relativePaths := make([]string, 0, len(summary.savedImages))
+	inputs := make([]skill.LocalImageInput, 0, len(summary.savedImages))
+	for _, saved := range summary.savedImages {
+		if filepath.Base(saved.local) != saved.local || filepath.IsAbs(saved.local) {
+			return fail(summary.attempted, "local_storage_failed")
+		}
+		path := filepath.Join(dir, saved.local)
+		if !isRetainedImageFile(path) {
+			return fail(summary.attempted, "download_failed")
+		}
+		relativePath, relErr := retainedMediaRelativePath(root, path)
+		if relErr != nil {
+			return fail(summary.attempted, "local_storage_failed")
+		}
+		paths = append(paths, path)
+		relativePaths = append(relativePaths, relativePath)
+		inputs = append(inputs, skill.LocalImageInput{Path: path, SourceURL: saved.url, Type: saved.mediaType})
+	}
+	if err := os.Remove(filepath.Join(dir, "media.json")); err != nil && !os.IsNotExist(err) {
+		return fail(summary.attempted, "local_storage_failed")
+	}
+	meta["retained_image_relative_paths"] = relativePaths
+	if len(relativePaths) == 1 {
+		meta["retained_image_relative_path"] = relativePaths[0]
+	}
+	meta["image_download_count"] = len(paths)
+	meta["image_download_attempted_count"] = summary.attempted
+	meta["image_download_status"] = "saved"
+	return inputs, nil
+}
+
+func outputImageMedia(out map[string]any) []map[string]any {
+	if out == nil || out["media"] == nil {
+		return nil
+	}
+	data, err := json.Marshal(out["media"])
+	if err != nil {
+		return nil
+	}
+	var media []map[string]any
+	if json.Unmarshal(data, &media) != nil {
+		return nil
+	}
+	seen := map[string]struct{}{}
+	images := make([]map[string]any, 0, len(media))
+	for _, item := range media {
+		mediaType := strings.ToLower(strings.TrimSpace(fmt.Sprint(item["type"])))
+		if mediaType != "image" && mediaType != "photo" {
+			continue
+		}
+		rawURL, _ := item["url"].(string)
+		rawURL = strings.TrimSpace(rawURL)
+		if rawURL == "" {
+			continue
+		}
+		if _, ok := seen[rawURL]; ok {
+			continue
+		}
+		seen[rawURL] = struct{}{}
+		images = append(images, map[string]any{"type": mediaType, "url": rawURL})
+	}
+	return images
+}
+
+type retainedImageDownload struct{ mediaType, url, local string }
+type retainedImageDownloadSummary struct {
+	attempted, saved int
+	failureReason    string
+	savedImages      []retainedImageDownload
+}
+
+func readRetainedImageDownloadSummary(path string) (retainedImageDownloadSummary, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return retainedImageDownloadSummary{}, err
+	}
+	var manifest struct {
+		Downloaded []map[string]any `json:"downloaded"`
+	}
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		return retainedImageDownloadSummary{}, err
+	}
+	summary := retainedImageDownloadSummary{}
+	for _, item := range manifest.Downloaded {
+		mediaType := strings.ToLower(strings.TrimSpace(fmt.Sprint(item["type"])))
+		if mediaType != "image" && mediaType != "photo" {
+			continue
+		}
+		summary.attempted++
+		local, _ := item["local"].(string)
+		url, _ := item["url"].(string)
+		if local = strings.TrimSpace(local); local != "" {
+			summary.saved++
+			summary.savedImages = append(summary.savedImages, retainedImageDownload{mediaType: mediaType, url: strings.TrimSpace(url), local: local})
+			continue
+		}
+		if raw, _ := item["error"].(string); strings.TrimSpace(raw) != "" && summary.failureReason == "" {
+			summary.failureReason = retainedImageFailureReason(raw)
+		}
+	}
+	if summary.saved == 0 && summary.failureReason == "" {
+		summary.failureReason = "download_failed"
+	}
+	return summary, nil
+}
+
+func isRetainedImageFile(path string) bool {
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	buf := make([]byte, 512)
+	n, err := f.Read(buf)
+	if err != nil && n == 0 {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(strings.Split(http.DetectContentType(buf[:n]), ";")[0])) {
+	case "image/jpeg", "image/png", "image/gif", "image/webp", "image/bmp":
+		return true
+	default:
+		return isAVIFFile(buf[:n])
+	}
+}
+
+// isAVIFFile recognizes the ISO-BMFF ftyp brands used by AVIF. net/http's
+// content sniffer does not recognize AVIF, so retention must inspect the
+// downloaded file rather than treating a valid image as an unknown binary.
+func isAVIFFile(data []byte) bool {
+	if len(data) < 16 || string(data[4:8]) != "ftyp" {
+		return false
+	}
+	isAVIFBrand := func(brand []byte) bool {
+		return string(brand) == "avif" || string(brand) == "avis"
+	}
+	if isAVIFBrand(data[8:12]) {
+		return true
+	}
+	for offset := 16; offset+4 <= len(data); offset += 4 {
+		if isAVIFBrand(data[offset : offset+4]) {
+			return true
+		}
+	}
+	return false
+}
+
+func retainedImageFailureReason(raw string) string {
+	reason := retainedVideoFailureReason(raw)
+	if reason == "not_single_file_video" {
+		return "download_failed"
+	}
+	return reason
+}
+
+func providerImageDownloadFailure(meta map[string]any, attempted int, reason string) error {
+	if attempted < 0 {
+		attempted = 0
+	}
+	switch reason {
+	case "item_limit_exceeded", "download_failed", "local_storage_failed", "size_limit_exceeded", "timeout", "rate_limited", "invalid_media_url", "http_client_error", "http_server_error":
+	default:
+		reason = "download_failed"
+	}
+	meta["image_download_status"] = "failed"
+	meta["image_download_count"] = 0
+	meta["image_download_attempted_count"] = attempted
+	meta["image_download_failure_reason"] = reason
+	return &providerImageDownloadError{reason: reason}
+}
+
+type providerImageDownloadError struct{ reason string }
+
+func (e *providerImageDownloadError) Error() string {
+	return fmt.Sprintf("provider image download failed: %s", e.reason)
+}
+func (e *providerImageDownloadError) ToolErrorCode() string    { return ProviderImageDownloadFailedCode }
+func (e *providerImageDownloadError) ToolErrorMessage() string { return e.Error() }
 
 // providerVideoDownloadFailure is the only failure boundary for explicit
 // provider retention. Downloader and filesystem errors can contain signed

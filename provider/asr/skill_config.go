@@ -74,6 +74,11 @@ type configureSkillMediaInput struct {
 	MediaDir                *string          `json:"media_dir,omitempty"`
 	VideoDownloadMaxBytes   *int64           `json:"video_download_max_bytes,omitempty"`
 	VideoDownloadTimeoutSec *int             `json:"video_download_timeout_sec,omitempty"`
+	ImageDownloadProviders  *map[string]bool `json:"image_download_providers,omitempty"`
+	ImageDownloadDir        *string          `json:"image_download_dir,omitempty"`
+	ImageDownloadMaxBytes   *int64           `json:"image_download_max_bytes,omitempty"`
+	ImageDownloadMaxItems   *int             `json:"image_download_max_items,omitempty"`
+	ImageDownloadTimeoutSec *int             `json:"image_download_timeout_sec,omitempty"`
 }
 
 // ConfigureSkillMediaEntry lets a host Agent apply an explicit user request
@@ -85,7 +90,7 @@ func ConfigureSkillMediaEntry() registry.Entry {
 	return registry.Entry{
 		Descriptor: protocol.ToolDescriptor{
 			Name:         ToolConfigureSkillMedia,
-			Description:  "Update provider-scoped local video retention, its directory, its byte/time limits, or the legacy per-download byte limit after an explicit user request.",
+			Description:  "Update explicit provider-scoped local video or image retention and their limits after a user request; this does not enable OCR or ASR.",
 			InputSchema:  registry.MustSchema(configureSkillMediaInputSchema()),
 			OutputSchema: registry.MustSchema(configureSkillMediaOutputSchema()),
 			Capabilities: []string{"config.local", "filesystem.write", "media"},
@@ -99,10 +104,10 @@ func ConfigureSkillMediaEntry() registry.Entry {
 			if err != nil {
 				return nil, nil, err
 			}
-			if in.RetainDownloadedVideo == nil && in.MaxBytes == nil && in.VideoDownloadProviders == nil && in.MediaDir == nil && in.VideoDownloadMaxBytes == nil && in.VideoDownloadTimeoutSec == nil {
+			if in.RetainDownloadedVideo == nil && in.MaxBytes == nil && in.VideoDownloadProviders == nil && in.MediaDir == nil && in.VideoDownloadMaxBytes == nil && in.VideoDownloadTimeoutSec == nil && in.ImageDownloadProviders == nil && in.ImageDownloadDir == nil && in.ImageDownloadMaxBytes == nil && in.ImageDownloadMaxItems == nil && in.ImageDownloadTimeoutSec == nil {
 				return nil, nil, fmt.Errorf("at least one media setting is required")
 			}
-			updated, err := config.UpdateDefaultSkillMediaConfigurationWithVideoDownloadLimitsContext(
+			updated, err := config.UpdateDefaultSkillMediaConfigurationWithRetentionLimitsContext(
 				ctx,
 				in.RetainDownloadedVideo,
 				in.MaxBytes,
@@ -110,12 +115,18 @@ func ConfigureSkillMediaEntry() registry.Entry {
 				in.MediaDir,
 				in.VideoDownloadMaxBytes,
 				in.VideoDownloadTimeoutSec,
+				in.ImageDownloadProviders,
+				in.ImageDownloadDir,
+				in.ImageDownloadMaxBytes,
+				in.ImageDownloadMaxItems,
+				in.ImageDownloadTimeoutSec,
 			)
 			if err != nil {
 				return nil, nil, fmt.Errorf("configure Skill media: %w", err)
 			}
 			media := updated.Skill.Media
 			videoDownload := updated.VideoDownload
+			imageDownload := updated.ImageDownload
 			return map[string]any{
 				"media_dir":                  media.Dir,
 				"media_download_enabled":     media.DownloadMedia,
@@ -124,8 +135,13 @@ func ConfigureSkillMediaEntry() registry.Entry {
 				"video_download_providers":   videoDownload.Providers,
 				"video_download_max_bytes":   videoDownload.MaxBytesOrDefault(),
 				"video_download_timeout_sec": videoDownload.TimeoutSecOrDefault(),
+				"image_download_dir":         imageDownload.DirOrDefault(),
+				"image_download_providers":   imageDownload.Providers,
+				"image_download_max_bytes":   imageDownload.MaxBytesOrDefault(),
+				"image_download_max_items":   imageDownload.MaxItemsOrDefault(),
+				"image_download_timeout_sec": imageDownload.TimeoutSecOrDefault(),
 				"max_bytes":                  media.MaxBytes,
-				"message":                    skillMediaConfigurationMessage(media, videoDownload),
+				"message":                    skillMediaConfigurationMessage(media, videoDownload, imageDownload),
 			}, nil, nil
 		},
 	}
@@ -141,6 +157,11 @@ func configureSkillMediaInputSchema() map[string]any {
 			"video_download_providers":   map[string]any{"type": "object", "additionalProperties": map[string]string{"type": "boolean"}},
 			"video_download_max_bytes":   map[string]any{"type": "integer", "minimum": 1},
 			"video_download_timeout_sec": map[string]any{"type": "integer", "minimum": 1},
+			"image_download_providers":   map[string]any{"type": "object", "additionalProperties": map[string]string{"type": "boolean"}},
+			"image_download_dir":         map[string]any{"type": "string"},
+			"image_download_max_bytes":   map[string]any{"type": "integer", "minimum": 1},
+			"image_download_max_items":   map[string]any{"type": "integer", "minimum": 1},
+			"image_download_timeout_sec": map[string]any{"type": "integer", "minimum": 1},
 		},
 		"additionalProperties": false,
 	}
@@ -157,13 +178,26 @@ func configureSkillMediaOutputSchema() map[string]any {
 			"video_download_providers":   map[string]any{"type": "object"},
 			"video_download_max_bytes":   map[string]string{"type": "integer"},
 			"video_download_timeout_sec": map[string]string{"type": "integer"},
+			"image_download_dir":         map[string]string{"type": "string"},
+			"image_download_providers":   map[string]any{"type": "object"},
+			"image_download_max_bytes":   map[string]string{"type": "integer"},
+			"image_download_max_items":   map[string]string{"type": "integer"},
+			"image_download_timeout_sec": map[string]string{"type": "integer"},
 			"max_bytes":                  map[string]string{"type": "integer"},
 			"message":                    map[string]string{"type": "string"},
 		},
 	}
 }
 
-func skillMediaConfigurationMessage(media config.SkillMediaConfig, videoDownload config.VideoDownloadConfig) string {
+func skillMediaConfigurationMessage(media config.SkillMediaConfig, videoDownload config.VideoDownloadConfig, imageDownload config.ImageDownloadConfig) string {
+	for _, enabled := range imageDownload.Providers {
+		if enabled {
+			return "Provider image retention settings were saved for this MCP session and future sessions. Enabled providers save complete eligible image sets locally; this does not enable OCR."
+		}
+	}
+	if imageDownload.Providers != nil {
+		return "Provider image retention settings were saved for this MCP session and future sessions. No provider image retention is enabled."
+	}
 	for _, enabled := range videoDownload.Providers {
 		if enabled {
 			return "Provider video retention settings were saved for this MCP session and future sessions. Enabled providers save successfully acquired videos locally."

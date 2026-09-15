@@ -35,7 +35,7 @@ source/list discover -> collect detail -> normalize -> media/OCR/ASR enrich -> s
 | 抖音 | 页面上下文/API 尝试 + 浏览器兜底 | `douyin_user` 发现视频/图文 |
 | 今日头条文章 | API 探测 + 多策略浏览器兜底 | `toutiao_author`、`?tab=wtt`、文章/微头条列表 |
 | 今日头条视频 | 视频 provider + 下载/ASR/summary 链路 | `toutiao_video`、`?tab=video` 视频列表 |
-| X/Twitter | Tweet lookup API、oEmbed、浏览器兜底 | `x_user`、`x_post` |
+| X/Twitter | 公开 Syndication、Tweet lookup API、oEmbed、浏览器兜底 | `x_user`、`x_post` |
 | Reddit | OAuth API、RSS fallback、可选浏览器兜底 | subreddit/user/comment source |
 | Threads | 非官方公开网页/浏览器路径 | `threads_user`、`threads_post` |
 | Instagram | 非官方公开网页/浏览器路径 | `instagram_user`、`instagram_post`、`instagram_reel` |
@@ -66,7 +66,7 @@ digcrawl mcp --config /absolute/path/to/digcrawl-skill.yaml
 
 Codex、Claude Code、WorkBuddy 等宿主只需按各自格式登记这条 stdio 命令。安装器会自动修复 Codex；检测到 Claude Code 时会安装其 Skill，但仍将 MCP 注册交给宿主自身。Homebrew tap 发布后可使用 `brew install --cask originaleric/tap/digcrawl`，它仍基于同一 GitHub Release。
 
-Skill 默认只读取链接；归档、Watchlist、浏览器交互和任意本地文件转写仍不暴露。图片文字和视觉分析由 Codex、Claude Code 等宿主读取 DigCrawl 返回的页面截图附件完成：平台工具使用 `include_media` 与 `include_screenshot`，但不使用本地 `include_ocr`。`media` URL 是来源引用，若没有 MCP 图片附件，宿主不得声称已识别该图片。视频 ASR 与抽帧 OCR 是显式本地能力：Provider 下载受限临时 MP4，通用 core 仅接收该本地文件并返回理解结果，不感知平台、artifact 或 Collect；默认处理完成即清理。用户明确要求保存支持平台的视频时，宿主调用 `skill.media.configure` 并以 `video_download_providers` 指定平台，而不是直接编辑 YAML；命名项与已有策略合并，`false` 关闭一个平台，`{}` 清空策略，`media_dir` 只能是绝对路径。Bilibili、抖音、Instagram、快手、Threads、头条、微博、小红书、YouTube 和知乎可启用；X、Reddit、微信公众号不在此保存路径。保留成功的视频写入 `VideoDownload.Dir`，结果的 `platform_metadata.retained_media_relative_path(s)` 只提供相对此目录的定位路径，绝不返回本机绝对路径；旧的 `RetainDownloadedVideo` / `MaxBytes` 只兼容未声明 `VideoDownload` 的旧 YouTube profile。通用 Skill 媒体获取会在该目录内为每次执行创建私有子目录；外部 call ID 只用于请求关联，不能命名或覆盖本地媒体、固定下载文件或 manifest。Collect 的文件导出保持独立，不是这些 core 的输入前提。用户同意调用 `skill.asr.enable` 时，DigCrawl 会先检查 ffmpeg 与当前 ASR provider；缺失依赖时不会写入 opt-in 状态，宿主应保留错误并提示用户完成本地配置。视频摘要始终由宿主基于返回的 Markdown 和成功的 `asr_text` 完成；默认 profile 仅保留 `Skill.Media` 与 `Skill.ASR`，不包含 OCR、Summary 或模型 API Key，也不使用 DigFlow。`Gateway.AllowedDomains` 留空时允许任意 `http/https` 目标；配置后作为可选的访问收紧策略。用户明确请求截图时，返回当前视口图片；`Gateway.ArtifactMaxInlineBytes` 控制 MCP 附件上限，默认 `10485760`（10 MiB）。Cookie、artifact、下载媒体和登录态始终保留在用户本机。遇到小红书、抖音、头条、Threads 或 Instagram 的 `LOGIN_REQUIRED` 时，先经用户同意再运行 `digcrawl browser login --platform <platform>`；它会打开 DigCrawl 独立的有头登录窗口，不读取日常浏览器 profile，完成登录后在终端按 Enter 保存 Cookie。
+Skill 默认只读取链接；归档、Watchlist、浏览器交互和任意本地文件转写仍不暴露。公开 X Post 首先使用无需 Cookie 的 Syndication 分发数据；该端点不可用、限流或结构变化时会继续既有 API、oEmbed 和浏览器链路，不访问私密或登录受限内容。`media` URL 是来源引用。视频 ASR 与抽帧 OCR 是显式本地能力：Provider 下载受限临时 MP4，默认处理完成即清理。用户明确要求保存支持平台的视频时，宿主调用 `skill.media.configure` 的 `video_download_providers`；X、Reddit、微信公众号不在视频保存路径。图片保存使用独立的 `image_download_providers`、`image_download_dir`、`image_download_max_bytes`、`image_download_max_items` 和 `image_download_timeout_sec`：它默认关闭，不启用 OCR；每条内容的远程图片要么在 `ImageDownload.Dir` 的私有子目录完整保存，要么全部回滚，结果只回传相对路径和脱敏失败原因。通用平台、Reddit 与 `browser.browse` 都支持该图片保存路径；浏览器仅返回已渲染 `<img>` 的 HTTP(S) 地址，截图不参与保存。Collect 仍拥有独立 `.assets`：图片已保存且 Collect OCR 关闭时会跳过重复下载，OCR 开启或图片保存失败时仍下载到该次 `.assets`。保留成功的视频和图片均绝不返回本机绝对路径；Cookie、artifact、下载媒体和登录态始终保留在用户本机。`Gateway.AllowedDomains` 留空时允许任意 `http/https` 目标；配置后作为可选的访问收紧策略。
 
 上述不带 `--config` 的登录命令会先解析当前项目的 `config/config.yaml`，项目文件不存在时才使用标准用户 Skill profile。要恢复 MCP 的会话，必须使用启动该 MCP 时的同一 `--config <profile>`；不应猜测未知的 profile 路径。
 

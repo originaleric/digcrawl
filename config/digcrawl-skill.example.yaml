@@ -64,6 +64,16 @@ VideoDownload:
   MaxBytes: 536870912
   TimeoutSec: 300
 
+# Explicit provider-image persistence. This is independent from image OCR and
+# Collect assets: enable only the providers whose original images you want to
+# retain in a private local directory.
+ImageDownload:
+  Dir: "/absolute/path/to/digcrawl/images"
+  Providers: {}
+  MaxBytes: 10485760
+  MaxItems: 8
+  TimeoutSec: 60
+
 Skill:
   Media:
     DownloadMedia: false

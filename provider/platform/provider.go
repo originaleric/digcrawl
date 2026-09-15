@@ -24,17 +24,21 @@ func (p *Provider) Name() string { return Name }
 func (p *Provider) Register(_ context.Context, reg *registry.Registry) error {
 	domains := p.ConfigDomains
 	if len(domains) == 0 {
-		domains = config.Get().Gateway.AllowedDomains
+		cfg := p.Config
+		if cfg == nil {
+			cfg = config.Get()
+		}
+		domains = cfg.Gateway.AllowedDomains
 	}
 	store := p.ArtifactStore
-	reg.Register(WechatArticleReadEntry(domains, store))
+	reg.Register(WechatArticleReadEntry(domains, store, p.Config))
 	reg.Register(XiaohongshuNoteReadEntry(domains, store, p.Config))
 	reg.Register(DouyinVideoReadEntry(domains, store, p.Config))
-	reg.Register(XPostReadEntry(domains, store))
+	reg.Register(XPostReadEntry(domains, store, p.Config))
 	reg.Register(ToutiaoArticleReadEntry(domains, store, p.Config))
 	reg.Register(ToutiaoVideoReadEntry(domains, store, p.Config))
 	reg.Register(FeedReadEntry(domains, store))
-	reg.Register(RedditPostReadEntry(domains, store))
+	reg.Register(RedditPostReadEntry(domains, store, p.Config))
 	reg.Register(RedditSubredditReadEntry(domains))
 	reg.Register(RedditUserReadEntry(domains))
 	reg.Register(ThreadsPostReadEntry(domains, store, p.Config))

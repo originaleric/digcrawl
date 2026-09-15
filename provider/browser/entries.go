@@ -3,12 +3,14 @@ package browser
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"strings"
 
 	"github.com/originaleric/digcrawl/config"
 	"github.com/originaleric/digcrawl/internal/browser"
 	"github.com/originaleric/digcrawl/internal/ocr"
 	"github.com/originaleric/digcrawl/protocol"
+	platformprov "github.com/originaleric/digcrawl/provider/platform"
 	"github.com/originaleric/digcrawl/runtime/artifact"
 	"github.com/originaleric/digcrawl/runtime/executor"
 	"github.com/originaleric/digcrawl/runtime/policy"
@@ -25,11 +27,16 @@ type browseInput struct {
 	ContentSelector   string `json:"content_selector,omitempty"`
 	UseCookieDomain   string `json:"use_cookie_domain,omitempty"`
 	IncludeScreenshot bool   `json:"include_screenshot,omitempty"`
+	IncludeMedia      bool   `json:"include_media,omitempty"`
 	IncludeOCR        bool   `json:"include_ocr,omitempty"`
 }
 
 // BrowseEntry returns registry entry for browser.browse.
-func BrowseEntry(configDomains []string, artStore artifact.Store) registry.Entry {
+func BrowseEntry(configDomains []string, artStore artifact.Store, runtimeConfigs ...*config.Config) registry.Entry {
+	runtimeCfg := config.Get()
+	if len(runtimeConfigs) > 0 && runtimeConfigs[0] != nil {
+		runtimeCfg = runtimeConfigs[0]
+	}
 	return registry.Entry{
 		Descriptor: protocol.ToolDescriptor{
 			Name:        ToolBrowserBrowse,
@@ -45,6 +52,7 @@ func BrowseEntry(configDomains []string, artStore artifact.Store) registry.Entry
 					"content_selector":   map[string]string{"type": "string"},
 					"use_cookie_domain":  map[string]string{"type": "string"},
 					"include_screenshot": map[string]any{"type": "boolean"},
+					"include_media":      map[string]any{"type": "boolean"},
 					"include_ocr":        map[string]any{"type": "boolean"},
 				},
 			}),
@@ -66,10 +74,19 @@ func BrowseEntry(configDomains []string, artStore artifact.Store) registry.Entry
 			if strings.TrimSpace(contentSelector) == "" && (strings.TrimSpace(in.Mode) == "" || strings.EqualFold(strings.TrimSpace(in.Mode), "full")) {
 				contentSelector = "body"
 			}
+			var skillCfg config.SkillConfig
+			var imageDownloadCfg config.ImageDownloadConfig
+			if runtimeCfg == config.Get() {
+				skillCfg, imageDownloadCfg = config.SkillImageDownload()
+			} else {
+				skillCfg, imageDownloadCfg = runtimeCfg.Skill, runtimeCfg.ImageDownload
+			}
+			retainProviderImages := imageDownloadCfg.EnabledFor("web")
+			returnMedia := in.IncludeMedia || in.IncludeOCR
 			resp, err := browser.BrowserBrowse(ctx, &browser.BrowserBrowseRequest{
 				URL: in.URL, Action: in.Action, CaptureScreenshot: in.IncludeScreenshot, Mode: in.Mode, TabID: in.TabID,
 				WaitSelector: in.WaitSelector, ContentSelector: contentSelector,
-				UseCookieDomain: in.UseCookieDomain,
+				UseCookieDomain: in.UseCookieDomain, MetadataScript: browserImageMetadataScript(),
 			})
 			if err != nil {
 				return nil, nil, err
@@ -92,14 +109,35 @@ func BrowseEntry(configDomains []string, artStore artifact.Store) registry.Entry
 				if resp.ScreenshotBase != "" {
 					opts.ExtraImages = []ocr.ImageRef{ocr.PNGDataURLImageRef("screenshot", resp.ScreenshotBase)}
 				}
-				ocr.EnrichMap(ctx, out, config.Get().OCR, opts)
+				ocr.EnrichMap(ctx, out, runtimeCfg.OCR, opts)
+			}
+			if returnMedia || retainProviderImages {
+				if media := browserImageMedia(resp.Metadata); len(media) > 0 {
+					out["media"] = media
+				}
+			}
+			var localImages []skill.LocalImageInput
+			if retainProviderImages {
+				inputs, retainErr := platformprov.RetainResolvedProviderImages(ctx, out, imageDownloadCfg, artStore)
+				if retainErr != nil {
+					if !returnMedia && !executor.IsCollectExecution(ctx) {
+						delete(out, "media")
+					}
+					return out, nil, retainErr
+				}
+				if !executor.IsCollectExecution(ctx) {
+					localImages = inputs
+				}
 			}
 			if !executor.IsCollectExecution(ctx) && in.IncludeOCR {
-				if err := skill.Enhance(ctx, out, config.Skill(), skill.EnhanceOptions{
-					IncludeOCR: true, ScreenshotBase64: resp.ScreenshotBase, ArtifactStore: artStore,
+				if err := skill.Enhance(ctx, out, skillCfg, skill.EnhanceOptions{
+					IncludeOCR: true, ScreenshotBase64: resp.ScreenshotBase, ArtifactStore: artStore, LocalImages: localImages,
 				}); err != nil {
 					return out, nil, err
 				}
+			}
+			if retainProviderImages && !returnMedia && !executor.IsCollectExecution(ctx) {
+				delete(out, "media")
 			}
 			var artifacts []protocol.Artifact
 			if resp.ScreenshotBase != "" {
@@ -107,7 +145,7 @@ func BrowseEntry(configDomains []string, artStore artifact.Store) registry.Entry
 				if artStore == nil {
 					return out, nil, fmt.Errorf("screenshot artifact store is unavailable")
 				}
-				art, err := artifact.PutBase64PNG(ctx, artStore, artID, resp.ScreenshotBase, config.Get().Gateway.ArtifactMaxInlineBytes)
+				art, err := artifact.PutBase64PNG(ctx, artStore, artID, resp.ScreenshotBase, runtimeCfg.Gateway.ArtifactMaxInlineBytes)
 				if err != nil {
 					return out, nil, fmt.Errorf("persist screenshot artifact: %w", err)
 				}
@@ -117,6 +155,40 @@ func BrowseEntry(configDomains []string, artStore artifact.Store) registry.Entry
 			return out, artifacts, nil
 		},
 	}
+}
+
+const browserImageMetadataScriptSource = `() => ({ image_urls: [...new Set(Array.from(document.images).filter(img => { const r = img.getBoundingClientRect(); return r.width > 0 && r.height > 0; }).map(img => { try { const u = new URL(img.currentSrc || img.src, location.href); return /^https?:$/.test(u.protocol) && !u.username && !u.password ? u.href : ''; } catch (_) { return ''; } }).filter(Boolean))] })`
+
+func browserImageMetadataScript() string { return browserImageMetadataScriptSource }
+
+func browserImageMedia(meta map[string]any) []map[string]any {
+	if meta == nil {
+		return nil
+	}
+	values, _ := meta["image_urls"].([]any)
+	if len(values) == 0 {
+		if strings, ok := meta["image_urls"].([]string); ok {
+			for _, value := range strings {
+				values = append(values, value)
+			}
+		}
+	}
+	seen := map[string]struct{}{}
+	media := make([]map[string]any, 0, len(values))
+	for _, value := range values {
+		rawURL, _ := value.(string)
+		rawURL = strings.TrimSpace(rawURL)
+		parsed, err := url.Parse(rawURL)
+		if rawURL == "" || err != nil || parsed.User != nil || parsed.Host == "" || (!strings.EqualFold(parsed.Scheme, "http") && !strings.EqualFold(parsed.Scheme, "https")) {
+			continue
+		}
+		if _, ok := seen[rawURL]; ok {
+			continue
+		}
+		seen[rawURL] = struct{}{}
+		media = append(media, map[string]any{"type": "image", "url": rawURL})
+	}
+	return media
 }
 
 // SnapshotEntry returns registry entry for browser.snapshot.

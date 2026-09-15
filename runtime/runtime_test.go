@@ -91,6 +91,26 @@ func TestRecommendedCallTimeoutIncludesOptedInProviderRetention(t *testing.T) {
 	}
 }
 
+func TestRecommendedCallTimeoutIncludesOptedInImageRetention(t *testing.T) {
+	cfg := &config.Config{
+		LocalBrowser: config.LocalBrowserConfig{TotalTimeoutSec: 90},
+		ImageDownload: config.ImageDownloadConfig{
+			Providers:  map[string]bool{"reddit": true},
+			TimeoutSec: 300,
+		},
+	}
+	// Image retention is enabled inside the handler after Runtime selects its
+	// deadline, so an otherwise media-free request still needs its full budget.
+	call := &protocol.ToolCall{Tool: "reddit.post.read", Input: json.RawMessage(`{"url":"https://example.com/post"}`)}
+	if got, want := RecommendedCallTimeout(cfg, call), 420*time.Second; got != want {
+		t.Fatalf("image retention timeout=%s want %s", got, want)
+	}
+	notOptedIn := &protocol.ToolCall{Tool: "x.post.read", Input: call.Input}
+	if got, want := RecommendedCallTimeout(cfg, notOptedIn), 120*time.Second; got != want {
+		t.Fatalf("non-opted provider timeout=%s want %s", got, want)
+	}
+}
+
 func TestRecommendedCallTimeoutReadsActiveSkillSnapshotDuringUpdates(t *testing.T) {
 	old := config.Skill()
 	t.Cleanup(func() { config.SetSkill(old) })

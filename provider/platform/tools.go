@@ -25,4 +25,7 @@ const (
 	// can preserve that successful content without treating arbitrary read
 	// failures as recoverable.
 	ProviderVideoDownloadFailedCode = "PROVIDER_VIDEO_DOWNLOAD_FAILED"
+	// ProviderImageDownloadFailedCode identifies a failed optional image
+	// retention after the content itself was read successfully.
+	ProviderImageDownloadFailedCode = "PROVIDER_IMAGE_DOWNLOAD_FAILED"
 )

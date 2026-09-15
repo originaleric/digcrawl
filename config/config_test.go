@@ -109,6 +109,24 @@ func TestLoadUsesCustomProfileDirectoryForOmittedVideoDownloadDir(t *testing.T) 
 	}
 }
 
+func TestImageDownloadValidationAndProfileDefault(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "custom-skill.yaml")
+	if err := os.WriteFile(path, []byte("ImageDownload:\n  Providers:\n    x: true\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Validate(path)
+	if err != nil {
+		t.Fatalf("validate image provider profile: %v", err)
+	}
+	want := filepath.Join(filepath.Dir(path), "images")
+	if cfg.ImageDownload.Dir != want || !cfg.ImageDownload.EnabledFor("x") {
+		t.Fatalf("image config=%+v want dir %q", cfg.ImageDownload, want)
+	}
+	if err := validateImageDownloadConfig(ImageDownloadConfig{Providers: map[string]bool{"feed": true}}); err == nil {
+		t.Fatal("list-only feed provider must be rejected")
+	}
+}
+
 func TestUpdateDefaultSkillMediaPreservesIndependentProfileSettings(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	skillMu.Lock()

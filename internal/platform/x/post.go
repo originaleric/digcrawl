@@ -13,6 +13,13 @@ import (
 
 // ReadPost 读取 X/Twitter 帖子（仅首条 status，不展开 thread）。
 func ReadPost(ctx context.Context, in platform.ReadInput) (*platform.Content, error) {
+	return ReadPostWithConfig(ctx, in, config.Get().Platform.X)
+}
+
+// ReadPostWithConfig keeps every X read strategy bound to the configuration
+// of the Runtime that registered the provider. ReadPost remains the direct
+// compatibility entry point for callers that use the default profile.
+func ReadPostWithConfig(ctx context.Context, in platform.ReadInput, cfg config.XAPIConfig) (*platform.Content, error) {
 	url := strings.TrimSpace(in.URL)
 	if url == "" {
 		return nil, fmt.Errorf("url 不能为空")
@@ -23,17 +30,32 @@ func ReadPost(ctx context.Context, in platform.ReadInput) (*platform.Content, er
 		return nil, err
 	}
 
-	cfg := config.Get().Platform.X
+	var syndicationAttempt *platform.APIAttempt
+	var syndicationLatency int64
+	if parsed, attempt, latency, syndicationErr := FetchPostViaSyndication(ctx, norm, cfg); syndicationErr == nil && parsed != nil {
+		if content, mapErr := MapSyndicationResponse(in, norm, parsed); mapErr == nil && content != nil {
+			content.PlatformMetadata = platform.MergeAPIMeta(content.PlatformMetadata, attempt)
+			platform.MergeContentMetrics(content, platform.ReadMetrics{Platform: PlatformName, Channel: "api", ExtractionSource: "syndication", APILatencyMs: latency})
+			return content, nil
+		} else {
+			syndicationAttempt, syndicationLatency = syndicationMapFailureAttempt(attempt), latency
+		}
+	} else if attempt != nil {
+		// Syndication is an opportunistic public source, never a content-access
+		// authority. Even 4xx responses must continue through the old chain.
+		syndicationAttempt, syndicationLatency = attempt, latency
+	}
 	var apiAttempt *platform.APIAttempt
 	var apiLatency int64
 	if parsed, attempt, latency, apiErr := FetchPostViaAPI(ctx, norm, cfg); apiErr == nil && parsed != nil {
 		if content, mapErr := MapAPIResponse(in, norm, parsed); mapErr == nil && content != nil {
 			content.PlatformMetadata = platform.MergeAPIMeta(content.PlatformMetadata, attempt)
+			content.PlatformMetadata = annotateSyndicationAttempt(content.PlatformMetadata, syndicationAttempt)
 			platform.MergeContentMetrics(content, platform.ReadMetrics{
 				Platform:         PlatformName,
 				Channel:          "api",
 				ExtractionSource: "api",
-				APILatencyMs:     latency,
+				APILatencyMs:     syndicationLatency + latency,
 			})
 			return content, nil
 		}
@@ -49,11 +71,12 @@ func ReadPost(ctx context.Context, in platform.ReadInput) (*platform.Content, er
 		if content, mapErr := MapOEmbedResponse(in, norm, parsed); mapErr == nil && content != nil {
 			content.PlatformMetadata = platform.MergeAPIMeta(content.PlatformMetadata, attempt)
 			content.PlatformMetadata = annotatePrimaryAPIAttempt(content.PlatformMetadata, apiAttempt)
+			content.PlatformMetadata = annotateSyndicationAttempt(content.PlatformMetadata, syndicationAttempt)
 			platform.MergeContentMetrics(content, platform.ReadMetrics{
 				Platform:         PlatformName,
 				Channel:          "api",
 				ExtractionSource: "oembed",
-				APILatencyMs:     apiLatency + latency,
+				APILatencyMs:     syndicationLatency + apiLatency + latency,
 			})
 			return content, nil
 		}
@@ -71,15 +94,45 @@ func ReadPost(ctx context.Context, in platform.ReadInput) (*platform.Content, er
 	if err != nil {
 		return nil, err
 	}
+	content.PlatformMetadata = annotateSyndicationAttempt(content.PlatformMetadata, syndicationAttempt)
 	platform.MergeContentMetrics(content, platform.ReadMetrics{
 		Platform:         PlatformName,
 		Channel:          "browser",
 		ExtractionSource: platform.MetaString(content.PlatformMetadata, "extraction_source"),
-		APILatencyMs:     apiLatency,
+		APILatencyMs:     syndicationLatency + apiLatency,
 		BrowserLatencyMs: browserLatency,
 		RetryCount:       retryCount,
 	})
 	return content, nil
+}
+
+func syndicationMapFailureAttempt(attempt *platform.APIAttempt) *platform.APIAttempt {
+	endpoint := ""
+	status := 0
+	if attempt != nil {
+		endpoint, status = platform.MetaString(attempt.Meta, "api_endpoint"), attempt.HTTPStatus
+	}
+	return syndicationAttempt(status, endpoint, "map_failed", "syndication response could not be mapped")
+}
+
+func annotateSyndicationAttempt(meta map[string]any, attempt *platform.APIAttempt) map[string]any {
+	meta = platform.EnsureMeta(meta)
+	if attempt == nil {
+		return meta
+	}
+	if attempt.HTTPStatus > 0 {
+		meta["syndication_http_status"] = attempt.HTTPStatus
+	}
+	if attempt.ErrorCode != "" {
+		meta["syndication_error_code"] = attempt.ErrorCode
+	}
+	if attempt.Message != "" {
+		meta["syndication_error_message"] = attempt.Message
+	}
+	if endpoint := platform.MetaString(attempt.Meta, "api_endpoint"); endpoint != "" {
+		meta["syndication_endpoint"] = endpoint
+	}
+	return meta
 }
 
 func readPostBrowser(ctx context.Context, in platform.ReadInput, norm *platform.NormalizedURL, apiAttempt *platform.APIAttempt) (*platform.Content, int64, int, error) {

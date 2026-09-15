@@ -15,6 +15,7 @@ const Name = "browser"
 
 // Provider exposes generic local browser tools.
 type Provider struct {
+	Config        *config.Config
 	ConfigDomains []string
 	ArtifactStore artifact.Store
 }
@@ -24,17 +25,25 @@ func (p *Provider) Name() string { return Name }
 func (p *Provider) Register(_ context.Context, reg *registry.Registry) error {
 	domains := p.ConfigDomains
 	if len(domains) == 0 {
-		domains = config.Get().Gateway.AllowedDomains
+		cfg := p.Config
+		if cfg == nil {
+			cfg = config.Get()
+		}
+		domains = cfg.Gateway.AllowedDomains
 	}
 	store := p.ArtifactStore
-	reg.Register(BrowseEntry(domains, store))
+	reg.Register(BrowseEntry(domains, store, p.Config))
 	reg.Register(SnapshotEntry(domains))
 	reg.Register(ActionEntry(domains))
 	return nil
 }
 
 func (p *Provider) Health(ctx context.Context) error {
-	cfg := config.Get().LocalBrowser
+	rootCfg := p.Config
+	if rootCfg == nil {
+		rootCfg = config.Get()
+	}
+	cfg := rootCfg.LocalBrowser
 	if cfg.Enabled != nil && !*cfg.Enabled {
 		return fmt.Errorf("local browser is disabled in config")
 	}

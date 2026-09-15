@@ -61,6 +61,7 @@ func (s *Service) exportOpts(outDir string, formats []string) ExportOptions {
 		OutputDir:       outDir,
 		Formats:         formats,
 		DownloadMedia:   download,
+		IncludeMedia:    s.cfg.Collect.IncludeMedia,
 		MaxMediaBytes:   s.cfg.Collect.MaxMediaBytes,
 		MediaTimeoutSec: s.cfg.Collect.MediaTimeoutSec,
 		ArtifactStore:   s.artifacts,
@@ -144,6 +145,9 @@ func (s *Service) collectTimeoutMs(platform string) int {
 	if config.IsSupportedVideoDownloadProvider(platform) && s.cfg.VideoDownload.EnabledFor(platform) {
 		totalSec += s.cfg.VideoDownload.TimeoutSecOrDefault()
 	}
+	if config.IsSupportedImageDownloadProvider(platform) && s.cfg.ImageDownload.EnabledFor(platform) {
+		totalSec += s.cfg.ImageDownload.TimeoutSecOrDefault()
+	}
 	return (totalSec + 30) * 1000
 }
 
@@ -200,6 +204,10 @@ func (s *Service) export(ctx context.Context, out map[string]any, root string, f
 	// provider-retention path. An empty provider policy must not change the
 	// long-standing Collect.DownloadMedia behavior for unrelated videos.
 	exportOpts.SkipVideoDownload = providerVideoRetentionHandled(out)
+	// Provider image retention can only replace the export download when no
+	// Collect OCR is requested: OCR consumes files from this export's assets
+	// directory and must retain that existing source of truth.
+	exportOpts.SkipImageDownload = providerImageRetentionHandled(out) && !s.cfg.OCR.EnabledOrDefault()
 	opts, paths, err := prepareExport(out, exportOpts)
 	if err != nil {
 		return ExportResult{}, err
@@ -210,6 +218,10 @@ func (s *Service) export(ctx context.Context, out map[string]any, root string, f
 	}
 	defer release()
 	return exportToPaths(ctx, out, opts, paths)
+}
+
+func providerImageRetentionHandled(out map[string]any) bool {
+	return providerImageDownloadStatus(out) == "saved"
 }
 
 func providerVideoRetentionHandled(out map[string]any) bool {

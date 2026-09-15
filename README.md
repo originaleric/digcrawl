@@ -65,7 +65,7 @@ The Agent Skills format makes the complete `SKILL.md` bundle portable; MCP makes
 
 After configuration, simply give your Agent a supported URL and ask it to read, summarize, compare, quote, or—when explicitly requested—transcribe it. The Agent uses DigCrawl locally and preserves structured outcomes such as login required, captcha, or rate limiting.
 
-For a supported platform video, explicitly ask the Agent to save that platform's videos. The Skill enables only the requested provider in the user-owned local `VideoDownload` profile and can use a user-specified absolute directory or its profile-local default. Bilibili, Douyin, Instagram, Kuaishou, Threads, Toutiao, Weibo, Xiaohongshu, YouTube, and Zhihu are eligible; X, Reddit, and WeChat are not in this retention path. For a direct local file or media URL, use `digcrawl video`; `--keep <path>` controls retention for that one CLI invocation.
+For a supported platform video, explicitly ask the Agent to save that platform's videos. The Skill enables only the requested provider in the user-owned local `VideoDownload` profile and can use a user-specified absolute directory or its profile-local default. Bilibili, Douyin, Instagram, Kuaishou, Threads, Toutiao, Weibo, Xiaohongshu, YouTube, and Zhihu are eligible; X, Reddit, and WeChat are not in this video-retention path. Provider image retention is separate and opt-in through `ImageDownload`: it supports single-content providers (including X, Reddit, WeChat, and browser web pages), saves a complete bounded image set or none, and never enables OCR by itself. For a direct local file or media URL, use `digcrawl video`; `--keep <path>` controls retention for that one CLI invocation.
 
 The Skill does not include API keys or expose browser cookies. See the [Agent Skill](./.agents/skills/digcrawl/) for routing behavior and [Use with AI Agents](#use-with-ai-agents) for security details.
 
@@ -134,6 +134,8 @@ DigCrawl treats crawling as a stable pipeline—**crawl, collect, normalize, exp
 | The open web | Any `http` or `https` page through the generic browser reader |
 
 Platform readers return structured states such as `LOGIN_REQUIRED`, `CAPTCHA_REQUIRED`, `RATE_LIMITED`, and `CONTENT_TYPE_MISMATCH`. A blocked or private page is never silently exported as valid content.
+
+Public X posts are read through the public Syndication endpoint first, then retain the existing Tweet API, oEmbed, and browser fallbacks. This obtains post text, public images, and the best available direct MP4 reference when the endpoint supplies it; it neither uses cookies nor reads private or login-gated posts. `ImageDownload` is a separate, per-provider opt-in for retaining original images locally. It is independent from OCR and from Collect's `.assets` output: a requested image set is saved atomically within configured size, item, and timeout bounds, or not retained at all.
 
 See [supported platforms and source boundaries](./USAGE.md) for URL patterns, authentication behavior, and configuration.
 

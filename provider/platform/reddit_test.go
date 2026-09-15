@@ -3,9 +3,12 @@ package platformprov
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/originaleric/digcrawl/config"
 	iplatform "github.com/originaleric/digcrawl/internal/platform"
 	"github.com/originaleric/digcrawl/internal/platform/reddit"
 	"github.com/originaleric/digcrawl/protocol"
@@ -29,6 +32,33 @@ func TestRedditPostInputPreservesSkillEnhancementFlags(t *testing.T) {
 	}
 	if !in.IncludeOCR || !in.IncludeASR || !in.IncludeSummary {
 		t.Fatalf("skill enhancement flags were dropped: %+v", in)
+	}
+}
+
+func TestRedditPostReadHandlerUsesInjectedImageRetentionConfig(t *testing.T) {
+	cfg := &config.Config{ImageDownload: config.ImageDownloadConfig{
+		Dir: filepath.Join(t.TempDir(), "images"), Providers: map[string]bool{"reddit": true}, MaxItems: 1,
+	}}
+	input, err := json.Marshal(redditPostReadInput{URL: "https://www.reddit.com/r/golang/comments/abc123/post/"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := redditPostReadHandler(nil, nil, func(_ context.Context, in reddit.ReadInput) (*iplatform.Content, error) {
+		if !in.IncludeMedia {
+			t.Fatal("injected image retention policy must request media")
+		}
+		return &iplatform.Content{SourceURL: in.URL, Media: []iplatform.MediaItem{
+			{Type: "image", URL: "https://example.com/1.jpg"}, {Type: "image", URL: "https://example.com/2.jpg"},
+		}}, nil
+	}, cfg)
+	out, _, err := handler(context.Background(), &protocol.ToolCall{Type: protocol.TypeToolCall, Tool: ToolRedditPostRead, Input: input})
+	var coded interface{ ToolErrorCode() string }
+	if !errors.As(err, &coded) || coded.ToolErrorCode() != ProviderImageDownloadFailedCode {
+		t.Fatalf("injected image policy was not used: out=%+v err=%v", out, err)
+	}
+	meta, _ := out["platform_metadata"].(map[string]any)
+	if meta["image_download_failure_reason"] != "item_limit_exceeded" {
+		t.Fatalf("metadata=%+v", meta)
 	}
 }
 

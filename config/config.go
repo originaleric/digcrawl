@@ -28,6 +28,7 @@ type Config struct {
 	Collect         CollectConfig       `yaml:"Collect" json:"Collect"`
 	LocalBrowser    LocalBrowserConfig  `yaml:"LocalBrowser" json:"LocalBrowser"`
 	VideoDownload   VideoDownloadConfig `yaml:"VideoDownload" json:"VideoDownload,omitempty"`
+	ImageDownload   ImageDownloadConfig `yaml:"ImageDownload" json:"ImageDownload,omitempty"`
 	RuntimeEnv      RuntimeEnvConfig    `yaml:"RuntimeEnv" json:"RuntimeEnv,omitempty"`
 	Skill           SkillConfig         `yaml:"Skill" json:"Skill,omitempty"`
 	Platform        PlatformConfig      `yaml:"Platform" json:"Platform"`
@@ -52,15 +53,39 @@ type VideoDownloadConfig struct {
 	TimeoutSec int             `yaml:"TimeoutSec" json:"TimeoutSec,omitempty"`
 }
 
+// ImageDownloadConfig controls explicit, provider-scoped retention of images
+// already resolved by a single-content reader. It deliberately stays separate
+// from VideoDownload: image retention has a bounded item set and does not
+// alter the established video workflow.
+type ImageDownloadConfig struct {
+	Dir        string          `yaml:"Dir" json:"Dir,omitempty"`
+	Providers  map[string]bool `yaml:"Providers" json:"Providers,omitempty"`
+	MaxBytes   int64           `yaml:"MaxBytes" json:"MaxBytes,omitempty"`
+	MaxItems   int             `yaml:"MaxItems" json:"MaxItems,omitempty"`
+	TimeoutSec int             `yaml:"TimeoutSec" json:"TimeoutSec,omitempty"`
+}
+
 const (
 	DefaultVideoDownloadMaxBytes   int64 = 512 * 1024 * 1024
 	DefaultVideoDownloadTimeoutSec       = 300
+)
+
+const (
+	DefaultImageDownloadMaxBytes   int64 = 10 * 1024 * 1024
+	DefaultImageDownloadMaxItems         = 8
+	DefaultImageDownloadTimeoutSec       = 60
 )
 
 var supportedVideoDownloadProviders = map[string]struct{}{
 	"bilibili": {}, "douyin": {}, "instagram": {}, "kuaishou": {},
 	"threads": {}, "toutiao": {}, "weibo": {}, "xiaohongshu": {},
 	"youtube": {}, "zhihu": {},
+}
+
+var supportedImageDownloadProviders = map[string]struct{}{
+	"bilibili": {}, "douyin": {}, "instagram": {}, "kuaishou": {},
+	"reddit": {}, "threads": {}, "toutiao": {}, "wechat": {}, "weibo": {},
+	"web": {}, "x": {}, "xiaohongshu": {}, "youtube": {}, "zhihu": {},
 }
 
 // IsSupportedVideoDownloadProvider reports whether a normalized platform name
@@ -71,9 +96,26 @@ func IsSupportedVideoDownloadProvider(provider string) bool {
 	return ok
 }
 
+// IsSupportedImageDownloadProvider is the single allowlist shared by profile
+// validation, platform routing, and Collect's request budget.
+func IsSupportedImageDownloadProvider(provider string) bool {
+	_, ok := supportedImageDownloadProviders[strings.ToLower(strings.TrimSpace(provider))]
+	return ok
+}
+
 // EnabledFor reports whether the caller explicitly opted this platform into
 // durable local video retention. Unknown names intentionally stay disabled.
 func (c VideoDownloadConfig) EnabledFor(platform string) bool {
+	if c.Providers == nil {
+		return false
+	}
+	return c.Providers[strings.ToLower(strings.TrimSpace(platform))]
+}
+
+// EnabledFor reports whether a provider was explicitly opted into durable
+// image retention. Unknown names remain disabled even if a malformed runtime
+// config bypassed YAML validation.
+func (c ImageDownloadConfig) EnabledFor(platform string) bool {
 	if c.Providers == nil {
 		return false
 	}
@@ -87,6 +129,13 @@ func (c VideoDownloadConfig) DirOrDefault() string {
 	return filepath.Join(filepath.Dir(DefaultSkillProfilePath()), "media")
 }
 
+func (c ImageDownloadConfig) DirOrDefault() string {
+	if dir := strings.TrimSpace(c.Dir); dir != "" {
+		return dir
+	}
+	return filepath.Join(filepath.Dir(DefaultSkillProfilePath()), "images")
+}
+
 func (c VideoDownloadConfig) MaxBytesOrDefault() int64 {
 	if c.MaxBytes > 0 {
 		return c.MaxBytes
@@ -94,11 +143,32 @@ func (c VideoDownloadConfig) MaxBytesOrDefault() int64 {
 	return DefaultVideoDownloadMaxBytes
 }
 
+func (c ImageDownloadConfig) MaxBytesOrDefault() int64 {
+	if c.MaxBytes > 0 {
+		return c.MaxBytes
+	}
+	return DefaultImageDownloadMaxBytes
+}
+
+func (c ImageDownloadConfig) MaxItemsOrDefault() int {
+	if c.MaxItems > 0 {
+		return c.MaxItems
+	}
+	return DefaultImageDownloadMaxItems
+}
+
 func (c VideoDownloadConfig) TimeoutSecOrDefault() int {
 	if c.TimeoutSec > 0 {
 		return c.TimeoutSec
 	}
 	return DefaultVideoDownloadTimeoutSec
+}
+
+func (c ImageDownloadConfig) TimeoutSecOrDefault() int {
+	if c.TimeoutSec > 0 {
+		return c.TimeoutSec
+	}
+	return DefaultImageDownloadTimeoutSec
 }
 
 func validateVideoDownloadConfig(c VideoDownloadConfig) error {
@@ -122,6 +192,34 @@ func validateVideoDownloadConfig(c VideoDownloadConfig) error {
 	}
 	if anyVideoDownloadProviderEnabled(c.Providers) && strings.TrimSpace(c.Dir) != "" && !filepath.IsAbs(c.Dir) {
 		return fmt.Errorf("VideoDownload.Dir must be an absolute path when a provider is enabled")
+	}
+	return nil
+}
+
+func validateImageDownloadConfig(c ImageDownloadConfig) error {
+	for provider := range c.Providers {
+		name := strings.TrimSpace(provider)
+		if provider != name {
+			return fmt.Errorf("ImageDownload.Providers key %q must not contain surrounding whitespace", provider)
+		}
+		if name != strings.ToLower(name) {
+			return fmt.Errorf("ImageDownload.Providers key %q must be lowercase", provider)
+		}
+		if !IsSupportedImageDownloadProvider(name) {
+			return fmt.Errorf("ImageDownload.Providers key %q is unsupported", provider)
+		}
+	}
+	if c.MaxBytes < 0 {
+		return fmt.Errorf("ImageDownload.MaxBytes must be zero or positive")
+	}
+	if c.MaxItems < 0 {
+		return fmt.Errorf("ImageDownload.MaxItems must be zero or positive")
+	}
+	if c.TimeoutSec < 0 {
+		return fmt.Errorf("ImageDownload.TimeoutSec must be zero or positive")
+	}
+	if anyVideoDownloadProviderEnabled(c.Providers) && strings.TrimSpace(c.Dir) != "" && !filepath.IsAbs(c.Dir) {
+		return fmt.Errorf("ImageDownload.Dir must be an absolute path when a provider is enabled")
 	}
 	return nil
 }
@@ -1130,17 +1228,38 @@ func (c FeishuNotificationConfig) hasValues() bool {
 
 // XAPIConfig controls X/Twitter API based post reads.
 type XAPIConfig struct {
-	APIEnabled        *bool  `yaml:"APIEnabled" json:"APIEnabled,omitempty"`
-	OEmbedEnabled     *bool  `yaml:"OEmbedEnabled" json:"OEmbedEnabled,omitempty"`
-	AuthMode          string `yaml:"AuthMode" json:"AuthMode,omitempty"` // app_only | bearer
-	APIBaseURL        string `yaml:"APIBaseURL" json:"APIBaseURL,omitempty"`
-	TokenURL          string `yaml:"TokenURL" json:"TokenURL,omitempty"`
-	OEmbedURL         string `yaml:"OEmbedURL" json:"OEmbedURL,omitempty"`
-	ConsumerKey       string `yaml:"ConsumerKey" json:"ConsumerKey,omitempty"`
-	ConsumerKeySecret string `yaml:"ConsumerKeySecret" json:"ConsumerKeySecret,omitempty"`
-	BearerToken       string `yaml:"BearerToken" json:"BearerToken,omitempty"`
-	APITimeoutSec     int    `yaml:"APITimeoutSec" json:"APITimeoutSec,omitempty"`
-	APIMaxRetries     int    `yaml:"APIMaxRetries" json:"APIMaxRetries,omitempty"`
+	SyndicationEnabled    *bool  `yaml:"SyndicationEnabled" json:"SyndicationEnabled,omitempty"`
+	SyndicationURL        string `yaml:"SyndicationURL" json:"SyndicationURL,omitempty"`
+	SyndicationTimeoutSec int    `yaml:"SyndicationTimeoutSec" json:"SyndicationTimeoutSec,omitempty"`
+	APIEnabled            *bool  `yaml:"APIEnabled" json:"APIEnabled,omitempty"`
+	OEmbedEnabled         *bool  `yaml:"OEmbedEnabled" json:"OEmbedEnabled,omitempty"`
+	AuthMode              string `yaml:"AuthMode" json:"AuthMode,omitempty"` // app_only | bearer
+	APIBaseURL            string `yaml:"APIBaseURL" json:"APIBaseURL,omitempty"`
+	TokenURL              string `yaml:"TokenURL" json:"TokenURL,omitempty"`
+	OEmbedURL             string `yaml:"OEmbedURL" json:"OEmbedURL,omitempty"`
+	ConsumerKey           string `yaml:"ConsumerKey" json:"ConsumerKey,omitempty"`
+	ConsumerKeySecret     string `yaml:"ConsumerKeySecret" json:"ConsumerKeySecret,omitempty"`
+	BearerToken           string `yaml:"BearerToken" json:"BearerToken,omitempty"`
+	APITimeoutSec         int    `yaml:"APITimeoutSec" json:"APITimeoutSec,omitempty"`
+	APIMaxRetries         int    `yaml:"APIMaxRetries" json:"APIMaxRetries,omitempty"`
+}
+
+func (c XAPIConfig) SyndicationEnabledOrDefault() bool {
+	return c.SyndicationEnabled == nil || *c.SyndicationEnabled
+}
+
+func (c XAPIConfig) SyndicationURLOrDefault() string {
+	if u := strings.TrimSpace(c.SyndicationURL); u != "" {
+		return strings.TrimRight(u, "/")
+	}
+	return "https://cdn.syndication.twimg.com/tweet-result"
+}
+
+func (c XAPIConfig) SyndicationTimeoutSecOrDefault() int {
+	if c.SyndicationTimeoutSec > 0 {
+		return c.SyndicationTimeoutSec
+	}
+	return c.APITimeoutSecOrDefault()
 }
 
 // OEmbedEnabledOrDefault reports whether X oEmbed fallback is enabled.
@@ -1688,6 +1807,22 @@ func SkillVideoDownload() (SkillConfig, VideoDownloadConfig) {
 	return defaultCfg.Skill, videoDownload
 }
 
+// SkillImageDownload returns a stable snapshot of the user-owned image
+// retention policy. This mirrors VideoDownload's snapshot semantics without
+// changing its existing API.
+func SkillImageDownload() (SkillConfig, ImageDownloadConfig) {
+	skillMu.RLock()
+	defer skillMu.RUnlock()
+	imageDownload := defaultCfg.ImageDownload
+	if defaultCfg.ImageDownload.Providers != nil {
+		imageDownload.Providers = make(map[string]bool, len(defaultCfg.ImageDownload.Providers))
+		for provider, enabled := range defaultCfg.ImageDownload.Providers {
+			imageDownload.Providers[provider] = enabled
+		}
+	}
+	return defaultCfg.Skill, imageDownload
+}
+
 // SetSkill replaces the active Skill configuration. It is used by the local
 // Skill opt-in and by tests that exercise Skill-owned enhancement behavior.
 func SetSkill(cfg SkillConfig) {
@@ -1734,7 +1869,13 @@ func load(path string, applyRuntimeEnv bool) (*Config, error) {
 	if strings.TrimSpace(cfg.VideoDownload.Dir) == "" && cfg.SourcePath != "" {
 		cfg.VideoDownload.Dir = filepath.Join(filepath.Dir(cfg.SourcePath), "media")
 	}
+	if strings.TrimSpace(cfg.ImageDownload.Dir) == "" && cfg.SourcePath != "" {
+		cfg.ImageDownload.Dir = filepath.Join(filepath.Dir(cfg.SourcePath), "images")
+	}
 	if err := validateVideoDownloadConfig(cfg.VideoDownload); err != nil {
+		return nil, err
+	}
+	if err := validateImageDownloadConfig(cfg.ImageDownload); err != nil {
 		return nil, err
 	}
 	cfg.HasRootASR = hasRootASR
@@ -2544,7 +2685,7 @@ func UpdateDefaultVideoDownloadContext(ctx context.Context, providers *map[strin
 // Skill.Media controls and explicit provider-video retention in one profile
 // mutation. It is kept for callers that only need the original controls.
 func UpdateDefaultSkillMediaConfigurationContext(ctx context.Context, retainDownloadedVideo *bool, maxBytes *int64, providers *map[string]bool, dir *string) (*Config, error) {
-	return updateDefaultSkillMediaConfigurationContext(ctx, retainDownloadedVideo, maxBytes, providers, dir, nil, nil)
+	return updateDefaultSkillMediaConfigurationContext(ctx, retainDownloadedVideo, maxBytes, providers, dir, nil, nil, nil, nil, nil, nil, nil)
 }
 
 // UpdateDefaultSkillMediaConfigurationWithVideoDownloadLimitsContext extends
@@ -2552,11 +2693,19 @@ func UpdateDefaultSkillMediaConfigurationContext(ctx context.Context, retainDown
 // provider-video retention path. It preserves the original exported API for
 // existing host integrations.
 func UpdateDefaultSkillMediaConfigurationWithVideoDownloadLimitsContext(ctx context.Context, retainDownloadedVideo *bool, maxBytes *int64, providers *map[string]bool, dir *string, videoDownloadMaxBytes *int64, videoDownloadTimeoutSec *int) (*Config, error) {
-	return updateDefaultSkillMediaConfigurationContext(ctx, retainDownloadedVideo, maxBytes, providers, dir, videoDownloadMaxBytes, videoDownloadTimeoutSec)
+	return updateDefaultSkillMediaConfigurationContext(ctx, retainDownloadedVideo, maxBytes, providers, dir, videoDownloadMaxBytes, videoDownloadTimeoutSec, nil, nil, nil, nil, nil)
 }
 
-func updateDefaultSkillMediaConfigurationContext(ctx context.Context, retainDownloadedVideo *bool, maxBytes *int64, providers *map[string]bool, dir *string, videoDownloadMaxBytes *int64, videoDownloadTimeoutSec *int) (*Config, error) {
-	if retainDownloadedVideo == nil && maxBytes == nil && providers == nil && dir == nil && videoDownloadMaxBytes == nil && videoDownloadTimeoutSec == nil {
+// UpdateDefaultSkillMediaConfigurationWithRetentionLimitsContext persists the
+// existing video controls and the plan's parallel image-retention controls in
+// one profile transaction. Neither branch enables OCR, ASR, or downloads by
+// itself.
+func UpdateDefaultSkillMediaConfigurationWithRetentionLimitsContext(ctx context.Context, retainDownloadedVideo *bool, maxBytes *int64, videoProviders *map[string]bool, videoDir *string, videoMaxBytes *int64, videoTimeoutSec *int, imageProviders *map[string]bool, imageDir *string, imageMaxBytes *int64, imageMaxItems *int, imageTimeoutSec *int) (*Config, error) {
+	return updateDefaultSkillMediaConfigurationContext(ctx, retainDownloadedVideo, maxBytes, videoProviders, videoDir, videoMaxBytes, videoTimeoutSec, imageProviders, imageDir, imageMaxBytes, imageMaxItems, imageTimeoutSec)
+}
+
+func updateDefaultSkillMediaConfigurationContext(ctx context.Context, retainDownloadedVideo *bool, maxBytes *int64, providers *map[string]bool, dir *string, videoDownloadMaxBytes *int64, videoDownloadTimeoutSec *int, imageProviders *map[string]bool, imageDir *string, imageDownloadMaxBytes *int64, imageDownloadMaxItems *int, imageDownloadTimeoutSec *int) (*Config, error) {
+	if retainDownloadedVideo == nil && maxBytes == nil && providers == nil && dir == nil && videoDownloadMaxBytes == nil && videoDownloadTimeoutSec == nil && imageProviders == nil && imageDir == nil && imageDownloadMaxBytes == nil && imageDownloadMaxItems == nil && imageDownloadTimeoutSec == nil {
 		return nil, fmt.Errorf("at least one media setting is required")
 	}
 	if maxBytes != nil && *maxBytes <= 0 {
@@ -2567,6 +2716,15 @@ func updateDefaultSkillMediaConfigurationContext(ctx context.Context, retainDown
 	}
 	if videoDownloadTimeoutSec != nil && *videoDownloadTimeoutSec <= 0 {
 		return nil, fmt.Errorf("VideoDownload.TimeoutSec must be positive")
+	}
+	if imageDownloadMaxBytes != nil && *imageDownloadMaxBytes <= 0 {
+		return nil, fmt.Errorf("ImageDownload.MaxBytes must be positive")
+	}
+	if imageDownloadMaxItems != nil && *imageDownloadMaxItems <= 0 {
+		return nil, fmt.Errorf("ImageDownload.MaxItems must be positive")
+	}
+	if imageDownloadTimeoutSec != nil && *imageDownloadTimeoutSec <= 0 {
+		return nil, fmt.Errorf("ImageDownload.TimeoutSec must be positive")
 	}
 
 	var configuredDir *string
@@ -2595,6 +2753,35 @@ func updateDefaultSkillMediaConfigurationContext(ctx context.Context, retainDown
 			return nil, err
 		}
 	}
+	var configuredImageDir *string
+	if imageDir != nil {
+		cleanedDir := strings.TrimSpace(*imageDir)
+		if cleanedDir == "" || !filepath.IsAbs(cleanedDir) {
+			return nil, fmt.Errorf("ImageDownload.Dir must be an absolute path")
+		}
+		configuredImageDir = &cleanedDir
+	}
+	if imageProviders != nil || imageDownloadMaxBytes != nil || imageDownloadMaxItems != nil || imageDownloadTimeoutSec != nil {
+		candidate := ImageDownloadConfig{}
+		if configuredImageDir != nil {
+			candidate.Dir = *configuredImageDir
+		}
+		if imageProviders != nil {
+			candidate.Providers = *imageProviders
+		}
+		if imageDownloadMaxBytes != nil {
+			candidate.MaxBytes = *imageDownloadMaxBytes
+		}
+		if imageDownloadMaxItems != nil {
+			candidate.MaxItems = *imageDownloadMaxItems
+		}
+		if imageDownloadTimeoutSec != nil {
+			candidate.TimeoutSec = *imageDownloadTimeoutSec
+		}
+		if err := validateImageDownloadConfig(candidate); err != nil {
+			return nil, err
+		}
+	}
 
 	path := DefaultSkillProfilePath()
 	release, err := lockSkillMutation(ctx)
@@ -2613,6 +2800,11 @@ func updateDefaultSkillMediaConfigurationContext(ctx context.Context, retainDown
 		configuredDir,
 		videoDownloadMaxBytes,
 		videoDownloadTimeoutSec,
+		imageProviders,
+		configuredImageDir,
+		imageDownloadMaxBytes,
+		imageDownloadMaxItems,
+		imageDownloadTimeoutSec,
 	)
 	if err != nil {
 		return nil, err
@@ -2623,6 +2815,7 @@ func updateDefaultSkillMediaConfigurationContext(ctx context.Context, retainDown
 	skillMu.Lock()
 	defaultCfg.Skill = persisted.Skill
 	defaultCfg.VideoDownload = persisted.VideoDownload
+	defaultCfg.ImageDownload = persisted.ImageDownload
 	result := defaultCfg
 	skillMu.Unlock()
 	return &result, nil
@@ -2656,7 +2849,7 @@ func updateSkillASROptIn(ctx context.Context, path, mediaDir string) (SkillConfi
 // updateDefaultSkillMediaConfiguration preserves all YAML nodes outside the
 // two settings owned by the host-facing configuration tool, while keeping
 // their combined update in one atomic profile replacement.
-func updateDefaultSkillMediaConfiguration(ctx context.Context, path, mediaDir string, retainDownloadedVideo *bool, maxBytes *int64, providers *map[string]bool, dir *string, videoDownloadMaxBytes *int64, videoDownloadTimeoutSec *int) (Config, error) {
+func updateDefaultSkillMediaConfiguration(ctx context.Context, path, mediaDir string, retainDownloadedVideo *bool, maxBytes *int64, providers *map[string]bool, dir *string, videoDownloadMaxBytes *int64, videoDownloadTimeoutSec *int, imageProviders *map[string]bool, imageDir *string, imageDownloadMaxBytes *int64, imageDownloadMaxItems *int, imageDownloadTimeoutSec *int) (Config, error) {
 	return updateSkillProfileConfig(ctx, path, func(root *yaml.Node) {
 		if retainDownloadedVideo != nil {
 			setYAMLBool(root, []string{"Skill", "Media", "RetainDownloadedVideo"}, *retainDownloadedVideo)
@@ -2688,6 +2881,29 @@ func updateDefaultSkillMediaConfiguration(ctx context.Context, path, mediaDir st
 		}
 		if videoDownloadTimeoutSec != nil {
 			setYAMLInt(root, []string{"VideoDownload", "TimeoutSec"}, int64(*videoDownloadTimeoutSec))
+		}
+		if imageProviders != nil || imageDir != nil {
+			if imageProviders != nil {
+				if len(*imageProviders) == 0 {
+					setYAMLBoolMap(root, []string{"ImageDownload", "Providers"}, *imageProviders)
+				} else {
+					setYAMLBoolMapEntries(root, []string{"ImageDownload", "Providers"}, *imageProviders)
+				}
+			}
+			if imageDir != nil {
+				setYAMLString(root, []string{"ImageDownload", "Dir"}, *imageDir)
+			} else if strings.TrimSpace(yamlString(root, []string{"ImageDownload", "Dir"})) == "" {
+				setYAMLString(root, []string{"ImageDownload", "Dir"}, filepath.Join(filepath.Dir(path), "images"))
+			}
+		}
+		if imageDownloadMaxBytes != nil {
+			setYAMLInt(root, []string{"ImageDownload", "MaxBytes"}, *imageDownloadMaxBytes)
+		}
+		if imageDownloadMaxItems != nil {
+			setYAMLInt(root, []string{"ImageDownload", "MaxItems"}, int64(*imageDownloadMaxItems))
+		}
+		if imageDownloadTimeoutSec != nil {
+			setYAMLInt(root, []string{"ImageDownload", "TimeoutSec"}, int64(*imageDownloadTimeoutSec))
 		}
 	})
 }
@@ -2737,6 +2953,9 @@ func updateSkillProfileConfig(ctx context.Context, path string, mutate func(root
 		return Config{}, err
 	}
 	if err := validateVideoDownloadConfig(persisted.VideoDownload); err != nil {
+		return Config{}, err
+	}
+	if err := validateImageDownloadConfig(persisted.ImageDownload); err != nil {
 		return Config{}, err
 	}
 	if err := writeConfigAtomically(path, updated); err != nil {
