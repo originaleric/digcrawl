@@ -18,6 +18,7 @@ import (
 	internalasr "github.com/originaleric/digcrawl/internal/asr"
 	"github.com/originaleric/digcrawl/internal/ocr"
 	"github.com/originaleric/digcrawl/runtime/artifact"
+	"github.com/originaleric/digcrawl/runtime/executor"
 )
 
 // EnhanceOptions describes explicit enrichments requested through the Skill.
@@ -48,6 +49,22 @@ type LocalImageInput struct {
 	Path      string
 	SourceURL string
 	Type      string
+}
+
+// OCRRequested is the direct-read OCR policy for a Skill profile. Enabling
+// Skill.OCR is an operator opt-in to process page images by default; the
+// per-call flag remains available for callers that need an explicit request.
+// The default profile keeps OCR disabled, so ordinary keyless reads do not
+// download images or send them to an OCR provider.
+func OCRRequested(cfg config.SkillConfig, explicitlyRequested bool) bool {
+	return explicitlyRequested || cfg.OCR.EnabledOrDefault()
+}
+
+// DirectReadOCRRequested centralizes the Skill OCR boundary used by every
+// direct provider. Collect owns a separate root-level export/OCR pipeline, so
+// a Collect context must never turn a Skill default into hidden media work.
+func DirectReadOCRRequested(ctx context.Context, cfg config.SkillConfig, explicitlyRequested bool) bool {
+	return !executor.IsCollectExecution(ctx) && OCRRequested(cfg, explicitlyRequested)
 }
 
 // Enhance applies the Skill-owned media/OCR/ASR/video-summary pipeline.

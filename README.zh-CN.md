@@ -196,7 +196,7 @@ command = "/absolute/path/to/digcrawl"
 args = ["mcp", "--config", "/absolute/path/to/digcrawl-skill.yaml"]
 ```
 
-Codex 与 Claude Code 的示例位于 [Skill 目录](./.agents/skills/digcrawl/)。未显式传超时参数的 `digcrawl mcp` 会从 MCP `initialize` 识别 Codex 并回收其遗留会话，因此已有 Codex 注册在宿主正常重启后即可生效；其他已初始化 MCP 客户端保持标准长连接。Codex 适配器显式设置超时；通用 MCP 注册不应复制该宿主专用参数。
+Codex 与 Claude Code 的示例位于 [Skill 目录](./.agents/skills/digcrawl/)。首次 `digcrawl mcp` 调用会按 profile 按需启动一个私有本机 Bridge；stdio 子进程只转发协议，不会各自创建 Runtime、Chrome 或固定 CDP 端口。profile 符号链接会归并到同一 Bridge；同一持久化 `LocalBrowser.UserDataDir` 同一时刻只允许一个 Bridge 持有，如需独立配置请使用不同目录。Bridge 会持续服务，直到异常退出或执行 `digcrawl bridge stop --config <profile>`，不会在预检与实际 `tools/call` 之间因空闲超时消失；`digcrawl bridge restart --config <profile>` 采用直接停启，立即取消在途读取并在其管理的 Chrome 已释放后再启动新实例，不做平滑交接。Release 安装器会先用已验证的临时新二进制停止标准 Skill profile 的旧 Bridge，再替换安装目标。可回收的是 stdio 子进程：未初始化管道在 1 分钟后回收，已初始化会话在 15 分钟没有实际 `tools/call` 后回收；MCP `ping` 不会续租。Codex 适配器可用正值 `--idle-timeout` 覆盖后一个间隔；通用 MCP 注册不应复制该宿主专用参数。
 
 默认 Skill 不含密钥。页面截图与图片理解优先交给宿主 Agent 的多模态模型；可选本地 ASR 是显式能力，需要自行准备依赖和配置。
 
@@ -216,6 +216,7 @@ DigCrawl 在用户机器上运行，并将访问边界保持可见：
 
 | 时间 | 更新 | 对使用者的意义 |
 | --- | --- | --- |
+| 2026-09-20 | 简化单人单机 MCP Bridge 生命周期，并完成今日头条文章读取与已配置图片 OCR 验证。 | 每个 profile 只有一个按需 Bridge，可回收的只是 stdio 代理；直接停启会先释放浏览器再创建新实例，避免空闲回收导致的请求间歇失效和浏览器所有者进程累积。 |
 | 2026-09-15 | X 公开 Post 增加 Syndication 优先解析，并增加全渠道图片本地保存开关。 | 公开 X 内容可在既有 API/oEmbed/浏览器兜底前直接取得正文、图片和可用 MP4 引用；图片保存与 OCR、视频保存和 Collect `.assets` 独立，保持显式 opt-in 与本机路径隔离。 |
 | 2026-09-06 | 新增按平台显式 opt-in 的本地视频保存。 | 用户可只为支持的平台保存一个经过校验的本地视频；API 正文仍是来源真相，保存失败也不会阻止 Collect 导出已成功读取的内容。 |
 | 2026-09-04 | 统一本地 ASR 安装、配置域与健康检查。 | 发布版无需 Go 即可安装 faster-whisper；setup、转写与 `asr check` 共用 root/Skill 缓存域，自定义 runner 会明确标记为外部管理，不再误报 ready。 |

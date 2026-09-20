@@ -18,3 +18,11 @@ const parseCount = (raw) => {
   return Math.round(n * factor);
 };
 `
+
+// WithParseCountJS wraps a metadata callback in the function contract
+// required by rod.Page.Eval. Eval invokes the returned function with apply,
+// so the parse-count declaration must live inside that function rather than
+// at top level or inside an already-evaluated IIFE.
+func WithParseCountJS(callback string) string {
+	return `() => {` + ParseCountJS + `return (` + callback + `)(); }`
+}

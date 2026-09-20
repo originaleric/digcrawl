@@ -1,10 +1,13 @@
 package browser
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
 
+	"github.com/originaleric/digcrawl/config"
+	internalbrowser "github.com/originaleric/digcrawl/internal/browser"
 	"github.com/originaleric/digcrawl/protocol"
 )
 
@@ -48,6 +51,33 @@ func TestBrowserImageMediaRejectsCredentialBearingOrInvalidURLs(t *testing.T) {
 	}
 	if !strings.Contains(browserImageMetadataScript(), "!u.username") || !strings.Contains(browserImageMetadataScript(), "!u.password") {
 		t.Fatal("browser metadata script must exclude URL credentials before they enter metadata")
+	}
+}
+
+func TestBrowseEntryAppliesSkillOCRWithoutReturningInternalMedia(t *testing.T) {
+	enabled := true
+	cfg := &config.Config{Skill: config.SkillConfig{OCR: config.OCRConfig{Enabled: &enabled, Provider: "stub"}}}
+	oldBrowsePage := browsePage
+	browsePage = func(_ context.Context, req *internalbrowser.BrowserBrowseRequest) (*internalbrowser.BrowserBrowseResponse, error) {
+		return &internalbrowser.BrowserBrowseResponse{
+			URL: req.URL, Markdown: "body",
+			Metadata: map[string]any{"image_urls": []any{"https://images.example.test/browser.png"}},
+		}, nil
+	}
+	t.Cleanup(func() { browsePage = oldBrowsePage })
+	input, err := json.Marshal(browseInput{URL: "https://example.com/article"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, _, err := BrowseEntry(nil, nil, cfg).Handler(context.Background(), &protocol.ToolCall{Type: protocol.TypeToolCall, Tool: ToolBrowserBrowse, Input: input})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out["markdown"].(string), "stub OCR text from https://images.example.test/browser.png") {
+		t.Fatalf("markdown=%q", out["markdown"])
+	}
+	if _, ok := out["media"]; ok {
+		t.Fatalf("internal OCR media leaked: %+v", out["media"])
 	}
 }
 

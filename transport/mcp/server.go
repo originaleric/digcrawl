@@ -84,11 +84,37 @@ func ServeStdioWithCodexRecovery(rt *runtime.Runtime) error {
 
 // ServeToolRuntimeStdio exposes an abstract ToolRuntime over stdio. It is the
 // Bridge entry point: the stdio child remains a thin forwarding process while
-// the bridge owns the browser Runtime. automaticRecovery enables the CLI's
-// bounded recovery path when idleTimeout is zero; an explicit idleTimeout uses
-// that value directly instead.
+// the bridge owns the browser Runtime. CLI sessions always use message-aware
+// reclamation: uninitialized pipes expire quickly and initialized sessions
+// expire after actual tool inactivity, never after MCP ping traffic. An
+// explicit zero with automaticRecovery disabled keeps the legacy unbounded
+// session behavior for hosts that require it.
 func ServeToolRuntimeStdio(rt ToolRuntime, idleTimeout time.Duration, automaticRecovery bool) error {
-	return serveRuntimeStdio(rt, idleTimeout, automaticRecovery)
+	if idleTimeout == 0 && !automaticRecovery {
+		return serveRuntimeStdio(rt, DefaultStdioIdleTimeout, false)
+	}
+	if idleTimeout <= 0 {
+		idleTimeout = DefaultStdioSessionIdleTimeout
+	}
+	return serveToolRuntimeStdioWithSessionLifecycle(rt, idleTimeout)
+}
+
+func serveToolRuntimeStdioWithSessionLifecycle(rt ToolRuntime, sessionIdleTimeout time.Duration) error {
+	guard := newIdleGuard()
+	s := mcpserver.NewMCPServer(
+		version.RuntimeName,
+		version.RuntimeVersion,
+		mcpserver.WithToolCapabilities(true),
+	)
+	registerTools(s, rt, guard)
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	return serveStdioWithSessionLifecycle(ctx, s, os.Stdin, os.Stdout, guard, sessionIdleTimeout)
+}
+
+func serveStdioWithSessionLifecycle(parent context.Context, server *mcpserver.MCPServer, stdin io.Reader, stdout io.Writer, guard *idleGuard, sessionIdleTimeout time.Duration) error {
+	return serveStdioWithGuardOptions(parent, server, stdin, stdout, DefaultStdioIdleTimeout, guard, true, DefaultStdioInitializeTimeout, sessionIdleTimeout)
 }
 
 func serveRuntimeStdio(rt ToolRuntime, idleTimeout time.Duration, automaticCodexRecovery bool) error {

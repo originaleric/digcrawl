@@ -31,6 +31,28 @@ type browseInput struct {
 	IncludeOCR        bool   `json:"include_ocr,omitempty"`
 }
 
+var browsePage = browser.BrowserBrowse
+
+type directBrowserOCRPolicy struct {
+	requested  bool
+	skillOwned bool
+	rootConfig config.OCRConfig
+}
+
+// resolveDirectBrowserOCR keeps browser.browse on the same Skill policy as
+// platform readers, while retaining the root OCR fallback used by standalone
+// gateway configurations. An explicit include_ocr remains Skill-owned so a
+// caller receives the existing opt-in validation when Skill OCR is disabled.
+func resolveDirectBrowserOCR(ctx context.Context, skillCfg config.SkillConfig, rootCfg config.OCRConfig, explicitlyRequested bool) directBrowserOCRPolicy {
+	if skill.DirectReadOCRRequested(ctx, skillCfg, explicitlyRequested) {
+		return directBrowserOCRPolicy{requested: true, skillOwned: true}
+	}
+	if !executor.IsCollectExecution(ctx) && rootCfg.EnabledOrDefault() {
+		return directBrowserOCRPolicy{requested: true, rootConfig: rootCfg}
+	}
+	return directBrowserOCRPolicy{}
+}
+
 // BrowseEntry returns registry entry for browser.browse.
 func BrowseEntry(configDomains []string, artStore artifact.Store, runtimeConfigs ...*config.Config) registry.Entry {
 	runtimeCfg := config.Get()
@@ -81,9 +103,14 @@ func BrowseEntry(configDomains []string, artStore artifact.Store, runtimeConfigs
 			} else {
 				skillCfg, imageDownloadCfg = runtimeCfg.Skill, runtimeCfg.ImageDownload
 			}
+			isCollect := executor.IsCollectExecution(ctx)
+			ocrPolicy := resolveDirectBrowserOCR(ctx, skillCfg, runtimeCfg.OCR, in.IncludeOCR)
 			retainProviderImages := imageDownloadCfg.EnabledFor("web")
-			returnMedia := in.IncludeMedia || in.IncludeOCR
-			resp, err := browser.BrowserBrowse(ctx, &browser.BrowserBrowseRequest{
+			returnMedia := in.IncludeMedia
+			if !isCollect && in.IncludeOCR {
+				returnMedia = true
+			}
+			resp, err := browsePage(ctx, &browser.BrowserBrowseRequest{
 				URL: in.URL, Action: in.Action, CaptureScreenshot: in.IncludeScreenshot, Mode: in.Mode, TabID: in.TabID,
 				WaitSelector: in.WaitSelector, ContentSelector: contentSelector,
 				UseCookieDomain: in.UseCookieDomain, MetadataScript: browserImageMetadataScript(),
@@ -104,39 +131,45 @@ func BrowseEntry(configDomains []string, artStore artifact.Store, runtimeConfigs
 			if resp.Summary != "" {
 				out["summary"] = resp.Summary
 			}
-			if !executor.IsCollectExecution(ctx) && !in.IncludeOCR {
-				opts := ocr.EnrichOptions{}
-				if resp.ScreenshotBase != "" {
-					opts.ExtraImages = []ocr.ImageRef{ocr.PNGDataURLImageRef("screenshot", resp.ScreenshotBase)}
-				}
-				ocr.EnrichMap(ctx, out, runtimeCfg.OCR, opts)
-			}
-			if returnMedia || retainProviderImages {
+			if returnMedia || ocrPolicy.requested || retainProviderImages {
 				if media := browserImageMedia(resp.Metadata); len(media) > 0 {
 					out["media"] = media
 				}
+			}
+			if !returnMedia && !isCollect {
+				// Direct OCR needs the resolved image references during processing,
+				// but its local default must not alter browser.browse's text-only
+				// response contract.
+				defer delete(out, "media")
 			}
 			var localImages []skill.LocalImageInput
 			if retainProviderImages {
 				inputs, retainErr := platformprov.RetainResolvedProviderImages(ctx, out, imageDownloadCfg, artStore)
 				if retainErr != nil {
-					if !returnMedia && !executor.IsCollectExecution(ctx) {
+					if !returnMedia && !isCollect {
 						delete(out, "media")
 					}
 					return out, nil, retainErr
 				}
-				if !executor.IsCollectExecution(ctx) {
+				if !isCollect {
 					localImages = inputs
 				}
 			}
-			if !executor.IsCollectExecution(ctx) && in.IncludeOCR {
+			if !isCollect && ocrPolicy.requested && ocrPolicy.skillOwned {
 				if err := skill.Enhance(ctx, out, skillCfg, skill.EnhanceOptions{
 					IncludeOCR: true, ScreenshotBase64: resp.ScreenshotBase, ArtifactStore: artStore, LocalImages: localImages,
 				}); err != nil {
 					return out, nil, err
 				}
 			}
-			if retainProviderImages && !returnMedia && !executor.IsCollectExecution(ctx) {
+			if !isCollect && ocrPolicy.requested && !ocrPolicy.skillOwned {
+				opts := ocr.EnrichOptions{}
+				if resp.ScreenshotBase != "" {
+					opts.ExtraImages = []ocr.ImageRef{ocr.PNGDataURLImageRef("screenshot", resp.ScreenshotBase)}
+				}
+				ocr.EnrichMap(ctx, out, ocrPolicy.rootConfig, opts)
+			}
+			if retainProviderImages && !returnMedia && !isCollect {
 				delete(out, "media")
 			}
 			var artifacts []protocol.Artifact

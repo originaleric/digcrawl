@@ -75,14 +75,26 @@ func getBrowserManager() *browserManager {
 	return globalBrowserMgr
 }
 
-// Shutdown releases the browser owned by this process. It is used by the
-// local bridge after its HTTP server has drained every tool call, so a bridge
-// idle exit cannot leave Chrome running without an owner.
+// Shutdown releases the browser owned by this process after active callers
+// return their leases. The explicit Bridge lifecycle uses ShutdownImmediately
+// when it intentionally cancels those callers first.
 func Shutdown(ctx context.Context) error {
 	if globalBrowserMgr == nil {
 		return nil
 	}
 	return globalBrowserMgr.shutdown(ctx)
+}
+
+// ShutdownImmediately forcibly closes the browser owned by this process even
+// when an interrupted caller still holds a lease. It is reserved for the
+// local Bridge's explicit stop/restart lifecycle: the HTTP listener has
+// already been closed, so preserving that caller would only make a one-user
+// restart race its replacement. Attached CDP browsers remain untouched.
+func ShutdownImmediately(ctx context.Context) error {
+	if globalBrowserMgr == nil {
+		return nil
+	}
+	return globalBrowserMgr.shutdownImmediately(ctx)
 }
 
 func normalizeLocalBrowserConfig(cfg config.LocalBrowserConfig) config.LocalBrowserConfig {

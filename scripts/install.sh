@@ -270,6 +270,14 @@ ensure_skill_profile() {
   "$install_dir/digcrawl" config validate --config "$skill_profile"
 }
 
+retire_standard_bridge() {
+  bridge_controller="$1"
+  bridge_profile=$(profile_path)
+  [ -f "$bridge_profile" ] || return
+  "$bridge_controller" bridge stop --config "$bridge_profile"
+  printf '%s\n' "Stopped the previous DigCrawl Bridge for $bridge_profile before replacing the installed binary."
+}
+
 install_claude_skill_if_detected() {
   case "${DIGCRAWL_SETUP_CLAUDE:-auto}" in
     0) return ;;
@@ -348,6 +356,10 @@ tar -xzf "$temporary_dir/$archive_name" -C "$temporary_dir"
 umask 022
 [ "$setup_codex" = "0" ] || select_codex_config
 mkdir -p "$install_dir"
+# Use the verified staged binary to take over the previous runtime before
+# overwriting its executable. This avoids an executing-file replacement race
+# and guarantees the next MCP process starts the just-installed binary.
+retire_standard_bridge "$temporary_dir/digcrawl"
 install -m 0755 "$temporary_dir/digcrawl" "$install_dir/digcrawl"
 
 printf '%s\n' "Installed DigCrawl $release_tag to $install_dir/digcrawl"

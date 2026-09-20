@@ -96,7 +96,7 @@ func TestPlatformReadHandlerDoesNotUseExternalCallIDAsArtifactIdentity(t *testin
 	}
 }
 
-func TestPlatformReadHandlerAppliesSkillConfiguredOCR(t *testing.T) {
+func TestPlatformReadHandlerAppliesEnabledSkillOCRWithoutReturningInternalMedia(t *testing.T) {
 	enabled := true
 	oldSkill := config.Skill()
 	config.SetSkill(config.SkillConfig{OCR: config.OCRConfig{Enabled: &enabled, Provider: "stub"}})
@@ -104,9 +104,7 @@ func TestPlatformReadHandlerAppliesSkillConfiguredOCR(t *testing.T) {
 		config.SetSkill(oldSkill)
 	}()
 
-	input, err := json.Marshal(platformReadInput{
-		URL: "https://8.8.8.8/post", IncludeScreenshot: true, IncludeOCR: true,
-	})
+	input, err := json.Marshal(platformReadInput{URL: "https://8.8.8.8/post"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -118,18 +116,47 @@ func TestPlatformReadHandlerAppliesSkillConfiguredOCR(t *testing.T) {
 		[]string{"8.8.8.8"}, nil, store,
 		func(_ context.Context, in iplatform.ReadInput) (*iplatform.Content, error) {
 			if !in.IncludeMedia {
-				t.Fatal("skill OCR should request media from the platform reader")
+				t.Fatal("enabled skill OCR should request media from the platform reader")
 			}
-			return &iplatform.Content{Platform: "test", ContentType: "article", SourceURL: in.URL, Markdown: "body", ScreenshotBase64: "iVBORw0KGgo="}, nil
+			return &iplatform.Content{
+				Platform: "test", ContentType: "article", SourceURL: in.URL, Markdown: "body",
+				Media: []iplatform.MediaItem{{Type: "image", URL: "https://images.example.test/article.png"}},
+			}, nil
 		},
 	)
 
-	out, _, err := handler(context.Background(), &protocol.ToolCall{Type: protocol.TypeToolCall, ID: "skill_ocr_screenshot", Tool: "test.read", Input: input})
+	out, _, err := handler(context.Background(), &protocol.ToolCall{Type: protocol.TypeToolCall, ID: "skill_ocr_default", Tool: "test.read", Input: input})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out["markdown"].(string), "stub OCR text from screenshot") {
+	if !strings.Contains(out["markdown"].(string), "stub OCR text from https://images.example.test/article.png") {
 		t.Fatalf("skill OCR markdown=%s", out["markdown"])
+	}
+	if _, ok := out["media"]; ok {
+		t.Fatalf("internal OCR media must not broaden text-only output: %+v", out["media"])
+	}
+}
+
+func TestPlatformReadHandlerDoesNotApplySkillDefaultOCRToCollect(t *testing.T) {
+	enabled := true
+	cfg := &config.Config{Skill: config.SkillConfig{OCR: config.OCRConfig{Enabled: &enabled, Provider: "stub"}}}
+	input, err := json.Marshal(platformReadInput{URL: "https://8.8.8.8/post"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := platformReadHandlerNamedWithConfig("test.read", []string{"8.8.8.8"}, nil, nil, func(_ context.Context, in iplatform.ReadInput) (*iplatform.Content, error) {
+		if in.IncludeMedia {
+			t.Fatal("Collect must not inherit Skill.OCR media acquisition")
+		}
+		return &iplatform.Content{Platform: "test", ContentType: "article", SourceURL: in.URL, Markdown: "body"}, nil
+	}, cfg)
+
+	out, _, err := handler(executor.WithCollectExecution(context.Background()), &protocol.ToolCall{Type: protocol.TypeToolCall, Tool: "test.read", Input: input})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out["markdown"].(string), "stub OCR") {
+		t.Fatalf("Collect unexpectedly applied Skill OCR: %q", out["markdown"])
 	}
 }
 

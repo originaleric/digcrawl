@@ -145,6 +145,51 @@ func TestAutomaticRecoveryReclaimsPingingUnknownRegistration(t *testing.T) {
 	}
 }
 
+func TestSessionLifecycleReclaimsPingingExplicitTimeoutSession(t *testing.T) {
+	stdin, client := io.Pipe()
+	t.Cleanup(func() { _ = client.Close() })
+
+	const sessionIdleTimeout = 60 * time.Millisecond
+	done := make(chan error, 1)
+	go func() {
+		server := mcpserver.NewMCPServer("test", "1.0.0")
+		done <- serveStdioWithSessionLifecycle(context.Background(), server, stdin, io.Discard, newIdleGuard(), sessionIdleTimeout)
+	}()
+	writeMCPInitialize(t, client, "Codex")
+
+	stopPings := make(chan struct{})
+	pingsStopped := make(chan struct{})
+	go func() {
+		defer close(pingsStopped)
+		ticker := time.NewTicker(5 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stopPings:
+				return
+			case <-ticker.C:
+				if _, err := io.WriteString(client, `{"jsonrpc":"2.0","id":2,"method":"ping","params":{}}`+"\n"); err != nil {
+					return
+				}
+			}
+		}
+	}()
+	t.Cleanup(func() {
+		close(stopPings)
+		_ = client.Close()
+		<-pingsStopped
+	})
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("explicit session lifecycle returned error: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("pinging explicit-timeout session was not reclaimed")
+	}
+}
+
 func TestAutomaticRecoveryReclaimsUnknownInitializedClient(t *testing.T) {
 	stdin, client := io.Pipe()
 	t.Cleanup(func() { _ = client.Close() })

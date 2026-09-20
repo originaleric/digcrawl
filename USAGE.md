@@ -175,7 +175,7 @@ go install ./cmd/digcollect
 
 ### 本机 MCP Bridge（默认）
 
-`digcrawl mcp` 首次被调用时，会为该 profile 启动一个私有 Unix socket Bridge。多个 Codex MCP stdio 子进程只转发协议，Bridge 才是唯一创建 Runtime 和 Chrome 的进程；因此没有固定 CDP 端口、没有 launchd/systemd 常驻浏览器，也不会因 MCP 重连重复争抢浏览器。配置文件的符号链接会归并到同一个 Bridge；而同一个持久化 `UserDataDir` 在任意时刻只能由一个 Bridge 使用。若确实需要两套独立配置，请给它们配置不同的 `UserDataDir`，避免权限、超时和登录态混用。Bridge 在连续 15 分钟既无实际 `tools/call`、也无附件交付进行中时退出并关闭它创建的 Chrome；`UserDataDir` 保持不变，登录态不会丢失。下次调用会按需重建。
+`digcrawl mcp` 首次被调用时，会为该 profile 启动一个私有 Unix socket Bridge。多个 Codex MCP stdio 子进程只转发协议，Bridge 才是唯一创建 Runtime 和 Chrome 的进程；因此没有固定 CDP 端口、没有 launchd/systemd 常驻浏览器，也不会因 MCP 重连重复争抢浏览器。配置文件的符号链接会归并到同一个 Bridge；而同一个持久化 `UserDataDir` 在任意时刻只能由一个 Bridge 使用。若确实需要两套独立配置，请给它们配置不同的 `UserDataDir`，避免权限、超时和登录态混用。Bridge 不使用空闲退出计时器：它会持续服务，直到异常退出或执行 `digcrawl bridge stop --config <profile>`；需要立即重启则用 `digcrawl bridge restart --config <profile>`。停止/重启不是平滑交接：它会立即取消在途 MCP 读取，待 Bridge 自己管理的 Chrome 已释放后才允许下一实例启动。Release 安装器使用已验证的临时新二进制，在替换安装目标前先停掉标准 Skill profile 的旧 Bridge，因此下一次 MCP 调用不会继续执行旧二进制。
 
 Bridge 默认忽略 profile 中遗留的 `CDPMode`、`CDPConnectExisting` 与 `CDPPort`，直接管理 `ChromePath`（未配置时优先发现系统 Chrome）。这样旧的 CDP 服务短暂不可用、端口被占用或返回伪 HTTP 成功，都不再决定 MCP 是否可读页面。`digcrawl doctor --config <profile>` 也检查这一条实际运行路径。
 
@@ -272,7 +272,7 @@ Platform:
 | `AppendToMarkdown` | 是否把 OCR 文本追加到 Markdown，默认 `true` |
 | `AppendToText` | 是否把 OCR 文本追加到纯文本，默认 `false` |
 
-OCR 启用后会在平台工具、通用浏览器读取和 Collect 导出中统一生效。结果写入 `platform_metadata.ocr_results`，并记录 `ocr_count`、provider、model、图片来源和错误诊断。直接平台/浏览器调用会把截图作为显式 OCR 候选；Collect 下载媒体时会优先对本地 `.assets/` 图片做 OCR，未下载媒体时会使用远程图片 URL。OpenAI-compatible Provider 对本地图片和截图会转换为 data URL，再调用 `/chat/completions`。合法响应但没有可读文字的图片或视频帧会保留为正常空结果：不计入 `ocr_count`、不追加空的 `## OCR` 段；HTTP 失败、响应无法解析或响应缺少 `choices` 仍会记录为错误。
+OCR 有明确的两层边界：`Skill.OCR` 只控制 Agent Skill 的直接平台/浏览器读取；`OCR` 控制 Collect 导出，并保留为独立 Gateway `browser.browse` 的兼容回退。`Skill.OCR.Enabled=true` 是直接读取的默认处理开关：文章图片会作为内部输入进入 OCR，即使调用方保持 `include_media=false`；该参数只控制是否返回图片 URL，不会关闭 OCR。Collect 不会继承 `Skill.OCR`，因此不会因为聊天读取策略而产生隐藏的下载或识别。结果写入 `platform_metadata.ocr_results`，并记录 `ocr_count`、provider、model、图片来源和错误诊断。直接平台/浏览器调用会把截图作为显式 OCR 候选；Collect 下载媒体时会优先对本地 `.assets/` 图片做 OCR，未下载媒体时会使用远程图片 URL。OpenAI-compatible Provider 对本地图片和截图会转换为 data URL，再调用 `/chat/completions`。合法响应但没有可读文字的图片或视频帧会保留为正常空结果：不计入 `ocr_count`、不追加空的 `## OCR` 段；HTTP 失败、响应无法解析或响应缺少 `choices` 仍会记录为错误。
 
 对于只有 BGM 或没有可用语音的视频，可以显式开启本地视频抽帧 OCR。Collect 在 `Collect.DownloadMedia=true` 时会处理其导出的视频；直接平台读取（如 `youtube.video.read`）则需同时显式请求 `include_ocr=true`、启用 `Skill.Media.DownloadMedia` 和 `Skill.OCR.VideoFrames.Enabled`。Provider 仅负责下载受限本地 MP4，并把文件路径传给既有 ASR/抽帧 OCR core；这些 core 只输入视频、输出识别结果，不感知平台、artifact 或 transport。直接读取默认在识别后删除 MP4。若用户已显式在 `VideoDownload.Providers` 启用该平台，同一次读取会复用保存后的本地文件供 ASR/抽帧 OCR 使用。Collect 的 MP4 导出是独立交付路径，不参与 ASR/OCR 的输入契约。DigCrawl 以固定间隔调用本机 `ffmpeg` 抽取 JPEG，再交给已配置的 OCR provider；临时帧在识别后删除，不会写入 `.assets/` 或 OCR 结果。它不替代 ASR：`ASR.Enabled=true` 处理音频，`OCR.VideoFrames.Enabled=true` 处理内嵌文字；两者均开启时各自执行，任一失败不会阻止另一项。`MaxFrames` 与 `TimeoutSec` 分别是每个视频的抽帧数量和 ffmpeg 运行上限；`MaxTotalFrames` 则是单条内容的硬总量预留上限，按媒体出现顺序分配，失败或没有可抽帧的视频也会占用其预留份额，以防异常媒体绕过限制。`OCR.MaxImages` 只限制文章图片与截图，两类预算互不抢占。若 provider 是远程服务，抽出的帧会发送给它，因此默认关闭。
 
@@ -997,7 +997,7 @@ digcrawl collector --server http://127.0.0.1:8790 --token dev
 
 除 Codex 外，安装器不会猜测宿主的 MCP 配置文件。请将完整 `skills/digcrawl/` 目录复制或链接到宿主规定的 Skill 目录，并按[通用 stdio 启动契约](./.agents/skills/digcrawl/mcp/README.md)登记上面的 `command` 与 `args`；不要只复制 `SKILL.md`。Codex 的适配器额外设置了空闲回收参数，通用 MCP 配置不应照抄该参数。
 
-未显式传 `--idle-timeout` 时，`digcrawl mcp` 会回收未发送 MCP `initialize` 且 stdin 连续空闲 1 分钟的管道；每个已初始化客户端都会在连续 15 分钟没有实际工具调用后回收，避免宿主 clientInfo 名称变化绕过回收。计时器只在 `initialize` 或实际 `tools/call` 时刷新，MCP `ping` 等传输保活包不会让闲置子进程永远存活。对任意宿主可显式传入正值启用超时；仅在确实需要关闭回收时传 `--idle-timeout=0`。
+`digcrawl mcp` 把稳定的本机 Bridge 与可回收的 stdio 子进程分开管理：Bridge 每个 profile 至多一个，只在显式停止或异常退出时关闭，避免在预检与 `tools/call` 之间消失；stdio 子进程才承担回收。无论是否显式传入正值 `--idle-timeout`，未发送 MCP `initialize` 且 stdin 连续空闲 1 分钟的管道都会回收；已初始化客户端则在连续 15 分钟没有实际工具调用后回收，避免宿主 clientInfo 名称变化绕过回收。计时器只在 `initialize` 或实际 `tools/call` 时刷新，MCP `ping` 等传输保活包不会让闲置子进程永远存活。正值 `--idle-timeout` 仅覆盖已初始化 session 的 15 分钟间隔；仅在确实需要关闭回收时传 `--idle-timeout=0`。
 
 ### Agent Skill 最小 profile
 

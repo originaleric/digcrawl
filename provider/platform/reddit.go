@@ -114,9 +114,14 @@ func redditPostReadHandler(configDomains []string, artStore artifact.Store, read
 		} else {
 			skillCfg, imageDownloadCfg = runtimeCfg.Skill, runtimeCfg.ImageDownload
 		}
+		isCollect := executor.IsCollectExecution(ctx)
+		ocrRequested := skill.DirectReadOCRRequested(ctx, skillCfg, in.IncludeOCR)
 		retainProviderImages := shouldRetainProviderImages(imageDownloadCfg, ToolRedditPostRead)
-		returnMedia := in.IncludeMedia || in.IncludeOCR || in.IncludeASR || in.IncludeSummary
-		readIncludeMedia := returnMedia || retainProviderImages
+		returnMedia := in.IncludeMedia || in.IncludeASR || in.IncludeSummary
+		if !isCollect && in.IncludeOCR {
+			returnMedia = true
+		}
+		readIncludeMedia := returnMedia || ocrRequested || retainProviderImages
 		includeComments := true
 		if in.IncludeComments != nil {
 			includeComments = *in.IncludeComments
@@ -149,28 +154,33 @@ func redditPostReadHandler(configDomains []string, artStore artifact.Store, read
 			return nil, nil, err
 		}
 		out := platform.ApplyFormats(content, in.Format)
+		if !returnMedia && !isCollect {
+			// Configured direct OCR consumes image references internally without
+			// widening the public text-only response contract.
+			defer delete(out, "media")
+		}
 		var localImages []skill.LocalImageInput
 		if retainProviderImages {
 			inputs, retainErr := RetainResolvedProviderImages(ctx, out, imageDownloadCfg, artStore)
 			if retainErr != nil {
-				if !returnMedia && !executor.IsCollectExecution(ctx) {
+				if !returnMedia && !isCollect {
 					delete(out, "media")
 				}
 				return out, nil, retainErr
 			}
-			if !executor.IsCollectExecution(ctx) {
+			if !isCollect {
 				localImages = inputs
 			}
 		}
-		if !executor.IsCollectExecution(ctx) && (in.IncludeOCR || in.IncludeASR || in.IncludeSummary) {
+		if !isCollect && (ocrRequested || in.IncludeASR || in.IncludeSummary) {
 			if err := skill.Enhance(ctx, out, skillCfg, skill.EnhanceOptions{
-				IncludeOCR: in.IncludeOCR, IncludeASR: in.IncludeASR,
+				IncludeOCR: ocrRequested, IncludeASR: in.IncludeASR,
 				IncludeSummary: in.IncludeSummary, SourceText: content.Text, ScreenshotBase64: content.ScreenshotBase64, ArtifactStore: artStore, LocalImages: localImages,
 			}); err != nil {
 				return out, nil, err
 			}
 		}
-		if retainProviderImages && !returnMedia && !executor.IsCollectExecution(ctx) {
+		if retainProviderImages && !returnMedia && !isCollect {
 			delete(out, "media")
 		}
 		var artifacts []protocol.Artifact

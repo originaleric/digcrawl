@@ -6,7 +6,7 @@ import (
 
 // MetadataScript 页面状态 + hydration/meta/DOM 提取。
 func MetadataScript() string {
-	return platform.ParseCountJS + `(() => {
+	return platform.WithParseCountJS(`() => {
   const warnings = [];
   const pick = (sels) => {
     for (const s of sels) {
@@ -176,5 +176,5 @@ func MetadataScript() string {
 	    merged.warnings = [...(merged.warnings || []), 'text empty, media only'];
   }
   return merged;
-})()`
+}`)
 }

@@ -97,6 +97,8 @@ func printUsage() {
   digcrawl gateway [flags]     HTTP 工具网关
   digcrawl collector [flags]   WebSocket 反向连接 Collector
   digcrawl mcp [flags]         MCP 服务（stdio，供 IDE 使用）
+	  digcrawl bridge stop --config <profile>     停止该 profile 的私有 MCP Bridge
+	  digcrawl bridge restart --config <profile>  重启该 profile 的私有 MCP Bridge
   digcrawl stdio [flags]       stdin/stdout 逐行 JSON 协议
   digcrawl dev-host [flags]    本地参考宿主（仅开发）
   digcrawl collect <url>       采集 URL 并导出 Markdown/HTML/JSON
@@ -251,13 +253,9 @@ func runMCP(args []string) {
 		log.Fatalf("load MCP profile: %v (run `digcrawl init --profile skill` or pass --config)", err)
 	}
 	allowDefaultSkillProfileTools(cfg)
-	bridgeIdleTimeout := bridge.DefaultIdleTimeout
-	if idleTimeoutExplicit && *idleTimeout > 0 {
-		bridgeIdleTimeout = *idleTimeout
-	}
 	startupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	rt, err := bridge.NewExecutor(startupCtx, bridgeExecutable(), profilePath, cfg, bridgeIdleTimeout)
+	rt, err := bridge.NewExecutor(startupCtx, bridgeExecutable(), profilePath, cfg)
 	if err != nil {
 		log.Fatalf("start local bridge: %v", err)
 	}

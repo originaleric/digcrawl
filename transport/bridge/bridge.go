@@ -8,14 +8,12 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/originaleric/digcrawl/client"
@@ -28,12 +26,14 @@ import (
 )
 
 const (
-	DefaultIdleTimeout   = 15 * time.Minute
 	startupTimeout       = 8 * time.Second
-	staleStartLockAfter  = 15 * time.Second
 	bridgeSocketDirName  = "bridge"
 	bridgeSocketFileMode = 0o600
-	startupStderrLimit   = 8 << 10
+	// bridgeBrowserCleanupTimeout is intentionally independent from startup.
+	// A direct restart rejects in-flight MCP work immediately, then gives the
+	// owning browser manager enough time to release its Chrome profile before
+	// this process releases the lifecycle lock to its replacement.
+	bridgeBrowserCleanupTimeout = 20 * time.Second
 	// artifactFetchTimeout bounds the post-call Unix-socket transfer used to
 	// inline an artifact into an MCP response. It intentionally does not share
 	// a tool's potentially long execution budget: by this point the tool has
@@ -42,6 +42,8 @@ const (
 )
 
 var ErrAlreadyRunning = errors.New("local DigCrawl bridge is already running")
+
+var ErrBridgeControlUnsupported = errors.New("running local DigCrawl bridge does not support direct shutdown")
 
 // ErrBrowserProfileInUse means a different local bridge already owns the
 // configured persistent Chrome profile. Sharing that browser while retaining
@@ -54,13 +56,12 @@ var ErrBrowserProfileInUse = errors.New("configured Chrome profile is already ow
 // call, but a failed call is never replayed because a tool may write local
 // configuration or have another side effect.
 type Executor struct {
-	executable  string
-	profile     string
-	socket      string
-	idleTimeout time.Duration
-	manifest    protocol.ToolManifest
-	cfg         *config.Config
-	artifacts   artifact.Store
+	executable string
+	profile    string
+	socket     string
+	manifest   protocol.ToolManifest
+	cfg        *config.Config
+	artifacts  artifact.Store
 	// artifactTimeout is normally zero, which selects artifactFetchTimeout. It
 	// exists so the local RPC boundary can be exercised with a short test budget
 	// without weakening the production timeout.
@@ -71,7 +72,7 @@ type Executor struct {
 // no healthy bridge owns that profile. The bridge socket is scoped by the real
 // profile file rather than its spelling, so symlink aliases cannot create
 // duplicate Bridge owners.
-func NewExecutor(ctx context.Context, executable, profile string, cfg *config.Config, idleTimeout time.Duration) (*Executor, error) {
+func NewExecutor(ctx context.Context, executable, profile string, cfg *config.Config) (*Executor, error) {
 	if cfg == nil {
 		return nil, errors.New("bridge requires a profile configuration")
 	}
@@ -93,10 +94,7 @@ func NewExecutor(ctx context.Context, executable, profile string, cfg *config.Co
 	if err != nil {
 		return nil, err
 	}
-	if idleTimeout <= 0 {
-		idleTimeout = DefaultIdleTimeout
-	}
-	e := &Executor{executable: executable, profile: profile, socket: socket, idleTimeout: idleTimeout, cfg: cfg}
+	e := &Executor{executable: executable, profile: profile, socket: socket, cfg: cfg}
 	manifest, err := e.ensure(ctx)
 	if err != nil {
 		return nil, err
@@ -191,89 +189,238 @@ func (e *Executor) clientAndManifest(ctx context.Context) (*client.Client, proto
 }
 
 func (e *Executor) startOrWait(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if err := ensurePrivateDir(filepath.Dir(e.socket)); err != nil {
 		return err
 	}
-	lockPath := e.socket + ".start"
-	deadline := time.Now().Add(startupTimeout)
-	if requested, ok := ctx.Deadline(); ok && requested.Before(deadline) {
-		deadline = requested
+	if _, _, err := probe(ctx, e.socket); err == nil {
+		return nil
 	}
+	transitionCtx, cancelTransition := context.WithTimeout(ctx, startupTimeout)
+	release, err := acquireBridgeOperation(transitionCtx, e.socket)
+	cancelTransition()
+	if err != nil {
+		return err
+	}
+	defer release()
+	// A concurrent creator may have finished while this caller waited for the
+	// shared transition lock. It may also still own the runtime lock while
+	// opening its listener, so reuse it or wait for release before launching.
+	ready, err := waitForBridgeOwnerReadyOrRelease(ctx, e.socket)
+	if err != nil {
+		return err
+	}
+	if ready {
+		return nil
+	}
+	startupStatus := startupStatusFile{path: e.socket + ".startup-status"}
+	_ = os.Remove(startupStatus.path)
+	defer os.Remove(startupStatus.path)
+	cmd := exec.Command(e.executable, "bridge", "serve", "--config", e.profile, "--socket", e.socket, "--startup-status", startupStatus.path)
+	detachBridgeProcess(cmd)
+	// A persistent Bridge must not inherit the stdio proxy's pipes. In
+	// particular, io.Discard and an in-memory stderr writer make os/exec
+	// create parent-owned pipes; a host can close those independently of a
+	// healthy Bridge. Real /dev/null descriptors make its I/O lifetime
+	// independent while retaining the single socket as its only contract.
+	nullOutput, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
+	if err != nil {
+		return fmt.Errorf("open bridge null output: %w", err)
+	}
+	cmd.Stdout = nullOutput
+	cmd.Stderr = nullOutput
+	if err := cmd.Start(); err != nil {
+		_ = nullOutput.Close()
+		return fmt.Errorf("start local bridge: %w", err)
+	}
+	// Start duplicates the descriptors into the child. Closing this copy
+	// immediately keeps the proxy from holding an unnecessary FD.
+	_ = nullOutput.Close()
+	// Reap a bridge that exits before this proxy does. The bridge is
+	// intentionally independent of the proxy's stdio lifetime, so waiting
+	// happens in the background rather than coupling their shutdown.
+	exited := make(chan error, 1)
+	go func() { exited <- cmd.Wait() }()
+	// Keep the transition lock until the listener is observable. Otherwise
+	// dozens of MCP children starting together can all spawn a losing daemon,
+	// or an installer can race an about-to-start old Bridge.
+	_, _, err = waitForBridgeOrExit(ctx, e.socket, exited, startupStatus)
+	return err
+}
 
+// acquireBridgeOperation serializes the only two lifecycle transitions for a
+// profile: creating a Bridge and terminating one. It is deliberately separate
+// from the daemon lock: this lock guards a bounded operation, while the daemon
+// lock remains held for the Bridge process lifetime. Both are OS advisory
+// locks, so an interrupted operation releases ownership when its process dies;
+// a timestamp must never decide that a live stop is safe to overlap.
+func acquireBridgeOperation(ctx context.Context, socket string) (func(), error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	for {
-		if _, _, err := probe(ctx, e.socket); err == nil {
-			return nil
-		}
-		err := os.Mkdir(lockPath, 0o700)
+		lock, err := acquireDaemonLock(socket + ".transition.lock")
 		if err == nil {
-			defer os.Remove(lockPath)
-			cmd := exec.Command(e.executable, "bridge", "serve", "--config", e.profile, "--socket", e.socket, "--idle-timeout", e.idleTimeout.String())
-			detachBridgeProcess(cmd)
-			cmd.Stdout = io.Discard
-			// The bridge outlives this stdio proxy. Do not inherit the proxy's
-			// stderr pipe: hosts (and os/exec) wait for that pipe to close when a
-			// proxy exits, while a healthy idle bridge deliberately remains alive.
-			stderr := &limitedBuffer{limit: startupStderrLimit}
-			cmd.Stderr = stderr
-			if err := cmd.Start(); err != nil {
-				return fmt.Errorf("start local bridge: %w", err)
+			if err := ctx.Err(); err != nil {
+				_ = lock.Close()
+				return nil, err
 			}
-			// Reap a bridge that exits before this proxy does. The bridge is
-			// intentionally independent of the proxy's stdio lifetime, so waiting
-			// happens in the background rather than coupling their shutdown.
-			exited := make(chan error, 1)
-			go func() { exited <- cmd.Wait() }()
-			// Keep the creator lock until the listener is observable. Otherwise
-			// dozens of MCP children starting together can all spawn a losing
-			// daemon before the first socket is ready.
-			_, _, err := waitForBridgeOrExit(ctx, e.socket, exited, stderr)
-			return err
+			return func() { _ = lock.Close() }, nil
 		}
-		if !errors.Is(err, os.ErrExist) {
-			return fmt.Errorf("acquire local bridge start lock: %w", err)
-		}
-		if info, statErr := os.Stat(lockPath); statErr == nil && time.Since(info.ModTime()) > staleStartLockAfter {
-			// The lock only protects process creation. A ready bridge is always
-			// detected through its socket, so an old creator lock is safe to reap.
-			_ = os.Remove(lockPath)
-			continue
-		}
-		if time.Now().After(deadline) {
-			return errors.New("local bridge did not become ready before its startup deadline")
+		if !errors.Is(err, ErrAlreadyRunning) {
+			return nil, fmt.Errorf("acquire local bridge transition lock: %w", err)
 		}
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return nil, ctx.Err()
 		case <-time.After(50 * time.Millisecond):
 		}
 	}
 }
 
-// limitedBuffer retains the short error emitted by a bridge that cannot start
-// without retaining an inherited stderr pipe for its whole idle lifetime.
-// It is only read after cmd.Wait reports that the child exited.
-type limitedBuffer struct {
-	limit int
-	data  []byte
+// waitForBridgeOwnerReadyOrRelease closes the gap between a failed socket probe
+// and a replacement launch. A Bridge acquires its daemon lock before it opens
+// the listener, and retains it while direct stop releases Chrome. Starting a
+// second child while that lock is held cannot repair either state; it can only
+// become a losing process. Under the transition lock, wait for the current
+// owner to become reachable or fully release ownership before creating one.
+func waitForBridgeOwnerReadyOrRelease(ctx context.Context, socket string) (bool, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ticker := time.NewTicker(50 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		if err := ctx.Err(); err != nil {
+			return false, err
+		}
+		if _, _, err := probe(ctx, socket); err == nil {
+			return true, nil
+		}
+		released, err := bridgeReleased(socket)
+		if err != nil {
+			return false, err
+		}
+		if released {
+			return false, nil
+		}
+		select {
+		case <-ctx.Done():
+			return false, ctx.Err()
+		case <-ticker.C:
+		}
+	}
 }
 
-func (b *limitedBuffer) Write(p []byte) (int, error) {
-	if b == nil || b.limit <= len(b.data) {
-		return len(p), nil
+// Stop terminates the singleton Bridge for profile. It is a deliberately
+// direct lifecycle transition for one local user: it does not preserve MCP
+// sessions or drain in-flight tool calls. A bridge that is already absent is a
+// successful no-op, which makes it safe for release installation to retire an
+// older runtime before the next MCP session starts the new binary.
+func Stop(ctx context.Context, profile string) (bool, error) {
+	if ctx == nil {
+		ctx = context.Background()
 	}
-	remaining := b.limit - len(b.data)
-	if remaining > len(p) {
-		remaining = len(p)
+	profile, err := canonicalPath(profile)
+	if err != nil {
+		return false, fmt.Errorf("resolve bridge profile: %w", err)
 	}
-	b.data = append(b.data, p[:remaining]...)
-	return len(p), nil
+	socket, err := SocketPath(profile)
+	if err != nil {
+		return false, err
+	}
+	release, err := acquireBridgeOperation(ctx, socket)
+	if err != nil {
+		return false, err
+	}
+	defer release()
+	released, err := bridgeReleased(socket)
+	if err != nil {
+		return false, err
+	}
+	if released {
+		return false, nil
+	}
+
+	if err := requestShutdown(ctx, socket); err != nil {
+		// This is a one-time migration path for pre-control-endpoint Bridges,
+		// and the direct fallback when a hung current Bridge cannot serve its
+		// private socket. It verifies the exact socket in the process command
+		// before signalling it; the lifecycle lock remains the source of truth.
+		stopped, fallbackErr := stopLegacyBridge(ctx, socket)
+		if fallbackErr != nil {
+			return false, fmt.Errorf("terminate local bridge for %q: control request: %v; exact-process fallback: %w", profile, err, fallbackErr)
+		}
+		return stopped, nil
+	}
+	if err := waitForBridgeStopped(ctx, socket); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
-func (b *limitedBuffer) String() string {
-	if b == nil {
-		return ""
+func requestShutdown(ctx context.Context, socket string) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://digcrawl-bridge/bridge/shutdown", nil)
+	if err != nil {
+		return err
 	}
-	return string(b.data)
+	resp, err := newSocketClient(socket).HTTPClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	switch resp.StatusCode {
+	case http.StatusNoContent:
+		return nil
+	case http.StatusNotFound:
+		return ErrBridgeControlUnsupported
+	default:
+		return fmt.Errorf("request local bridge shutdown: gateway http %d", resp.StatusCode)
+	}
+}
+
+func waitForBridgeStopped(ctx context.Context, socket string) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ticker := time.NewTicker(50 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		released, err := bridgeReleased(socket)
+		if err != nil {
+			return err
+		}
+		if released {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
+}
+
+// bridgeReleased confirms that no Bridge owns socket's lifecycle lock. It is
+// deliberately stronger than a failed HTTP probe: listener shutdown happens
+// before browser cleanup, and a restart must wait for the old owner to release
+// the profile before it starts a replacement. Holding the lock while removing
+// a stale socket also prevents deleting a just-started listener.
+func bridgeReleased(socket string) (bool, error) {
+	lock, err := acquireDaemonLock(socket + ".lock")
+	if err == nil {
+		defer lock.Close()
+		if err := os.Remove(socket); err != nil && !os.IsNotExist(err) {
+			return false, fmt.Errorf("remove stale local bridge socket: %w", err)
+		}
+		return true, nil
+	}
+	if errors.Is(err, ErrAlreadyRunning) {
+		return false, nil
+	}
+	return false, err
 }
 
 func waitForBridge(ctx context.Context, socket string) (*client.Client, protocol.ToolManifest, error) {
@@ -388,13 +535,12 @@ func ensurePrivateDir(dir string) error {
 // Serve owns one local Runtime and its managed browser lifetime. It keeps no
 // daemon registry: the Unix socket and an advisory process lock are the only
 // ownership records, and a stale socket is safely replaced only by the next
-// bridge owner.
-func Serve(ctx context.Context, cfg *config.Config, socket string, idleTimeout time.Duration) error {
+// bridge owner. The Bridge itself has no idle shutdown: clients may be quiet
+// between a readiness probe and a tool request, so stdio-session reclamation
+// owns process cleanup while this singleton owns stable local transport.
+func Serve(ctx context.Context, cfg *config.Config, socket string) error {
 	if cfg == nil {
 		return errors.New("bridge requires configuration")
-	}
-	if idleTimeout <= 0 {
-		idleTimeout = DefaultIdleTimeout
 	}
 	socket = strings.TrimSpace(socket)
 	if socket == "" {
@@ -435,24 +581,32 @@ func Serve(ctx context.Context, cfg *config.Config, socket string, idleTimeout t
 	if err != nil {
 		return fmt.Errorf("start local bridge runtime: %w", err)
 	}
-	tracker := newActivityTracker()
-	handler := tracker.wrap(httpgw.NewServer(rt, rt.ArtifactStore(), ""))
+	gateway := httpgw.NewServer(rt, rt.ArtifactStore(), "")
+	privateMux := http.NewServeMux()
+	privateMux.HandleFunc("POST /bridge/shutdown", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+		if flusher, ok := w.(http.Flusher); ok {
+			flusher.Flush()
+		}
+		go stop()
+	})
+	privateMux.Handle("/", gateway)
 	server := &http.Server{
-		Handler:           handler,
+		Handler:           privateMux,
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       120 * time.Second,
 	}
-	go tracker.stopWhenIdle(serveCtx, server, idleTimeout)
 	go func() {
 		<-serveCtx.Done()
-		shutdown, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_ = server.Shutdown(shutdown)
+		// This is an operator-triggered local restart, not a rolling service
+		// deploy. Close immediately so in-flight reads are cancelled instead of
+		// delaying the next run; browser cleanup below still owns Chrome.
+		_ = server.Close()
 	}()
 	err = server.Serve(listener)
-	shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	shutdown, cancel := context.WithTimeout(context.Background(), bridgeBrowserCleanupTimeout)
 	defer cancel()
-	if closeErr := browser.Shutdown(shutdown); closeErr != nil && (err == nil || errors.Is(err, http.ErrServerClosed)) {
+	if closeErr := browser.ShutdownImmediately(shutdown); closeErr != nil && (err == nil || errors.Is(err, http.ErrServerClosed)) {
 		err = fmt.Errorf("stop bridge-owned browser: %w", closeErr)
 	}
 	if errors.Is(err, http.ErrServerClosed) {
@@ -509,98 +663,6 @@ func acquireBrowserProfileLock(cfg *config.Config) (*daemonLock, error) {
 		return nil, fmt.Errorf("lock configured Chrome profile: %w", err)
 	}
 	return lock, nil
-}
-
-type activityTracker struct {
-	mu     sync.Mutex
-	active int
-	last   time.Time
-	wake   chan struct{}
-}
-
-func newActivityTracker() *activityTracker {
-	return &activityTracker{last: time.Now(), wake: make(chan struct{}, 1)}
-}
-
-func (t *activityTracker) wrap(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// A tool response is not complete until MCP has retrieved any inline
-		// artifacts. Treat that delivery as runtime activity too, otherwise an
-		// explicitly short Bridge idle timeout can close the server between the
-		// tool result and its artifact response.
-		activeRequest := (r.Method == http.MethodPost && r.URL.Path == "/tools/call") ||
-			(r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/artifacts/"))
-		if !activeRequest {
-			next.ServeHTTP(w, r)
-			return
-		}
-		t.start()
-		defer t.done()
-		next.ServeHTTP(w, r)
-	})
-}
-
-func (t *activityTracker) start() {
-	t.mu.Lock()
-	t.active++
-	t.last = time.Now()
-	t.mu.Unlock()
-	t.notify()
-}
-
-func (t *activityTracker) done() {
-	t.mu.Lock()
-	t.active--
-	t.last = time.Now()
-	t.mu.Unlock()
-	t.notify()
-}
-
-func (t *activityTracker) notify() {
-	select {
-	case t.wake <- struct{}{}:
-	default:
-	}
-}
-
-func (t *activityTracker) idleFor(timeout time.Duration) (time.Duration, bool) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	if t.active > 0 {
-		return timeout, false
-	}
-	remaining := timeout - time.Since(t.last)
-	if remaining <= 0 {
-		return 0, true
-	}
-	return remaining, false
-}
-
-func (t *activityTracker) stopWhenIdle(parent context.Context, server *http.Server, timeout time.Duration) {
-	timer := time.NewTimer(0)
-	defer timer.Stop()
-	for {
-		delay, idle := t.idleFor(timeout)
-		if idle {
-			shutdown, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			_ = server.Shutdown(shutdown)
-			cancel()
-			return
-		}
-		if !timer.Stop() {
-			select {
-			case <-timer.C:
-			default:
-			}
-		}
-		timer.Reset(delay)
-		select {
-		case <-parent.Done():
-			return
-		case <-t.wake:
-		case <-timer.C:
-		}
-	}
 }
 
 type remoteArtifactStore struct{ executor *Executor }

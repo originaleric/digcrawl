@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -59,6 +60,32 @@ func TestRedditPostReadHandlerUsesInjectedImageRetentionConfig(t *testing.T) {
 	meta, _ := out["platform_metadata"].(map[string]any)
 	if meta["image_download_failure_reason"] != "item_limit_exceeded" {
 		t.Fatalf("metadata=%+v", meta)
+	}
+}
+
+func TestRedditPostReadHandlerAppliesEnabledSkillOCRWithoutReturningInternalMedia(t *testing.T) {
+	enabled := true
+	cfg := &config.Config{Skill: config.SkillConfig{OCR: config.OCRConfig{Enabled: &enabled, Provider: "stub"}}}
+	input, err := json.Marshal(redditPostReadInput{URL: "https://www.reddit.com/r/golang/comments/abc123/post/"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := redditPostReadHandler(nil, nil, func(_ context.Context, in reddit.ReadInput) (*iplatform.Content, error) {
+		if !in.IncludeMedia {
+			t.Fatal("enabled Skill OCR must acquire Reddit image references")
+		}
+		return &iplatform.Content{Platform: "reddit", ContentType: "post", SourceURL: in.URL, Markdown: "body", Media: []iplatform.MediaItem{{Type: "image", URL: "https://images.example.test/reddit.png"}}}, nil
+	}, cfg)
+
+	out, _, err := handler(context.Background(), &protocol.ToolCall{Type: protocol.TypeToolCall, Tool: ToolRedditPostRead, Input: input})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out["markdown"].(string), "stub OCR text from https://images.example.test/reddit.png") {
+		t.Fatalf("markdown=%q", out["markdown"])
+	}
+	if _, ok := out["media"]; ok {
+		t.Fatalf("internal OCR media leaked: %+v", out["media"])
 	}
 }
 

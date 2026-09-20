@@ -257,6 +257,34 @@ func TestManagerShutdownDrainsLeaseThenClosesOwnedConnection(t *testing.T) {
 	}
 }
 
+func TestManagerShutdownImmediatelyClosesOwnedConnectionWithActiveLease(t *testing.T) {
+	closed := make(chan struct{})
+	conn := newLifecycleTestConnection(func(context.Context) error { return nil }, func(context.Context) error {
+		close(closed)
+		return nil
+	})
+	conn.leases = 1
+	m := &browserManager{
+		cfg:    config.LocalBrowserConfig{TotalTimeoutSec: 1},
+		active: conn,
+		stopCh: make(chan struct{}),
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := m.shutdownImmediately(ctx); err != nil {
+		t.Fatalf("immediate shutdown: %v", err)
+	}
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("immediate shutdown did not close the active leased browser")
+	}
+	if conn.leases != 0 {
+		t.Fatalf("remaining browser leases=%d, want 0", conn.leases)
+	}
+}
+
 func TestWaitForProfileUnlock(t *testing.T) {
 	t.Parallel()
 	profile := t.TempDir()

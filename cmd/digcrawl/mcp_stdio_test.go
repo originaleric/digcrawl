@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -15,6 +17,9 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/originaleric/digcrawl/config"
+	"github.com/originaleric/digcrawl/transport/bridge"
 )
 
 func TestMCPStdioHelper(t *testing.T) {
@@ -39,6 +44,13 @@ func TestMCPBridgeHelper(t *testing.T) {
 
 func TestMCPPhaseOneProfileExposesOnlyReadTools(t *testing.T) {
 	profilePath := writeMCPPhaseOneProfile(t)
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		if _, err := bridge.Stop(ctx, profilePath); err != nil {
+			t.Errorf("stop test bridge: %v", err)
+		}
+	})
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	t.Cleanup(cancel)
 	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestMCPStdioHelper$")
@@ -176,6 +188,57 @@ func TestMCPPhaseOneProfileExposesOnlyReadTools(t *testing.T) {
 	if err := ctx.Err(); err != nil {
 		t.Fatalf("MCP stdio integration test timed out: %v; stderr=%s", err, stderr.String())
 	}
+	// The stdio child has exited, but it must have launched a detached Bridge
+	// through Executor.startOrWait. A ready manifest here covers the actual
+	// sidecar creation path instead of only attaching to a pre-started server.
+	waitForMCPTestBridge(t, profilePath)
+}
+
+func TestBridgeRestartReplacesRunningBridge(t *testing.T) {
+	profilePath := writeMCPPhaseOneProfile(t)
+	cfg, err := config.Load(profilePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	socket, err := bridge.SocketPath(profilePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldDone := make(chan error, 1)
+	go func() { oldDone <- bridge.Serve(context.Background(), cfg, socket) }()
+	waitForMCPTestBridge(t, profilePath)
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		if _, stopErr := bridge.Stop(ctx, profilePath); stopErr != nil {
+			t.Errorf("stop replacement bridge: %v", stopErr)
+		}
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestMCPBridgeHelper$", "--", "bridge", "restart", "--config", profilePath)
+	cmd.Env = append(os.Environ(),
+		"DIGCRAWL_BRIDGE_HELPER=1",
+		"DIGCRAWL_BRIDGE_EXECUTABLE="+writeMCPBridgeExecutable(t),
+	)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("bridge restart command: %v; stderr=%s", err, stderr.String())
+	}
+	if err := ctx.Err(); err != nil {
+		t.Fatalf("bridge restart timed out: %v; stderr=%s", err, stderr.String())
+	}
+	select {
+	case err := <-oldDone:
+		if err != nil {
+			t.Fatalf("old bridge shutdown: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("bridge restart did not terminate the old Bridge")
+	}
+	waitForMCPTestBridge(t, profilePath)
 }
 
 func writeMCPBridgeExecutable(t *testing.T) string {
@@ -186,6 +249,36 @@ func writeMCPBridgeExecutable(t *testing.T) string {
 		t.Fatal(err)
 	}
 	return path
+}
+
+func waitForMCPTestBridge(t *testing.T, profilePath string) {
+	t.Helper()
+	socket, err := bridge.SocketPath(profilePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dialer := &net.Dialer{}
+	httpClient := &http.Client{Transport: &http.Transport{
+		DisableKeepAlives: true,
+		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			return dialer.DialContext(ctx, "unix", socket)
+		},
+	}}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		request, err := http.NewRequestWithContext(context.Background(), http.MethodGet, "http://digcrawl-bridge/manifest", nil)
+		if err == nil {
+			response, err := httpClient.Do(request)
+			if err == nil {
+				_ = response.Body.Close()
+				if response.StatusCode == http.StatusOK {
+					return
+				}
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("MCP-launched bridge did not become ready")
 }
 
 // lockedBuffer owns child-process stderr for this streaming integration test.

@@ -36,9 +36,12 @@ type platformReadInput struct {
 
 func (in platformReadInput) toPlatformReadInput() iplatform.ReadInput {
 	return iplatform.ReadInput{
-		URL:               in.URL,
-		Format:            in.Format,
-		IncludeMedia:      in.IncludeMedia || in.IncludeOCR || in.IncludeASR || in.IncludeSummary,
+		URL:    in.URL,
+		Format: in.Format,
+		// Direct OCR resolves its required media before this conversion. Keeping
+		// IncludeOCR out of this low-level transport shape prevents a Collect
+		// caller from accidentally inheriting the Skill's direct-read policy.
+		IncludeMedia:      in.IncludeMedia || in.IncludeASR || in.IncludeSummary,
 		IncludeScreenshot: in.IncludeScreenshot,
 		WaitSelector:      in.WaitSelector,
 		UseCookieDomain:   in.UseCookieDomain,
@@ -174,15 +177,23 @@ func platformReadHandlerNamedWithConfig(
 		skillCfg, videoDownloadCfg, imageDownloadCfg := activeSkillMediaRetentionConfig(runtimeCfg)
 		retainProviderVideos := shouldRetainProviderVideos(videoDownloadCfg, skillCfg, name)
 		retainProviderImages := shouldRetainProviderImages(imageDownloadCfg, name)
+		ocrRequested := skill.DirectReadOCRRequested(ctx, skillCfg, in.IncludeOCR)
 		// Retention needs media internally, but must not broaden the response
 		// contract for a caller that did not ask for media or an enhancement
 		// that already requires media.
-		returnMedia := in.IncludeMedia || in.IncludeOCR || in.IncludeASR || in.IncludeSummary
-		if retainProviderVideos || retainProviderImages {
+		returnMedia := in.IncludeMedia || in.IncludeASR || in.IncludeSummary
+		if !isCollect && in.IncludeOCR {
+			returnMedia = true
+		}
+		if ocrRequested || retainProviderVideos || retainProviderImages {
 			// A provider may only expose media when this flag is set. The explicit
-			// local retention policy is itself a request for that media.
+			// local retention policy, and configured OCR, need media internally.
+			// returnMedia above remains the public response contract.
 			in.IncludeMedia = true
 		}
+		// Keep downstream provider acquisition and enhancement decisions on the
+		// same resolved OCR policy. returnMedia was captured before this mutation.
+		in.IncludeOCR = ocrRequested
 
 		content, err := read(ctx, in.toPlatformReadInput())
 		if err != nil {
@@ -251,8 +262,13 @@ func platformReadHandlerNamedWithConfig(
 				content.PlatformMetadata["video_download_status"] = "saved"
 			}
 		}
-		skillEnhancement := in.IncludeOCR || in.IncludeASR || in.IncludeSummary
+		skillEnhancement := ocrRequested || in.IncludeASR || in.IncludeSummary
 		out := iplatform.ApplyFormats(content, in.Format)
+		if !returnMedia && !isCollect {
+			// OCR needs resolved image references as process input, but an enabled
+			// local OCR profile must not silently change a text-only MCP response.
+			defer delete(out, "media")
+		}
 		if retainProviderVideos && name != ToolYouTubeVideoRead {
 			paths, retainErr := retainResolvedProviderVideos(ctx, out, videoDownloadCfg, artStore)
 			if retainErr != nil {
@@ -279,7 +295,7 @@ func platformReadHandlerNamedWithConfig(
 		}
 		if !isCollect && skillEnhancement {
 			if err := skill.Enhance(ctx, out, skillCfg, skill.EnhanceOptions{
-				IncludeOCR: in.IncludeOCR, IncludeASR: in.IncludeASR,
+				IncludeOCR: ocrRequested, IncludeASR: in.IncludeASR,
 				IncludeSummary: in.IncludeSummary, SourceText: content.Text, ScreenshotBase64: content.ScreenshotBase64, ArtifactStore: artStore, LocalVideoPaths: localVideoPaths, LocalImages: localImages,
 			}); err != nil {
 				// Direct video understanding returns its partial text/metadata only;

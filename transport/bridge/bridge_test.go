@@ -60,7 +60,7 @@ func TestPrepareManagedConfigDisablesLegacyCDP(t *testing.T) {
 	}
 }
 
-func TestServeRunsGatewayPingAndClosesAfterToolIdle(t *testing.T) {
+func TestServeKeepsBridgeAvailableAcrossIdleGaps(t *testing.T) {
 	dir := t.TempDir()
 	profile := filepath.Join(dir, "profile.yaml")
 	profileYAML := "Gateway:\n" +
@@ -86,8 +86,10 @@ func TestServeRunsGatewayPingAndClosesAfterToolIdle(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(socketDir) })
 	socket := filepath.Join(socketDir, "bridge.sock")
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
 	done := make(chan error, 1)
-	go func() { done <- Serve(context.Background(), cfg, socket, 80*time.Millisecond) }()
+	go func() { done <- Serve(ctx, cfg, socket) }()
 
 	var cReady bool
 	var lastProbeErr error
@@ -120,13 +122,36 @@ func TestServeRunsGatewayPingAndClosesAfterToolIdle(t *testing.T) {
 		t.Fatalf("bridge did not become ready: %v", lastProbeErr)
 	}
 
+	// The bridge transport must survive an otherwise idle period. Stdio
+	// sessions own stale-process cleanup; closing this singleton on a timer
+	// would race the next manifest -> tools/call transition.
+	time.Sleep(160 * time.Millisecond)
+	c, manifest, err := probe(context.Background(), socket)
+	if err != nil {
+		t.Fatalf("bridge disappeared after an idle gap: %v", err)
+	}
+	if len(manifest.Tools) != 1 || manifest.Tools[0].Name != "gateway.ping" {
+		t.Fatalf("manifest after idle gap=%+v", manifest)
+	}
+	result, err := c.Call(context.Background(), protocol.ToolCall{Type: protocol.TypeToolCall, ID: "ping-after-idle", Tool: "gateway.ping", Input: []byte(`{}`)})
+	if err != nil || result.Status != "success" {
+		t.Fatalf("bridge call after idle gap result=%+v err=%v", result, err)
+	}
+
+	select {
+	case err := <-done:
+		t.Fatalf("bridge stopped without an explicit lifecycle signal: %v", err)
+	case <-time.After(80 * time.Millisecond):
+	}
+
+	cancel()
 	select {
 	case err := <-done:
 		if err != nil {
-			t.Fatalf("bridge did not stop cleanly after idle timeout: %v", err)
+			t.Fatalf("bridge did not stop cleanly after cancellation: %v", err)
 		}
 	case <-time.After(2 * time.Second):
-		t.Fatal("bridge stayed alive after its tool-idle deadline")
+		t.Fatal("bridge did not stop after cancellation")
 	}
 }
 
@@ -152,14 +177,14 @@ func TestServeRejectsSecondBridgeForSamePersistentBrowserProfile(t *testing.T) {
 	defer stop()
 	firstDone := make(chan error, 1)
 	firstSocket := filepath.Join(socketDir, "first.sock")
-	go func() { firstDone <- Serve(ctx, cfg, firstSocket, time.Hour) }()
+	go func() { firstDone <- Serve(ctx, cfg, firstSocket) }()
 	if _, _, err := waitForBridge(context.Background(), firstSocket); err != nil {
 		t.Fatalf("first bridge did not become ready: %v", err)
 	}
 
 	secondCfg := bridgeTestConfig(t, dir)
 	secondCfg.LocalBrowser.UserDataDir = sharedProfile
-	err = Serve(context.Background(), secondCfg, filepath.Join(socketDir, "second.sock"), time.Hour)
+	err = Serve(context.Background(), secondCfg, filepath.Join(socketDir, "second.sock"))
 	if !errors.Is(err, ErrBrowserProfileInUse) {
 		t.Fatalf("second bridge error=%v, want ErrBrowserProfileInUse", err)
 	}
@@ -172,6 +197,180 @@ func TestServeRejectsSecondBridgeForSamePersistentBrowserProfile(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("first bridge did not stop after cancellation")
+	}
+}
+
+func TestStopShutsDownRunningBridgeThroughPrivateSocket(t *testing.T) {
+	dir := t.TempDir()
+	cfg := bridgeTestConfig(t, dir)
+	profile := filepath.Join(dir, "profile.yaml")
+	socket, err := SocketPath(profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Remove(socket) })
+	done := make(chan error, 1)
+	go func() { done <- Serve(context.Background(), cfg, socket) }()
+	if _, _, err := waitForBridge(context.Background(), socket); err != nil {
+		t.Fatalf("bridge did not become ready: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	stopped, err := Stop(ctx, profile)
+	if err != nil || !stopped {
+		t.Fatalf("Stop() = (%v, %v), want (true, nil)", stopped, err)
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("bridge shutdown: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("bridge did not exit after private stop")
+	}
+	if _, _, err := probe(context.Background(), socket); err == nil {
+		t.Fatal("bridge still answered after Stop")
+	}
+}
+
+func TestWaitForBridgeStoppedRequiresLifecycleLockRelease(t *testing.T) {
+	socketDir, err := os.MkdirTemp("/private/tmp", "digbridge-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(socketDir) })
+	socket := filepath.Join(socketDir, "bridge.sock")
+	lock, err := acquireDaemonLock(socket + ".lock")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- waitForBridgeStopped(ctx, socket) }()
+	select {
+	case err := <-done:
+		t.Fatalf("waitForBridgeStopped returned before lifecycle lock release: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	if err := lock.Close(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("waitForBridgeStopped after lifecycle lock release: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("waitForBridgeStopped did not observe lifecycle lock release")
+	}
+}
+
+func TestStopWaitsForInFlightBridgeTransition(t *testing.T) {
+	dir := t.TempDir()
+	profile := filepath.Join(dir, "profile.yaml")
+	if err := os.WriteFile(profile, []byte("Gateway: {}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	socket, err := SocketPath(profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	releaseTransition, err := acquireBridgeOperation(context.Background(), socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	releasedTransition := false
+	t.Cleanup(func() {
+		if !releasedTransition {
+			releaseTransition()
+		}
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	done := make(chan struct {
+		stopped bool
+		err     error
+	}, 1)
+	go func() {
+		stopped, stopErr := Stop(ctx, profile)
+		done <- struct {
+			stopped bool
+			err     error
+		}{stopped, stopErr}
+	}()
+	select {
+	case result := <-done:
+		t.Fatalf("Stop returned while a Bridge transition was in flight: (%v, %v)", result.stopped, result.err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	releaseTransition()
+	releasedTransition = true
+	select {
+	case result := <-done:
+		if result.err != nil || result.stopped {
+			t.Fatalf("Stop after transition = (%v, %v), want (false, nil)", result.stopped, result.err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Stop did not continue after the Bridge start transition released")
+	}
+}
+
+func TestBridgeOperationLockIsNotReapedByAge(t *testing.T) {
+	socket := filepath.Join(t.TempDir(), "bridge.sock")
+	releaseTransition, err := acquireBridgeOperation(context.Background(), socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	releasedTransition := false
+	t.Cleanup(func() {
+		if !releasedTransition {
+			releaseTransition()
+		}
+	})
+
+	old := time.Now().Add(-time.Hour)
+	if err := os.Chtimes(socket+".transition.lock", old, old); err != nil {
+		t.Fatalf("age transition lock: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	secondRelease, err := acquireBridgeOperation(ctx, socket)
+	if err == nil {
+		secondRelease()
+		t.Fatal("aged live transition lock was acquired")
+	}
+
+	releaseTransition()
+	releasedTransition = true
+	secondRelease, err = acquireBridgeOperation(context.Background(), socket)
+	if err != nil {
+		t.Fatalf("acquire transition lock after owner release: %v", err)
+	}
+	secondRelease()
+}
+
+func TestStartWaitsForUnreachableBridgeOwner(t *testing.T) {
+	socket := filepath.Join(t.TempDir(), "bridge.sock")
+	owner, err := acquireDaemonLock(socket + ".lock")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = owner.Close() })
+
+	executor := &Executor{
+		executable: filepath.Join(t.TempDir(), "must-not-start"),
+		profile:    filepath.Join(t.TempDir(), "profile.yaml"),
+		socket:     socket,
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	defer cancel()
+	err = executor.startOrWait(ctx)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("start while an unreachable owner holds the runtime lock: %v", err)
 	}
 }
 
@@ -273,103 +472,44 @@ func TestRemoteArtifactStoreBoundsStalledBridgeArtifactFetch(t *testing.T) {
 	}
 }
 
-func TestActivityTrackerKeepsBridgeAliveWhileArtifactStreams(t *testing.T) {
-	socketDir, err := os.MkdirTemp("/private/tmp", "digbridge-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(socketDir) })
-	socket := filepath.Join(socketDir, "bridge.sock")
-	listener, err := net.Listen("unix", socket)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer listener.Close()
-
-	tracker := newActivityTracker()
-	artifactStarted := make(chan struct{})
-	releaseArtifact := make(chan struct{})
-	server := &http.Server{Handler: tracker.wrap(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/artifacts/slow" {
-			http.NotFound(w, r)
-			return
-		}
-		close(artifactStarted)
-		<-releaseArtifact
-		w.Header().Set("Content-Type", "text/plain")
-		_, _ = w.Write([]byte("artifact"))
-	}))}
-	serverDone := make(chan struct{})
-	var serveErr error
-	go func() {
-		serveErr = server.Serve(listener)
-		close(serverDone)
-	}()
-	t.Cleanup(func() {
-		shutdown, cancel := context.WithTimeout(context.Background(), time.Second)
-		defer cancel()
-		_ = server.Shutdown(shutdown)
-		select {
-		case <-serverDone:
-		case <-time.After(time.Second):
-			t.Error("bridge test server did not stop")
-		}
-	})
-	t.Cleanup(func() {
-		select {
-		case <-releaseArtifact:
-		default:
-			close(releaseArtifact)
-		}
-	})
-
-	fetchCtx, cancelFetch := context.WithTimeout(context.Background(), time.Second)
-	defer cancelFetch()
-	fetchDone := make(chan error, 1)
-	go func() {
-		data, contentType, fetchErr := newSocketClient(socket).FetchArtifact(fetchCtx, "slow")
-		if fetchErr == nil && (string(data) != "artifact" || contentType != "text/plain") {
-			fetchErr = errors.New("artifact response was incomplete")
-		}
-		fetchDone <- fetchErr
-	}()
-	select {
-	case <-artifactStarted:
-	case <-time.After(time.Second):
-		t.Fatal("test bridge never received artifact request")
-	}
-
-	idleCtx, cancelIdle := context.WithCancel(context.Background())
-	defer cancelIdle()
-	const idleTimeout = 50 * time.Millisecond
-	go tracker.stopWhenIdle(idleCtx, server, idleTimeout)
-	select {
-	case <-serverDone:
-		t.Fatalf("bridge stopped during active artifact stream: %v", serveErr)
-	case <-time.After(2 * idleTimeout):
-	}
-
-	close(releaseArtifact)
-	select {
-	case fetchErr := <-fetchDone:
-		if fetchErr != nil {
-			t.Fatalf("artifact fetch failed: %v", fetchErr)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("artifact fetch did not finish")
-	}
-}
-
 func TestWaitForBridgeReportsEarlyStartupExit(t *testing.T) {
 	exited := make(chan error, 1)
 	exited <- errors.New("exit status 1")
-	stderr := &limitedBuffer{limit: startupStderrLimit}
-	_, _ = stderr.Write([]byte("bridge: " + ErrBrowserProfileInUse.Error()))
+	var stderr strings.Builder
+	_, _ = stderr.WriteString("bridge: " + ErrBrowserProfileInUse.Error())
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	_, _, err := waitForBridgeOrExit(ctx, filepath.Join(t.TempDir(), "missing.sock"), exited, stderr)
+	_, _, err := waitForBridgeOrExit(ctx, filepath.Join(t.TempDir(), "missing.sock"), exited, &stderr)
 	if err == nil || !strings.Contains(err.Error(), ErrBrowserProfileInUse.Error()) {
 		t.Fatalf("startup error=%v, want bridge stderr", err)
+	}
+}
+
+func TestNewExecutorReportsPrivateStartupStatus(t *testing.T) {
+	dir := t.TempDir()
+	profile := filepath.Join(dir, "profile.yaml")
+	if err := os.WriteFile(profile, []byte("Gateway: {}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	executable := filepath.Join(dir, "bridge-failure")
+	script := `#!/bin/sh
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "--startup-status" ]; then
+    printf '%s' 'configured Chrome profile is already owned by another local DigCrawl bridge' > "$2"
+    exit 1
+  fi
+  shift
+done
+exit 1
+`
+	if err := os.WriteFile(executable, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	_, err := NewExecutor(ctx, executable, profile, &config.Config{})
+	if err == nil || !strings.Contains(err.Error(), "configured Chrome profile is already owned") {
+		t.Fatalf("startup error=%v, want private startup diagnostic", err)
 	}
 }
 
