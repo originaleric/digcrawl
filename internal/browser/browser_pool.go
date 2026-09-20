@@ -2,8 +2,12 @@ package browser
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net"
+	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -21,6 +25,8 @@ import (
 	"github.com/go-rod/stealth"
 	"github.com/originaleric/digcrawl/config"
 )
+
+const cdpDiscoveryTimeout = 2 * time.Second
 
 type browserSession struct {
 	id        uint64
@@ -69,6 +75,16 @@ func getBrowserManager() *browserManager {
 	return globalBrowserMgr
 }
 
+// Shutdown releases the browser owned by this process. It is used by the
+// local bridge after its HTTP server has drained every tool call, so a bridge
+// idle exit cannot leave Chrome running without an owner.
+func Shutdown(ctx context.Context) error {
+	if globalBrowserMgr == nil {
+		return nil
+	}
+	return globalBrowserMgr.shutdown(ctx)
+}
+
 func normalizeLocalBrowserConfig(cfg config.LocalBrowserConfig) config.LocalBrowserConfig {
 	if cfg.MaxConcurrency <= 0 {
 		cfg.MaxConcurrency = 3
@@ -102,15 +118,90 @@ func normalizeLocalBrowserConfig(cfg config.LocalBrowserConfig) config.LocalBrow
 	return cfg
 }
 
-// CheckAvailable verifies that DigCrawl can locate an executable Chromium
-// browser without launching it. It is used by the local doctor command so a
-// profile check stays side-effect free.
+// CheckAvailable verifies the dependency that this browser mode actually
+// uses without launching anything. Attached-CDP mode is healthy only when its
+// configured endpoint answers the DevTools discovery request; checking a
+// locally installed Chrome binary in that mode produces a false positive.
 func CheckAvailable(cfg config.LocalBrowserConfig) error {
+	if cfg.CDPConnectExisting != nil && *cfg.CDPConnectExisting {
+		port := cfg.CDPPort
+		if port <= 0 {
+			port = 9222
+		}
+		if _, err := resolveExistingCDP(context.Background(), port); err != nil {
+			return err
+		}
+		return nil
+	}
 	cfg = normalizeLocalBrowserConfig(cfg)
 	if cfg.ChromePath == "" || !isExecutableFile(cfg.ChromePath) {
 		return fmt.Errorf("no supported Chrome/Chromium executable found; set LocalBrowser.ChromePath or install Chrome/Chromium")
 	}
 	return nil
+}
+
+// ManagedConfig selects the single-process browser ownership mode used by the
+// local bridge. It deliberately avoids a fixed DevTools port: a bridge owns
+// its Chrome child directly, so no second local service or port contract is
+// needed. A persistent browser profile remains intact for login state.
+func ManagedConfig(cfg config.LocalBrowserConfig) config.LocalBrowserConfig {
+	managed := false
+	cfg.CDPConnectExisting = &managed
+	cfg.CDPMode = &managed
+	if !isExecutableFile(cfg.ChromePath) {
+		// Prefer an installed desktop Chrome for the bridge even when it runs
+		// headless. Unlike a versioned Playwright cache, that executable remains
+		// stable across dependency refreshes and can retain the user profile.
+		cfg.ChromePath = discoverLocalChromePathForMode(false)
+	}
+	return cfg
+}
+
+// CheckManagedAvailable verifies the browser dependency used by the local
+// bridge rather than an optional legacy external-CDP configuration.
+func CheckManagedAvailable(cfg config.LocalBrowserConfig) error {
+	return CheckAvailable(ManagedConfig(cfg))
+}
+
+// resolveExistingCDP validates a real DevTools discovery response and returns
+// its WebSocket URL. Rod's launcher.ResolveURL is intentionally convenient for
+// callers but accepts a successful non-CDP HTTP response and uses an unbounded
+// http.Get, which makes it unsuitable as a health boundary.
+func resolveExistingCDP(parent context.Context, port int) (string, error) {
+	if parent == nil {
+		parent = context.Background()
+	}
+	if port <= 0 {
+		port = 9222
+	}
+	endpoint := fmt.Sprintf("http://127.0.0.1:%d/json/version", port)
+	ctx, cancel := context.WithTimeout(parent, cdpDiscoveryTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return "", fmt.Errorf("configured CDP endpoint %s is unavailable: %w", endpoint, err)
+	}
+	resp, err := (&http.Client{}).Do(req)
+	if err != nil {
+		return "", fmt.Errorf("configured CDP endpoint %s is unavailable: %w", endpoint, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return "", fmt.Errorf("configured CDP endpoint %s returned HTTP %d", endpoint, resp.StatusCode)
+	}
+	var version struct {
+		WebSocketDebuggerURL string `json:"webSocketDebuggerUrl"`
+	}
+	decoder := json.NewDecoder(io.LimitReader(resp.Body, 64<<10))
+	if err := decoder.Decode(&version); err != nil {
+		return "", fmt.Errorf("configured CDP endpoint %s returned invalid discovery JSON: %w", endpoint, err)
+	}
+	controlURL := strings.TrimSpace(version.WebSocketDebuggerURL)
+	parsed, err := url.Parse(controlURL)
+	if err != nil || parsed.Host == "" || (parsed.Scheme != "ws" && parsed.Scheme != "wss") {
+		return "", fmt.Errorf("configured CDP endpoint %s returned no valid WebSocket debugger URL", endpoint)
+	}
+	return controlURL, nil
 }
 
 func discoverLocalChromePath() string {
@@ -564,8 +655,7 @@ func (m *browserManager) openBrowserConnection(ctx context.Context) (*browserCon
 		if port <= 0 {
 			port = 9222
 		}
-		u := fmt.Sprintf("http://127.0.0.1:%d", port)
-		controlURL, err = launcher.ResolveURL(u)
+		controlURL, err = resolveExistingCDP(operationCtx, port)
 		if err != nil {
 			return nil, fmt.Errorf("连接已有 CDP 浏览器失败: %w", err)
 		}

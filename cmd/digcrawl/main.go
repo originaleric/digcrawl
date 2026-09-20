@@ -12,12 +12,14 @@ import (
 	"syscall"
 
 	"strings"
+	"time"
 
 	"github.com/originaleric/digcrawl/collect"
 	"github.com/originaleric/digcrawl/collect/store"
 	"github.com/originaleric/digcrawl/config"
 	"github.com/originaleric/digcrawl/runtime"
 	"github.com/originaleric/digcrawl/runtime/version"
+	"github.com/originaleric/digcrawl/transport/bridge"
 	"github.com/originaleric/digcrawl/transport/collector"
 	"github.com/originaleric/digcrawl/transport/devhost"
 	httpgw "github.com/originaleric/digcrawl/transport/http"
@@ -49,6 +51,8 @@ func run(argv []string) {
 		runDevHost(argv[2:])
 	case "mcp":
 		runMCP(argv[2:])
+	case "bridge":
+		runBridge(argv[2:])
 	case "stdio":
 		runStdio(argv[2:])
 	case "collect":
@@ -247,20 +251,33 @@ func runMCP(args []string) {
 		log.Fatalf("load MCP profile: %v (run `digcrawl init --profile skill` or pass --config)", err)
 	}
 	allowDefaultSkillProfileTools(cfg)
-	rt, err := runtime.NewRuntime(cfg)
+	bridgeIdleTimeout := bridge.DefaultIdleTimeout
+	if idleTimeoutExplicit && *idleTimeout > 0 {
+		bridgeIdleTimeout = *idleTimeout
+	}
+	startupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	rt, err := bridge.NewExecutor(startupCtx, bridgeExecutable(), profilePath, cfg, bridgeIdleTimeout)
 	if err != nil {
-		log.Fatalf("runtime: %v", err)
+		log.Fatalf("start local bridge: %v", err)
 	}
 	log.Printf("DigCrawl MCP server on stdio (instance=%s)", cfg.Gateway.InstanceID)
 	var serveErr error
 	if idleTimeoutExplicit {
-		serveErr = mcpgw.ServeStdioWithIdleTimeout(rt, *idleTimeout)
+		serveErr = mcpgw.ServeToolRuntimeStdio(rt, *idleTimeout, false)
 	} else {
-		serveErr = mcpgw.ServeStdioWithCodexRecovery(rt)
+		serveErr = mcpgw.ServeToolRuntimeStdio(rt, mcpgw.DefaultStdioIdleTimeout, true)
 	}
 	if serveErr != nil {
 		log.Fatalf("mcp: %v", serveErr)
 	}
+}
+
+func bridgeExecutable() string {
+	if executable := strings.TrimSpace(os.Getenv("DIGCRAWL_BRIDGE_EXECUTABLE")); executable != "" {
+		return executable
+	}
+	return os.Args[0]
 }
 
 // allowDefaultSkillProfileTools keeps existing standard Skill profiles

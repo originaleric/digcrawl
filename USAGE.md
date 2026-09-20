@@ -173,9 +173,17 @@ go install ./cmd/digcollect
 | `ProxyURL` | 浏览器代理地址，页面 fetch/API fallback 共用 |
 | `ExtraArgs` | 额外 Chromium 启动参数；适合配置 `--single-process`、`--no-zygote`、禁用 crashpad 等 headless 兼容参数 |
 
-### 按需 CDP 浏览器服务
+### 本机 MCP Bridge（默认）
 
-如果本机需要使用 `CDPConnectExisting: true`，可使用专用服务按需启动系统 Chrome，而不是把 `ChromePath` 指向 Playwright 的版本化缓存目录：
+`digcrawl mcp` 首次被调用时，会为该 profile 启动一个私有 Unix socket Bridge。多个 Codex MCP stdio 子进程只转发协议，Bridge 才是唯一创建 Runtime 和 Chrome 的进程；因此没有固定 CDP 端口、没有 launchd/systemd 常驻浏览器，也不会因 MCP 重连重复争抢浏览器。配置文件的符号链接会归并到同一个 Bridge；而同一个持久化 `UserDataDir` 在任意时刻只能由一个 Bridge 使用。若确实需要两套独立配置，请给它们配置不同的 `UserDataDir`，避免权限、超时和登录态混用。Bridge 在连续 15 分钟既无实际 `tools/call`、也无附件交付进行中时退出并关闭它创建的 Chrome；`UserDataDir` 保持不变，登录态不会丢失。下次调用会按需重建。
+
+Bridge 默认忽略 profile 中遗留的 `CDPMode`、`CDPConnectExisting` 与 `CDPPort`，直接管理 `ChromePath`（未配置时优先发现系统 Chrome）。这样旧的 CDP 服务短暂不可用、端口被占用或返回伪 HTTP 成功，都不再决定 MCP 是否可读页面。`digcrawl doctor --config <profile>` 也检查这一条实际运行路径。
+
+Codex 的 MCP proxy 仍是 stdio 协议所必需的宿主子进程，但不会再各自拥有 Runtime 或浏览器。它在无初始化时 1 分钟回收；任意已初始化宿主都会在 15 分钟无实际调用后回收。只有 `initialize` 和 `tools/call` 会刷新计时，MCP `ping` 不会制造永不退出的残留进程。
+
+### 旧版固定 CDP 服务（仅兼容场景）
+
+只有独立 CLI 或自定义宿主明确需要 `CDPConnectExisting: true` 时，才使用专用服务；MCP 默认不需要它：
 
 ```bash
 ./scripts/digcrawl-cdp-browser-service.sh install
@@ -183,30 +191,7 @@ go install ./cmd/digcollect
 ./scripts/digcrawl-cdp-browser-service.sh status
 ```
 
-Windows 使用 PowerShell 与当前用户的 Task Scheduler：
-
-```powershell
-.\scripts\digcrawl-cdp-browser-service.ps1 install
-.\scripts\digcrawl-cdp-browser-service.ps1 start
-.\scripts\digcrawl-cdp-browser-service.ps1 status
-```
-
-Bash 脚本在 macOS 使用用户级 `launchd`、在 Linux 使用 `systemd --user`；PowerShell 脚本在 Windows 使用 Task Scheduler。`install` 只保存和注册已验证的 Chrome 路径及端口/profile 配置，**不会**启动 Chrome、在登录后自启，或在 Chrome 退出后重启它；仅显式的 `start` 与 `restart` 会启动专用浏览器。Chrome 只监听 `127.0.0.1`，使用持久 profile，并以 `--mute-audio` 启动，避免采集页自动播放时从用户设备发声。macOS 还会将启动脚本的私有副本写入 `~/Library/Application Support/DigCrawl/bin`，避免 LaunchAgent 被系统拒绝执行 `Documents` 等受保护目录中的项目脚本。默认端口为 `9323`，通过 `DIGCRAWL_CDP_PORT`、`DIGCRAWL_CDP_USER_DATA_DIR`、`DIGCRAWL_CDP_LOG_DIR` 和 `DIGCRAWL_CHROME_PATH` 覆盖。Skill profile 对应配置为：
-
-```yaml
-LocalBrowser:
-  CDPMode: true
-  CDPConnectExisting: true
-  CDPPort: 9323
-```
-
-这些均为**当前用户**的服务定义，不会在该用户登录或系统重启后自行运行。旧版本使用默认服务身份的自动服务会在重新执行一次 `install` 时被注销/禁用并迁移为按需启动。早于状态记录机制的自定义旧服务没有可安全推断的身份，首次迁移时请显式传入其原有的 label/name；无需手动删除服务。CDP 只绑定回环地址，但它仍允许同一台机器上能访问该端口的本地进程控制专用浏览器；不要在不受信任的多用户主机上复用这个 profile。
-
-服务安装会把服务身份、端口、profile、日志目录和 Chrome 路径写入当前用户的私有状态目录，并记录“活动服务”。因此安装了自定义服务后，后续的 `start`、`status`、`logs`、`restart`、`uninstall` **不必再次传环境变量**。不带服务身份的 `install` 同样会更新这个活动服务，先注销/禁用它的旧定义，再迁移为按需启动；不会悄然新建默认服务而留下旧服务。若要创建或切换到另一服务，才在该次 `install` 显式传入 `DIGCRAWL_CDP_BROWSER_SERVICE_LABEL`（macOS）或 `DIGCRAWL_CDP_BROWSER_SERVICE_NAME`（Linux/Windows）。端口、profile、日志目录和 Chrome 路径也仅在该次显式提供时覆盖保存值。macOS 的 `restart` 会同步当前脚本到 launchd 私有副本；`status` 会提示该副本落后于源码，或运行中的服务缺少 `--mute-audio`。安装和状态检查同时验证 CDP 响应与 Chrome 的 `--remote-debugging-port`、`--user-data-dir`：端口被其他 profile 占用时会明确失败，绝不会把对方的登录会话当成 DigCrawl 专用浏览器。服务身份只接受字母、数字、`.`、`_`、`-`（Windows 额外允许空格），避免服务文件路径歧义。
-
-使用 `./scripts/digcrawl-cdp-browser-service.sh stop` 会停止专用浏览器，并确认 CDP 端口和对应的 Chrome 主进程都已退出；`uninstall` 会额外移除服务定义。无需在活动监视器中强制退出进程；重新执行一次 `install` 即可把旧版 `KeepAlive` / 登录自启配置迁移为按需启动。
-
-不要在活动监视器直接强制退出这台 Chrome：服务的 `KeepAlive` 会把这类崩溃当作故障并重新拉起。使用 `./scripts/digcrawl-cdp-browser-service.sh stop` 会先注销服务管理器，再确认 CDP 端口和对应的 Chrome 主进程都已退出；需要让它在下次登录后也不再启动时，使用 `uninstall`。
+该服务是当前用户的手动服务：`install` 只保存配置，既不会登录自启，也不会在 Chrome 退出后自动拉起；用 `stop` 或 `uninstall` 清理。CDP 仅绑定回环地址，但仍允许同机进程控制该浏览器；不要在不受信任的多用户主机复用 profile。
 
 ### Platform（平台读取）
 
@@ -1008,11 +993,11 @@ digcrawl collector --server http://127.0.0.1:8790 --token dev
 }
 ```
 
-启动后，IDE 内的 Agent 可通过 MCP 调用本机已注册工具（与 `gateway` 共用同一套 runtime / Provider）。
+启动后，IDE 内的 Agent 通过 MCP 调用本机已注册工具。MCP 入口会按需连接同 profile 的本机 Bridge；Bridge 独占 Runtime 与浏览器，HTTP `gateway` 仍是独立的显式服务。
 
 除 Codex 外，安装器不会猜测宿主的 MCP 配置文件。请将完整 `skills/digcrawl/` 目录复制或链接到宿主规定的 Skill 目录，并按[通用 stdio 启动契约](./.agents/skills/digcrawl/mcp/README.md)登记上面的 `command` 与 `args`；不要只复制 `SKILL.md`。Codex 的适配器额外设置了空闲回收参数，通用 MCP 配置不应照抄该参数。
 
-未显式传 `--idle-timeout` 时，`digcrawl mcp` 会回收未发送 MCP `initialize` 且 stdin 连续空闲 1 分钟的管道；从 initialize 识别到 Codex 后自动启用 15 分钟空闲回收，避免 Codex 遗留 stdin 管道长期保留进程。其他已初始化客户端保持标准长连接。对任意宿主可显式传入正值启用超时；仅在确实需要关闭回收时传 `--idle-timeout=0`。
+未显式传 `--idle-timeout` 时，`digcrawl mcp` 会回收未发送 MCP `initialize` 且 stdin 连续空闲 1 分钟的管道；每个已初始化客户端都会在连续 15 分钟没有实际工具调用后回收，避免宿主 clientInfo 名称变化绕过回收。计时器只在 `initialize` 或实际 `tools/call` 时刷新，MCP `ping` 等传输保活包不会让闲置子进程永远存活。对任意宿主可显式传入正值启用超时；仅在确实需要关闭回收时传 `--idle-timeout=0`。
 
 ### Agent Skill 最小 profile
 

@@ -21,7 +21,20 @@ func TestMCPStdioHelper(t *testing.T) {
 	if os.Getenv("DIGCRAWL_MCP_STDIO_HELPER") != "1" {
 		return
 	}
-	run([]string{"digcrawl", "mcp", "--config", os.Getenv("DIGCRAWL_MCP_STDIO_CONFIG")})
+	run([]string{"digcrawl", "mcp", "--idle-timeout", "100ms", "--config", os.Getenv("DIGCRAWL_MCP_STDIO_CONFIG")})
+}
+
+func TestMCPBridgeHelper(t *testing.T) {
+	if os.Getenv("DIGCRAWL_BRIDGE_HELPER") != "1" {
+		return
+	}
+	for i, arg := range os.Args {
+		if arg == "--" {
+			run(append([]string{"digcrawl"}, os.Args[i+1:]...))
+			return
+		}
+	}
+	t.Fatal("bridge helper did not receive command arguments")
 }
 
 func TestMCPPhaseOneProfileExposesOnlyReadTools(t *testing.T) {
@@ -32,6 +45,7 @@ func TestMCPPhaseOneProfileExposesOnlyReadTools(t *testing.T) {
 	cmd.Env = append(os.Environ(),
 		"DIGCRAWL_MCP_STDIO_HELPER=1",
 		"DIGCRAWL_MCP_STDIO_CONFIG="+profilePath,
+		"DIGCRAWL_BRIDGE_EXECUTABLE="+writeMCPBridgeExecutable(t),
 	)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -162,6 +176,16 @@ func TestMCPPhaseOneProfileExposesOnlyReadTools(t *testing.T) {
 	if err := ctx.Err(); err != nil {
 		t.Fatalf("MCP stdio integration test timed out: %v; stderr=%s", err, stderr.String())
 	}
+}
+
+func writeMCPBridgeExecutable(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "digcrawl-bridge-test-helper")
+	script := "#!/bin/sh\nDIGCRAWL_BRIDGE_HELPER=1 exec " + strconv.Quote(os.Args[0]) + " -test.run='^TestMCPBridgeHelper$' -- \"$@\"\n"
+	if err := os.WriteFile(path, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return path
 }
 
 // lockedBuffer owns child-process stderr for this streaming integration test.

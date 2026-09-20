@@ -222,6 +222,41 @@ func TestFailedOpenQuarantinesPartiallyOwnedBrowser(t *testing.T) {
 	}
 }
 
+func TestManagerShutdownDrainsLeaseThenClosesOwnedConnection(t *testing.T) {
+	closed := make(chan struct{})
+	conn := newLifecycleTestConnection(func(context.Context) error { return nil }, func(context.Context) error {
+		close(closed)
+		return nil
+	})
+	conn.leases = 1
+	m := &browserManager{
+		cfg:    config.LocalBrowserConfig{TotalTimeoutSec: 1},
+		active: conn,
+		stopCh: make(chan struct{}),
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer cancel()
+	if err := m.shutdown(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("shutdown with active lease error=%v, want deadline exceeded", err)
+	}
+	select {
+	case <-closed:
+		t.Fatal("shutdown closed a browser with an active tool lease")
+	default:
+	}
+
+	m.releaseConnection(conn)
+	if err := m.shutdown(context.Background()); err != nil {
+		t.Fatalf("shutdown after lease drain: %v", err)
+	}
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("shutdown did not close the drained owned browser")
+	}
+}
+
 func TestWaitForProfileUnlock(t *testing.T) {
 	t.Parallel()
 	profile := t.TempDir()

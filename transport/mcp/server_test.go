@@ -64,6 +64,19 @@ func TestDefaultStdioIdleTimeoutKeepsAnOpenSessionAlive(t *testing.T) {
 	}
 }
 
+func TestDeprecatedCodexIdleTimeoutAliasKeepsItsPublicValue(t *testing.T) {
+	if DefaultCodexStdioIdleTimeout != DefaultStdioSessionIdleTimeout {
+		t.Fatalf("deprecated Codex timeout=%s want session timeout=%s", DefaultCodexStdioIdleTimeout, DefaultStdioSessionIdleTimeout)
+	}
+}
+
+func TestLegacyStdioEntrypointsRetainExactRuntimeFunctionTypes(t *testing.T) {
+	var _ func(*runtime.Runtime) error = ServeStdio
+	var _ func(*runtime.Runtime, time.Duration) error = ServeStdioWithIdleTimeout
+	var _ func(*runtime.Runtime) error = ServeStdioWithCodexRecovery
+	var _ func(ToolRuntime, time.Duration, bool) error = ServeToolRuntimeStdio
+}
+
 func TestAutomaticCodexRecoveryReclaimsExistingCodexRegistration(t *testing.T) {
 	stdin, client := io.Pipe()
 	t.Cleanup(func() { _ = client.Close() })
@@ -85,7 +98,54 @@ func TestAutomaticCodexRecoveryReclaimsExistingCodexRegistration(t *testing.T) {
 	}
 }
 
-func TestAutomaticCodexRecoveryKeepsOtherInitializedClientsAlive(t *testing.T) {
+func TestAutomaticRecoveryReclaimsPingingUnknownRegistration(t *testing.T) {
+	stdin, client := io.Pipe()
+	t.Cleanup(func() { _ = client.Close() })
+
+	const idleTimeout = 60 * time.Millisecond
+	done := make(chan error, 1)
+	go func() {
+		server := mcpserver.NewMCPServer("test", "1.0.0")
+		done <- serveStdioWithAutomaticCodexRecovery(context.Background(), server, stdin, io.Discard, newIdleGuard(), time.Second, idleTimeout)
+	}()
+	writeMCPInitialize(t, client, "future-host-with-an-unrecognized-client-name")
+
+	// Codex can ping a healthy MCP child without any user work taking place.
+	// Those liveness packets must not make the idle deadline slide forever.
+	stopPings := make(chan struct{})
+	pingsStopped := make(chan struct{})
+	go func() {
+		defer close(pingsStopped)
+		ticker := time.NewTicker(5 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stopPings:
+				return
+			case <-ticker.C:
+				if _, err := io.WriteString(client, `{"jsonrpc":"2.0","id":2,"method":"ping","params":{}}`+"\n"); err != nil {
+					return
+				}
+			}
+		}
+	}()
+	t.Cleanup(func() {
+		close(stopPings)
+		_ = client.Close()
+		<-pingsStopped
+	})
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("automatic Codex recovery returned error: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("pinging unknown session was not reclaimed after its idle deadline")
+	}
+}
+
+func TestAutomaticRecoveryReclaimsUnknownInitializedClient(t *testing.T) {
 	stdin, client := io.Pipe()
 	t.Cleanup(func() { _ = client.Close() })
 
@@ -94,24 +154,15 @@ func TestAutomaticCodexRecoveryKeepsOtherInitializedClientsAlive(t *testing.T) {
 		server := mcpserver.NewMCPServer("test", "1.0.0")
 		done <- serveStdioWithAutomaticCodexRecovery(context.Background(), server, stdin, io.Discard, newIdleGuard(), 40*time.Millisecond, 40*time.Millisecond)
 	}()
-	writeMCPInitialize(t, client, "Claude Code")
+	writeMCPInitialize(t, client, "future-host-with-an-unrecognized-client-name")
 
-	select {
-	case err := <-done:
-		t.Fatalf("non-Codex session closed without EOF: %v", err)
-	case <-time.After(120 * time.Millisecond):
-	}
-
-	if err := client.Close(); err != nil {
-		t.Fatal(err)
-	}
 	select {
 	case err := <-done:
 		if err != nil {
-			t.Fatalf("non-Codex session returned error after EOF: %v", err)
+			t.Fatalf("unknown initialized session returned error: %v", err)
 		}
 	case <-time.After(time.Second):
-		t.Fatal("non-Codex session did not exit after EOF")
+		t.Fatal("unknown initialized session was not reclaimed after its idle deadline")
 	}
 }
 
@@ -203,6 +254,51 @@ func TestServeStdioIdleTimeoutResetsWhenClientWrites(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("server did not exit after the reset idle deadline")
+	}
+}
+
+func TestServeStdioIdleTimeoutDoesNotTreatPingAsActivity(t *testing.T) {
+	stdin, client := io.Pipe()
+	t.Cleanup(func() { _ = client.Close() })
+
+	const idleTimeout = 60 * time.Millisecond
+	done := make(chan error, 1)
+	go func() {
+		server := mcpserver.NewMCPServer("test", "1.0.0")
+		done <- serveStdio(context.Background(), server, stdin, io.Discard, idleTimeout)
+	}()
+	writeMCPInitialize(t, client, "any-host")
+
+	stopPings := make(chan struct{})
+	pingsStopped := make(chan struct{})
+	go func() {
+		defer close(pingsStopped)
+		ticker := time.NewTicker(5 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stopPings:
+				return
+			case <-ticker.C:
+				if _, err := io.WriteString(client, `{"jsonrpc":"2.0","id":2,"method":"ping","params":{}}`+"\n"); err != nil {
+					return
+				}
+			}
+		}
+	}()
+	t.Cleanup(func() {
+		close(stopPings)
+		_ = client.Close()
+		<-pingsStopped
+	})
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("idle stdio server returned error: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("pinging stdio session was not reclaimed after its idle deadline")
 	}
 }
 

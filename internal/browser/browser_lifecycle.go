@@ -359,6 +359,43 @@ func (m *browserManager) startConnectionStopLocked(conn *browserConnection) {
 	}()
 }
 
+func (m *browserManager) shutdown(ctx context.Context) error {
+	if m == nil {
+		return nil
+	}
+	m.stopOnce.Do(func() { close(m.stopCh) })
+	m.mu.Lock()
+	conn := m.active
+	if conn != nil && !conn.retired {
+		m.active = nil
+		m.retiring = conn
+		conn.retired = true
+	}
+	if conn == nil {
+		conn = m.retiring
+	}
+	if conn != nil && conn.leases == 0 {
+		m.startConnectionStopLocked(conn)
+	}
+	var stopped <-chan struct{}
+	if conn != nil {
+		stopped = conn.stopped
+	}
+	m.mu.Unlock()
+	if stopped == nil {
+		return nil
+	}
+	select {
+	case <-stopped:
+		m.mu.Lock()
+		err := conn.stopErr
+		m.mu.Unlock()
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
 // newLifecycleTestConnection keeps the state machine directly testable without
 // a real Chromium process. Production connections always use
 // newBrowserConnection above.

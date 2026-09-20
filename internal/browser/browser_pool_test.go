@@ -2,11 +2,17 @@ package browser
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -115,6 +121,124 @@ func TestBrowserProcessOwnershipFollowsCDPMode(t *testing.T) {
 	if !browserProcessOwned(config.LocalBrowserConfig{}) {
 		t.Fatal("the default launch mode must remain owned by DigCrawl")
 	}
+}
+
+func TestCheckAvailableProbesConfiguredExistingCDP(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/json/version" {
+			http.NotFound(w, r)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"webSocketDebuggerUrl": "ws://127.0.0.1:9222/devtools/browser/test",
+		})
+	}))
+	defer server.Close()
+
+	u, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, portText, err := net.SplitHostPort(u.Host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	port, err := strconv.Atoi(portText)
+	if err != nil {
+		t.Fatal(err)
+	}
+	existing := true
+	if err := CheckAvailable(config.LocalBrowserConfig{CDPConnectExisting: &existing, CDPPort: port}); err != nil {
+		t.Fatalf("attached CDP health check: %v", err)
+	}
+}
+
+func TestCheckAvailableRejectsUnavailableExistingCDP(t *testing.T) {
+	t.Parallel()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := listener.Addr().(*net.TCPAddr).Port
+	if err := listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+	existing := true
+	err = CheckAvailable(config.LocalBrowserConfig{CDPConnectExisting: &existing, CDPPort: port})
+	if err == nil || !strings.Contains(err.Error(), "configured CDP endpoint") {
+		t.Fatalf("unavailable attached CDP error=%v", err)
+	}
+}
+
+func TestCheckAvailableRejectsNonCDPHTTPService(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"status":"not a DevTools endpoint"}`))
+	}))
+	defer server.Close()
+	port := testServerPort(t, server.URL)
+	existing := true
+	if err := CheckAvailable(config.LocalBrowserConfig{CDPConnectExisting: &existing, CDPPort: port}); err == nil || !strings.Contains(err.Error(), "WebSocket debugger URL") {
+		t.Fatalf("non-CDP endpoint error=%v", err)
+	}
+}
+
+func TestResolveExistingCDPHonorsCallerDeadline(t *testing.T) {
+	t.Parallel()
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		close(entered)
+		<-release
+	}))
+	defer server.Close()
+	defer close(release)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer cancel()
+	if _, err := resolveExistingCDP(ctx, testServerPort(t, server.URL)); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("stalled CDP discovery error=%v, want context deadline exceeded", err)
+	}
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("CDP probe never reached the test server")
+	}
+}
+
+func TestManagedConfigDisablesExternalCDPAndPrefersConfiguredChrome(t *testing.T) {
+	t.Parallel()
+	connected := true
+	cdpMode := true
+	chrome := filepath.Join(t.TempDir(), "chrome")
+	if err := os.WriteFile(chrome, []byte("#!/bin/sh\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	managed := ManagedConfig(config.LocalBrowserConfig{CDPConnectExisting: &connected, CDPMode: &cdpMode, ChromePath: chrome})
+	if managed.CDPConnectExisting == nil || *managed.CDPConnectExisting || managed.CDPMode == nil || *managed.CDPMode {
+		t.Fatalf("managed config kept an external CDP contract: %+v", managed)
+	}
+	if managed.ChromePath != chrome {
+		t.Fatalf("managed config discarded configured Chrome: %q", managed.ChromePath)
+	}
+}
+
+func testServerPort(t *testing.T, rawURL string) int {
+	t.Helper()
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, portText, err := net.SplitHostPort(u.Host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	port, err := strconv.Atoi(portText)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return port
 }
 
 func TestBrowserOperationContextPreservesCallerDeadline(t *testing.T) {

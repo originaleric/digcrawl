@@ -30,37 +30,68 @@ const (
 	// connected client owns the session until it closes stdin. Hosts can opt in
 	// to a positive timeout explicitly.
 	DefaultStdioIdleTimeout time.Duration = 0
-	// DefaultCodexStdioIdleTimeout bounds sessions from Codex after its MCP
-	// initialize request identifies the client. It lets existing Codex entries
-	// adopt the fix without changing the lifecycle of other MCP hosts.
-	DefaultCodexStdioIdleTimeout = 15 * time.Minute
+	// DefaultStdioSessionIdleTimeout bounds every initialized session started
+	// by the CLI. A host can create many stdio children while one human uses
+	// DigCrawl, so clientInfo must not decide whether a forgotten proxy lives
+	// forever. An explicit --idle-timeout=0 remains the opt-out for a host that
+	// truly requires an unbounded connection.
+	DefaultStdioSessionIdleTimeout = 15 * time.Minute
+	// Deprecated: CLI recovery now applies to every initialized stdio session.
+	// Use DefaultStdioSessionIdleTimeout instead.
+	DefaultCodexStdioIdleTimeout = DefaultStdioSessionIdleTimeout
 	// DefaultStdioInitializeTimeout only applies while the client has not sent
 	// MCP initialize. A conforming stdio client initializes immediately, so this
 	// recovers an abandoned pipe without imposing an idle limit on normal hosts.
 	DefaultStdioInitializeTimeout = time.Minute
 )
 
+// ToolRuntime is the small execution boundary required by the MCP transport.
+// The local bridge implements it through the existing HTTP gateway, while an
+// in-process Runtime continues to satisfy it for standalone users and tests.
+// Keeping the MCP process at this boundary prevents every stdio child from
+// becoming an independent browser owner.
+type ToolRuntime interface {
+	Manifest() protocol.ToolManifest
+	Execute(context.Context, *protocol.ToolCall) *protocol.ToolResult
+	ExecutionTimeout(*protocol.ToolCall) time.Duration
+	ArtifactStore() artifact.Store
+	ArtifactInlineLimit() int64
+}
+
 // ServeStdio exposes DigEino tools as an MCP server over stdio (for IDE / Claude Desktop).
+//
+// Keep this concrete parameter for source compatibility with existing Go
+// integrations that pass or assign this function by its original type.
 func ServeStdio(rt *runtime.Runtime) error {
-	return ServeStdioWithIdleTimeout(rt, DefaultStdioIdleTimeout)
+	return serveRuntimeStdio(rt, DefaultStdioIdleTimeout, false)
 }
 
 // ServeStdioWithIdleTimeout exposes DigEino tools as an MCP server over stdio.
 // A zero idleTimeout disables the guard for hosts that intentionally keep one
 // long-lived, inactive MCP session open.
+// Keep this concrete parameter for source compatibility with the original API.
 func ServeStdioWithIdleTimeout(rt *runtime.Runtime, idleTimeout time.Duration) error {
 	return serveRuntimeStdio(rt, idleTimeout, false)
 }
 
-// ServeStdioWithCodexRecovery serves standard MCP clients normally and
-// automatically bounds an abandoned Codex session after initialize identifies
-// it. It is intended for the CLI's default invocation so existing Codex
-// registrations adopt recovery without a configuration migration.
+// ServeStdioWithCodexRecovery is retained for callers of the original CLI
+// helper. Despite its historical name, it reclaims every initialized session:
+// an MCP client name is presentation metadata, not a safe lifecycle boundary.
+// Keep this concrete parameter for source compatibility with the original API.
 func ServeStdioWithCodexRecovery(rt *runtime.Runtime) error {
 	return serveRuntimeStdio(rt, DefaultStdioIdleTimeout, true)
 }
 
-func serveRuntimeStdio(rt *runtime.Runtime, idleTimeout time.Duration, automaticCodexRecovery bool) error {
+// ServeToolRuntimeStdio exposes an abstract ToolRuntime over stdio. It is the
+// Bridge entry point: the stdio child remains a thin forwarding process while
+// the bridge owns the browser Runtime. automaticRecovery enables the CLI's
+// bounded recovery path when idleTimeout is zero; an explicit idleTimeout uses
+// that value directly instead.
+func ServeToolRuntimeStdio(rt ToolRuntime, idleTimeout time.Duration, automaticRecovery bool) error {
+	return serveRuntimeStdio(rt, idleTimeout, automaticRecovery)
+}
+
+func serveRuntimeStdio(rt ToolRuntime, idleTimeout time.Duration, automaticCodexRecovery bool) error {
 	guard := newIdleGuard()
 	s := mcpserver.NewMCPServer(
 		version.RuntimeName,
@@ -71,7 +102,7 @@ func serveRuntimeStdio(rt *runtime.Runtime, idleTimeout time.Duration, automatic
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	return serveStdioWithGuardOptions(ctx, s, os.Stdin, os.Stdout, idleTimeout, guard, automaticCodexRecovery, DefaultStdioInitializeTimeout, DefaultCodexStdioIdleTimeout)
+	return serveStdioWithGuardOptions(ctx, s, os.Stdin, os.Stdout, idleTimeout, guard, automaticCodexRecovery, DefaultStdioInitializeTimeout, DefaultStdioSessionIdleTimeout)
 }
 
 // serveStdio owns the process-level shutdown behavior separately from MCP
@@ -96,7 +127,7 @@ func serveStdioWithGuardOptions(parent context.Context, server *mcpserver.MCPSer
 	if idleTimeout > 0 {
 		go cancelWhenIdle(ctx, cancel, guard, idleTimeout)
 	} else if automaticCodexRecovery {
-		go cancelUninitializedOrCodex(ctx, cancel, guard, initializeTimeout, codexIdleTimeout)
+		go cancelUninitializedOrIdle(ctx, cancel, guard, initializeTimeout, codexIdleTimeout)
 	}
 
 	err := mcpserver.NewStdioServer(server).Listen(ctx, reader, stdout)
@@ -109,9 +140,10 @@ func serveStdioWithGuardOptions(parent context.Context, server *mcpserver.MCPSer
 	return err
 }
 
-// activityReader reports every non-empty read without changing stdio's byte
-// stream. Buffered readers may receive more than one MCP message at once; that
-// still counts as activity at the instant the client wrote to the pipe.
+// activityReader observes the subset of MCP messages that represent useful
+// work without changing stdio's byte stream. In particular, an MCP ping is a
+// transport liveness check, not user activity: a host must not be able to keep
+// an abandoned stdio child alive indefinitely just by sending pings.
 type activityReader struct {
 	reader             io.Reader
 	guard              *idleGuard
@@ -127,18 +159,15 @@ func newActivityReader(reader io.Reader, guard *idleGuard, observeInitialize boo
 func (r *activityReader) Read(p []byte) (int, error) {
 	n, err := r.reader.Read(p)
 	if n > 0 && r.guard != nil {
-		r.guard.touch()
-		if r.observeInitialize {
-			r.observeMCPMessages(p[:n])
-		}
+		r.observeMCPMessages(p[:n])
 	}
 	return n, err
 }
 
-// observeMCPMessages only needs the initial JSON-RPC request. Stdio MCP is
-// line-delimited, while Reader.Read may split or combine messages arbitrarily.
-// Keep this observer bounded; the MCP server remains responsible for reporting
-// malformed input to the client.
+// observeMCPMessages recognizes activity-bearing JSON-RPC requests. Stdio MCP
+// is line-delimited, while Reader.Read may split or combine messages
+// arbitrarily. Keep this observer bounded; the MCP server remains responsible
+// for reporting malformed input to the client.
 func (r *activityReader) observeMCPMessages(data []byte) {
 	const maxObservedMCPLineBytes = 1 << 20
 
@@ -156,12 +185,12 @@ func (r *activityReader) observeMCPMessages(data []byte) {
 		line := append([]byte(nil), r.partialMessageLine[:newline]...)
 		r.partialMessageLine = r.partialMessageLine[newline+1:]
 		r.mu.Unlock()
-		r.observeMCPInitialize(line)
+		r.observeMCPMessage(line)
 		r.mu.Lock()
 	}
 }
 
-func (r *activityReader) observeMCPInitialize(line []byte) {
+func (r *activityReader) observeMCPMessage(line []byte) {
 	var message struct {
 		Method string `json:"method"`
 		Params struct {
@@ -170,8 +199,24 @@ func (r *activityReader) observeMCPInitialize(line []byte) {
 			} `json:"clientInfo"`
 		} `json:"params"`
 	}
-	if json.Unmarshal(line, &message) == nil && message.Method == "initialize" {
+	if json.Unmarshal(line, &message) != nil {
+		return
+	}
+
+	switch message.Method {
+	case "initialize":
+		// A successful initialization is meaningful activity for every host.
+		// The automatic recovery path additionally needs its client identity.
+		r.guard.touch()
+		if !r.observeInitialize {
+			return
+		}
 		r.guard.noteMCPInitialize(message.Params.ClientInfo.Name)
+	case "tools/call":
+		// Tool calls are the only normal post-initialization client action that
+		// consumes this server's runtime. Other protocol traffic (notably ping)
+		// must not defeat idle reclamation.
+		r.guard.touch()
 	}
 }
 
@@ -316,14 +361,14 @@ func cancelWhenIdle(ctx context.Context, cancel context.CancelFunc, guard *idleG
 	}
 }
 
-func cancelUninitializedOrCodex(ctx context.Context, cancel context.CancelFunc, guard *idleGuard, initializeTimeout, codexIdleTimeout time.Duration) {
+func cancelUninitializedOrIdle(ctx context.Context, cancel context.CancelFunc, guard *idleGuard, initializeTimeout, sessionIdleTimeout time.Duration) {
 	timer := time.NewTimer(0)
 	defer timer.Stop()
 
 	for {
-		if clientName, initialized := guard.initializedClient(); initialized {
-			if isCodexClient(clientName) {
-				cancelWhenIdle(ctx, cancel, guard, codexIdleTimeout)
+		if _, initialized := guard.initializedClient(); initialized {
+			if sessionIdleTimeout > 0 {
+				cancelWhenIdle(ctx, cancel, guard, sessionIdleTimeout)
 			}
 			return
 		}
@@ -354,12 +399,7 @@ func cancelUninitializedOrCodex(ctx context.Context, cancel context.CancelFunc, 
 	}
 }
 
-func isCodexClient(clientName string) bool {
-	name := strings.ToLower(strings.TrimSpace(clientName))
-	return name == "codex" || strings.HasPrefix(name, "codex ")
-}
-
-func registerTools(s *mcpserver.MCPServer, rt *runtime.Runtime, guard *idleGuard) {
+func registerTools(s *mcpserver.MCPServer, rt ToolRuntime, guard *idleGuard) {
 	manifest := rt.Manifest()
 	for _, desc := range manifest.Tools {
 		desc := desc
@@ -390,7 +430,7 @@ func registerTools(s *mcpserver.MCPServer, rt *runtime.Runtime, guard *idleGuard
 // In particular, a user-selected Skill profile may enable bounded local video
 // enrichment; consulting config.Get here would instead use an unrelated global
 // default and prematurely cancel that work.
-func mcpTimeoutMs(rt *runtime.Runtime, call *protocol.ToolCall) int {
+func mcpTimeoutMs(rt ToolRuntime, call *protocol.ToolCall) int {
 	if rt == nil {
 		return int((60 * time.Second).Milliseconds())
 	}

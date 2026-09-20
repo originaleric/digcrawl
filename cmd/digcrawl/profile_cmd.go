@@ -121,7 +121,9 @@ func runDoctor(args []string) {
 		{name: "binary", err: checkExecutable(os.Args[0])},
 		{name: "profile", err: nil},
 		{name: "artifact directory", err: checkWritableDirectory(cfg.Gateway.ArtifactDir)},
-		{name: "browser", err: browser.CheckAvailable(cfg.LocalBrowser)},
+		// MCP uses the on-demand local bridge, which owns Chrome directly. Its
+		// health must not depend on the optional legacy fixed-CDP service.
+		{name: "browser", err: browser.CheckManagedAvailable(cfg.LocalBrowser)},
 		{name: "Skill ffmpeg", err: checkSkillFFmpeg(cfg)},
 		{name: "Skill ASR provider", err: checkSkillASRProvider(cfg)},
 		{name: "mcp startup", err: checkMCPStartup(cfg)},
