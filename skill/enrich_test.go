@@ -32,17 +32,28 @@ func TestEnhanceUsesSkillOCRConfig(t *testing.T) {
 	}
 }
 
-func TestEnhanceFailsWhenExplicitOCRHasOnlyProviderErrors(t *testing.T) {
+func TestEnhancePreservesContentWhenOCRProviderFails(t *testing.T) {
 	enabled := true
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
 	}))
 	defer server.Close()
-	err := Enhance(context.Background(), map[string]any{"content_type": "article"}, config.SkillConfig{
+	out := map[string]any{"content_type": "article", "markdown": "page body"}
+	err := Enhance(context.Background(), out, config.SkillConfig{
 		OCR: config.OCRConfig{Enabled: &enabled, Provider: "openai_compatible", APIKey: "test-key", BaseURL: server.URL},
 	}, EnhanceOptions{IncludeOCR: true, ScreenshotBase64: "iVBORw0KGgo="})
-	if err == nil || !strings.Contains(err.Error(), "OCR unavailable: OCR provider HTTP 400") {
-		t.Fatalf("error=%v", err)
+	if err != nil {
+		t.Fatalf("OCR failure must not discard an otherwise successful read: %v", err)
+	}
+	if got := out["markdown"]; got != "page body" {
+		t.Fatalf("markdown=%q, want original page content", got)
+	}
+	meta := platformMetadata(out)
+	if got := meta["ocr_status"]; got != "degraded" {
+		t.Fatalf("ocr_status=%#v, want degraded; metadata=%+v", got, meta)
+	}
+	if got := meta["ocr_failure_reason"]; got != "provider_unavailable" {
+		t.Fatalf("ocr_failure_reason=%#v, want provider_unavailable", got)
 	}
 }
 

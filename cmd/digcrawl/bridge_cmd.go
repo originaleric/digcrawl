@@ -41,6 +41,7 @@ func runBridge(args []string) {
 
 func runBridgeServe(args []string) {
 	fs := flag.NewFlagSet("bridge serve", flag.ExitOnError)
+	managedWorker := fs.Bool("managed-worker", false, "internal bridge worker")
 	configPath := fs.String("config", "", "path to profile")
 	socketPath := fs.String("socket", "", "private Unix socket path")
 	startupStatus := fs.String("startup-status", "", "private startup diagnostic path")
@@ -54,6 +55,13 @@ func runBridgeServe(args []string) {
 		log.Fatalf("bridge: load profile: %v", err)
 	}
 	allowDefaultSkillProfileTools(cfg)
+	if !*managedWorker {
+		log.Fatal("bridge serve is internal; use `digcrawl mcp` to start the local Bridge")
+	}
+	if err := bridge.ValidateManagedWorkerIsolation(); err != nil {
+		reportFailure(err)
+		log.Fatalf("bridge: %v", err)
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	if err := bridge.Serve(ctx, cfg, *socketPath); err != nil && !errors.Is(err, bridge.ErrAlreadyRunning) {
@@ -90,7 +98,7 @@ func runBridgeStop(args []string, restart bool) {
 		log.Fatalf("bridge restart: load profile: %v", err)
 	}
 	allowDefaultSkillProfileTools(cfg)
-	// Restart is two sequential local transitions, not a handoff. Starting
+	// Restart stops, then starts; it is not a handoff. Starting
 	// gets its own complete budget after the old Bridge has released ownership.
 	startCtx, cancelStart := context.WithTimeout(context.Background(), bridgeStartTimeout)
 	defer cancelStart()

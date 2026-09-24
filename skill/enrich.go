@@ -150,9 +150,7 @@ func Enhance(ctx context.Context, out map[string]any, cfg config.SkillConfig, op
 			ocrOpts.ExtraImages = append(ocrOpts.ExtraImages, ocr.PNGDataURLImageRef("screenshot", opts.ScreenshotBase64))
 		}
 		ocr.EnrichMap(ctx, out, cfg.OCR, ocrOpts)
-		if err := ocr.RequestedFailure(out); err != nil {
-			return err
-		}
+		markOCROutcome(out)
 	}
 
 	if requiresASR && !asrAttempted {
@@ -167,6 +165,27 @@ func Enhance(ctx context.Context, out map[string]any, cfg config.SkillConfig, op
 		}
 	}
 	return nil
+}
+
+// markOCROutcome keeps OCR observable without allowing an auxiliary provider
+// failure to discard page content that the reader has already obtained. OCR is
+// deliberately enrichment: callers receive the original text/Markdown plus a
+// stable status that lets them decide whether a later retry is worthwhile.
+// The detailed OCR result remains where the OCR package already records it;
+// this boundary exposes no new provider error text.
+func markOCROutcome(out map[string]any) {
+	meta := platformMetadata(out)
+	if err := ocr.RequestedFailure(out); err != nil {
+		meta["ocr_status"] = "degraded"
+		meta["ocr_failure_reason"] = "provider_unavailable"
+	} else if strings.TrimSpace(stringValue(meta["ocr_video_frames_error"])) != "" {
+		meta["ocr_status"] = "degraded"
+		meta["ocr_failure_reason"] = "frame_extraction_failed"
+	} else {
+		meta["ocr_status"] = "completed"
+		delete(meta, "ocr_failure_reason")
+	}
+	out["platform_metadata"] = meta
 }
 
 func localImageOCRRefs(images []LocalImageInput) []ocr.ImageRef {

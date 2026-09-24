@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/url"
@@ -17,6 +18,10 @@ import (
 	"github.com/originaleric/digcrawl/config"
 	"github.com/originaleric/digcrawl/runtime/policy"
 )
+
+type browserBrowseRetryContextKey struct{}
+
+type browserSessionRunner func(context.Context, *BrowserBrowseRequest, *browserSession) (*BrowserBrowseResponse, error)
 
 // BrowserBrowseRequest 本地浏览器抓取请求
 type BrowserBrowseRequest struct {
@@ -50,7 +55,17 @@ type BrowserBrowseResponse struct {
 }
 
 // BrowserBrowse 使用本地 go-rod 浏览器读取动态页面或截图
-func BrowserBrowse(ctx context.Context, req *BrowserBrowseRequest) (*BrowserBrowseResponse, error) {
+func BrowserBrowse(ctx context.Context, req *BrowserBrowseRequest) (resp *BrowserBrowseResponse, retErr error) {
+	return browserBrowseWithSessionRunner(ctx, req, getBrowserManager, nil)
+}
+
+// browserBrowseWithSessionRunner holds the request-level recovery boundary.
+// The optional runner is only used by focused lifecycle tests; production
+// executes the page operations below with the singleton manager.
+func browserBrowseWithSessionRunner(ctx context.Context, req *BrowserBrowseRequest, managerProvider func() *browserManager, runner browserSessionRunner) (resp *BrowserBrowseResponse, retErr error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if req == nil || strings.TrimSpace(req.URL) == "" {
 		return nil, fmt.Errorf("url 不能为空")
 	}
@@ -83,12 +98,34 @@ func BrowserBrowse(ctx context.Context, req *BrowserBrowseRequest) (*BrowserBrow
 	ctx, cancel := context.WithTimeout(ctx, time.Duration(cfg.TotalTimeoutSec)*time.Second)
 	defer cancel()
 
-	manager := getBrowserManager()
-	session, err := manager.acquire(ctx)
+	if managerProvider == nil {
+		return nil, fmt.Errorf("browser manager provider is unavailable")
+	}
+	manager := managerProvider()
+	if manager == nil {
+		return nil, fmt.Errorf("browser manager is unavailable")
+	}
+	session, err := manager.acquireSession(ctx)
 	if err != nil {
 		return nil, newBrowseError(ErrorBrowserUnavailable, "acquire", "无法启动或连接本地浏览器", err, false)
 	}
-	defer manager.release(session)
+	defer func() {
+		if shouldRecoverBrowserConnection(ctx, retErr) {
+			// The failing session is the only holder of this connection lease.
+			// Retire it before releasing so the next attempt waits for owner-only
+			// teardown and cannot race a stale Chrome/profile process.
+			manager.retireConnection(session.conn)
+			manager.releaseSession(session)
+			retryCtx := context.WithValue(ctx, browserBrowseRetryContextKey{}, true)
+			resp, retErr = browserBrowseWithSessionRunner(retryCtx, req, managerProvider, runner)
+			return
+		}
+		manager.releaseSession(session)
+	}()
+
+	if runner != nil {
+		return runner(ctx, req, session)
+	}
 
 	// Bind every CDP operation to the caller's context. A page returned by the
 	// pool otherwise keeps the browser-level context, so a tool timeout can
@@ -98,6 +135,11 @@ func BrowserBrowse(ctx context.Context, req *BrowserBrowseRequest) (*BrowserBrow
 	var finishMediaCapture func() []string
 	if req.CaptureMedia {
 		finishMediaCapture = startMediaResponseCapture(ctx, page)
+		defer func() {
+			if finishMediaCapture != nil {
+				finishMediaCapture()
+			}
+		}()
 	}
 
 	if req.UseCookieDomain != "" {
@@ -136,7 +178,7 @@ func BrowserBrowse(ctx context.Context, req *BrowserBrowseRequest) (*BrowserBrow
 		return nil, err
 	}
 	title, _ := pageTitle(page)
-	resp := &BrowserBrowseResponse{
+	resp = &BrowserBrowseResponse{
 		URL:   finalURL,
 		Title: title,
 	}
@@ -204,11 +246,37 @@ func BrowserBrowse(ctx context.Context, req *BrowserBrowseRequest) (*BrowserBrow
 		captured := captureMediaURLs(page)
 		if finishMediaCapture != nil {
 			captured = append(captured, finishMediaCapture()...)
+			finishMediaCapture = nil
 		}
 		resp.MediaURLs = uniqueMediaURLs(captured)
 	}
 
 	return resp, nil
+}
+
+// shouldRecoverBrowserConnection allows exactly one replay for the only
+// failure class that means the shared Bridge-owned browser died underneath an
+// otherwise idempotent read. Page-specific failures, content errors, and
+// timeouts retain their original result rather than being hidden by retries.
+// The original request deadline is preserved by passing the existing context
+// into the replay.
+func shouldRecoverBrowserConnection(ctx context.Context, err error) bool {
+	if err == nil || ctx == nil || ctx.Err() != nil {
+		return false
+	}
+	if retried, _ := ctx.Value(browserBrowseRetryContextKey{}).(bool); retried {
+		return false
+	}
+	var browseErr *BrowseError
+	if !errors.As(err, &browseErr) || browseErr.Cause == nil {
+		return false
+	}
+	switch browseCauseReason(browseErr.Cause) {
+	case "browser_connection_closed", "cdp_endpoint_unavailable":
+		return true
+	default:
+		return false
+	}
 }
 
 const mediaResourceProbeScript = `async () => {

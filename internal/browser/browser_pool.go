@@ -47,13 +47,33 @@ type browserManager struct {
 	opening  chan struct{}
 	// openFn is injected only by lifecycle tests. Keeping the state machine
 	// independent from Chromium makes teardown/replacement invariants testable.
-	openFn     func(context.Context) (*browserConnection, error)
-	slots      chan struct{}
-	sessions   map[uint64]*browserSession
-	nextID     uint64
-	stopCh     chan struct{}
-	stopOnce   sync.Once
-	cleanupRun sync.Once
+	openFn func(context.Context) (*browserConnection, error)
+	// acquireSessionFn/releaseSessionFn are narrow test seams for exercising
+	// request recovery without a real Chromium process. Production always uses
+	// acquire/release below, so connection ownership remains in this manager.
+	acquireSessionFn func(context.Context) (*browserSession, error)
+	releaseSessionFn func(*browserSession)
+	slots            chan struct{}
+	sessions         map[uint64]*browserSession
+	nextID           uint64
+	stopCh           chan struct{}
+	stopOnce         sync.Once
+	cleanupRun       sync.Once
+}
+
+func (m *browserManager) acquireSession(ctx context.Context) (*browserSession, error) {
+	if m != nil && m.acquireSessionFn != nil {
+		return m.acquireSessionFn(ctx)
+	}
+	return m.acquire(ctx)
+}
+
+func (m *browserManager) releaseSession(session *browserSession) {
+	if m != nil && m.releaseSessionFn != nil {
+		m.releaseSessionFn(session)
+		return
+	}
+	m.release(session)
 }
 
 var (

@@ -3,6 +3,8 @@ package browser
 import (
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -78,6 +80,41 @@ func TestBrowseEntryAppliesSkillOCRWithoutReturningInternalMedia(t *testing.T) {
 	}
 	if _, ok := out["media"]; ok {
 		t.Fatalf("internal OCR media leaked: %+v", out["media"])
+	}
+}
+
+func TestBrowseEntryPreservesPageContentWhenConfiguredOCRProviderFails(t *testing.T) {
+	enabled := true
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+	}))
+	defer server.Close()
+	cfg := &config.Config{Skill: config.SkillConfig{OCR: config.OCRConfig{
+		Enabled: &enabled, Provider: "openai_compatible", APIKey: "test-key", BaseURL: server.URL,
+	}}}
+	oldBrowsePage := browsePage
+	browsePage = func(_ context.Context, req *internalbrowser.BrowserBrowseRequest) (*internalbrowser.BrowserBrowseResponse, error) {
+		return &internalbrowser.BrowserBrowseResponse{
+			URL: req.URL, Markdown: "page body",
+			Metadata: map[string]any{"image_urls": []any{server.URL + "/image.png"}},
+		}, nil
+	}
+	t.Cleanup(func() { browsePage = oldBrowsePage })
+
+	input, err := json.Marshal(browseInput{URL: "https://example.com/article"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, _, err := BrowseEntry(nil, nil, cfg).Handler(context.Background(), &protocol.ToolCall{Type: protocol.TypeToolCall, Tool: ToolBrowserBrowse, Input: input})
+	if err != nil {
+		t.Fatalf("OCR provider failure must not turn a successful browser read into a tool error: %v", err)
+	}
+	if got := out["markdown"]; got != "page body" {
+		t.Fatalf("markdown=%q, want original page content", got)
+	}
+	meta, _ := out["platform_metadata"].(map[string]any)
+	if meta["ocr_status"] != "degraded" || meta["ocr_failure_reason"] != "provider_unavailable" {
+		t.Fatalf("OCR degradation is not observable: %+v", meta)
 	}
 }
 
