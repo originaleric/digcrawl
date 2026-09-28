@@ -24,6 +24,32 @@ func TestBackgroundLauncherPolicyKeepsAudioMutedAfterExtraArgs(t *testing.T) {
 	t.Fatalf("background browser launch arguments must include --mute-audio: %v", args)
 }
 
+func TestInteractiveLauncherPolicyDoesNotInheritBackgroundExtraArgs(t *testing.T) {
+	cfg := config.LocalBrowserConfig{
+		ExtraArgs: []string{
+			"--single-process",
+			"--no-zygote",
+			"--disable-crashpad",
+			"--no-sandbox",
+		},
+		InteractiveExtraArgs: []string{"--lang=zh-CN"},
+	}
+	args := applyInteractiveLauncherPolicy(launcher.New().NoSandbox(true), cfg).FormatArgs()
+	for _, prohibited := range []string{"--single-process", "--no-zygote", "--disable-crashpad", "--no-sandbox"} {
+		for _, arg := range args {
+			if arg == prohibited {
+				t.Fatalf("interactive browser must not inherit background argument %q: %v", prohibited, args)
+			}
+		}
+	}
+	for _, arg := range args {
+		if arg == "--lang=zh-CN" {
+			return
+		}
+	}
+	t.Fatalf("interactive browser must retain explicit interactive arguments: %v", args)
+}
+
 func TestNormalizeLocalBrowserConfigKeepsExplicitChromePath(t *testing.T) {
 	explicit := browserTestExecutablePath(t.TempDir(), "explicit-chrome")
 	envPath := browserTestExecutablePath(t.TempDir(), "env-chrome")
