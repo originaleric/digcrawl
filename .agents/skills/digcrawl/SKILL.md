@@ -53,5 +53,6 @@ Use `gateway.ping` only to diagnose whether the local DigCrawl server is availab
 
 - Codex: `codex/config.toml.example`
 - Claude Code: `claude-code/.mcp.json.example`
+- Other MCP hosts: `mcp/README.md`
 
 Both examples require absolute paths to the local `digcrawl` binary and the user's profile. Direct users to run `digcrawl init --profile skill` after installing a release; it writes the default profile to `$XDG_CONFIG_HOME/digcrawl/digcrawl-skill.yaml` (or `~/.config/digcrawl/` when XDG is unset; `%APPDATA%\\DigCrawl\\` on Windows), including an OS-native `VideoDownload.Dir` beside that profile with no providers enabled. They can then run `digcrawl config validate --config <profile>` and `digcrawl doctor --config <profile>`. A copied `config/digcrawl-skill.example.yaml` remains an alternative for manual configuration. For an explicit video transcription request, use the consent flow for `skill.asr.enable`; it enables only `Skill.Media.DownloadMedia` and `Skill.ASR.Enabled` in that standard user profile. `skill.media.configure` changes provider saving only after the user explicitly asks. Image reading and summaries use the host Agent; the default profile has no OCR or LLM API configuration.

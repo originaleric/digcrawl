@@ -29,6 +29,34 @@ archives:
       - goos: windows
         formats:
           - zip
+    # The installer needs both the binary and the portable Agent Skill that
+    # teaches compatible hosts to select DigCrawl's MCP tools. Keep these
+    # explicit so a newly added Skill file cannot silently miss a release.
+    files:
+      - LICENSE
+      - README.md
+      - README.zh-CN.md
+      - src: .agents/skills/digcrawl/SKILL.md
+        dst: skills/digcrawl
+        strip_parent: true
+      - src: .agents/skills/digcrawl/agents/openai.yaml
+        dst: skills/digcrawl/agents
+        strip_parent: true
+      - src: .agents/skills/digcrawl/claude-code/.mcp.json.example
+        dst: skills/digcrawl/claude-code
+        strip_parent: true
+      - src: .agents/skills/digcrawl/codex/config.toml.example
+        dst: skills/digcrawl/codex
+        strip_parent: true
+      - src: .agents/skills/digcrawl/mcp/README.md
+        dst: skills/digcrawl/mcp
+        strip_parent: true
+      - src: .agents/skills/digcrawl/references/error-handling.md
+        dst: skills/digcrawl/references
+        strip_parent: true
+      - src: .agents/skills/digcrawl/references/tool-routing.md
+        dst: skills/digcrawl/references
+        strip_parent: true
 
 checksum:
   name_template: checksums.txt
