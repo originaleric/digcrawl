@@ -419,7 +419,13 @@ type LocalBrowserConfig struct {
 	CDPConnectExisting     *bool    `yaml:"CDPConnectExisting" json:"CDPConnectExisting,omitempty"`
 	UserDataDir            string   `yaml:"UserDataDir" json:"UserDataDir,omitempty"`
 	ProxyURL               string   `yaml:"ProxyURL" json:"ProxyURL,omitempty"`
-	ExtraArgs              []string `yaml:"ExtraArgs" json:"ExtraArgs,omitempty"`
+	// ExtraArgs apply only to crawler-owned background browser launches. They
+	// may contain headless-shell compatibility flags that are unsafe for a
+	// visible interactive login window.
+	ExtraArgs []string `yaml:"ExtraArgs" json:"ExtraArgs,omitempty"`
+	// InteractiveExtraArgs apply only to browser login windows. They are opt-in
+	// so interactive Chrome never inherits background process-model flags.
+	InteractiveExtraArgs []string `yaml:"InteractiveExtraArgs" json:"InteractiveExtraArgs,omitempty"`
 }
 
 // RuntimeEnvConfig controls explicit, config-file based runtime variable

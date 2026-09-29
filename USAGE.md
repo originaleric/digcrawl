@@ -171,7 +171,8 @@ go install ./cmd/digcollect
 | `CDPConnectExisting` | 连接已有 CDP 浏览器（如手动启动的 Chrome）；该进程由用户管理，需自行以 `--mute-audio` 启动，或使用下方专用服务 |
 | `UserDataDir` | 持久化浏览器 profile 根目录 |
 | `ProxyURL` | 浏览器代理地址，页面 fetch/API fallback 共用 |
-| `ExtraArgs` | 额外 Chromium 启动参数；适合配置 `--single-process`、`--no-zygote`、禁用 crashpad 等 headless 兼容参数 |
+| `ExtraArgs` | 仅后台抓取使用的 Chromium 启动参数；适合配置 `--single-process`、`--no-zygote`、禁用 crashpad 等 headless 兼容参数 |
+| `InteractiveExtraArgs` | 仅 `browser login` 的可视 Chrome 使用；默认留空，不继承 `ExtraArgs`，避免 headless 进程参数影响人工输入与登录 |
 
 ### 本机 MCP Bridge（默认）
 

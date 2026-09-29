@@ -98,7 +98,6 @@ func InteractiveLogin(ctx context.Context, platform string, cfg config.LocalBrow
 
 	l := launcher.New().
 		Context(ctx).
-		NoSandbox(true).
 		Headless(false).
 		Set(flags.Flag("disable-gpu")).
 		UserDataDir(profileDir)
@@ -112,7 +111,7 @@ func InteractiveLogin(ctx context.Context, platform string, cfg config.LocalBrow
 		}
 		l = l.RemoteDebuggingPort(port)
 	}
-	l = applyLauncherExtraArgs(l, cfg.ExtraArgs)
+	l = applyInteractiveLauncherPolicy(l, cfg)
 
 	controlURL, err := l.Launch()
 	if err != nil {

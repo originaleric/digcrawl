@@ -153,12 +153,15 @@ LocalBrowser:
   CDPConnectExisting: false
   UserDataDir: ""
   ProxyURL: ""
+  # 仅用于后台 headless 抓取；其中的进程兼容参数不会传给人工登录窗口。
   ExtraArgs:
     - "--single-process"
     - "--no-zygote"
     - "--disable-crash-reporter"
     - "--disable-crashpad"
     - "--no-sandbox"
+  # 人工 browser login 专用参数。默认留空，以系统 Chrome 的安全多进程模式运行。
+  InteractiveExtraArgs: []
 
 RuntimeEnv:
   # 是否从 config/runtime-env.yml 显式注入运行时变量。
