@@ -15,6 +15,7 @@ require (
 	github.com/originaleric/DigFlow v1.1.4
 	golang.org/x/net v0.50.0
 	golang.org/x/sys v0.41.0
+	golang.org/x/term v0.40.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 
