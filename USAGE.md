@@ -167,7 +167,7 @@ go install ./cmd/digcollect
 | `ChromePath` | 指定 Chrome/Chromium/headless shell 可执行文件路径；为空时自动发现系统浏览器或当前可用的 Playwright 缓存，不应写死版本化缓存路径 |
 | `Headless` | 是否无头模式 |
 | `CookieStoreDir` | 按域名持久化 Cookie，便于登录态采集 |
-| `CDPMode` / `CDPPort` | 启动浏览器时开启 CDP 调试端口 |
+| `CDPMode` / `CDPPort` | 后台抓取启动浏览器时开启 CDP 调试端口；`browser login` 始终使用私有动态端点，避免接管其他本机浏览器 |
 | `CDPConnectExisting` | 连接已有 CDP 浏览器（如手动启动的 Chrome）；该进程由用户管理，需自行以 `--mute-audio` 启动，或使用下方专用服务 |
 | `UserDataDir` | 持久化浏览器 profile 根目录 |
 | `ProxyURL` | 浏览器代理地址，页面 fetch/API fallback 共用 |
@@ -1047,7 +1047,7 @@ digcrawl collect "https://example.com/article" --format md,html,json --out ./my-
 
 ### 平台登录与健康检查
 
-部分平台在未登录或 Cookie 过期时会返回 `LOGIN_REQUIRED`。可使用 DigCrawl 的独立有头浏览器完成登录并保存 Cookie；它不会读取日常浏览器 profile。`browser login` 与 `browser check` 显式传入 `--config` 时使用该 profile；未传时先使用当前项目 `config/config.yaml`，项目文件不存在时才使用标准用户 Skill profile。恢复 MCP 会话时，必须传入启动该 MCP 的同一个 `--config <profile>`，避免把 Cookie 写入另一套 profile。命令会输出打开的登录 URL 和 Cookie 保存目录：
+部分平台在未登录或 Cookie 过期时会返回 `LOGIN_REQUIRED`。可使用 DigCrawl 的独立有头浏览器完成登录并保存 Cookie；它不会读取日常浏览器 profile。`browser login` 与 `browser check` 显式传入 `--config` 时使用该 profile；未传时先使用当前项目 `config/config.yaml`，项目文件不存在时才使用标准用户 Skill profile。恢复 MCP 会话时，必须传入启动该 MCP 的同一个 `--config <profile>`，避免把 Cookie 写入另一套 profile。`browser login` 必须在可交互终端直接运行：登录完成后该终端会等待一次 Enter 来保存 Cookie，因此不能用 `nohup`、launchd 或重定向标准输入启动；程序会在启动浏览器前拒绝这类调用。每个平台同一时间只允许一个 DigCrawl 登录：发现 SingletonLock 的本机进程仍存活时，命令会指向原终端，绝不接管或关闭该窗口；仅当该进程已确认退出时，才自动清理上次异常退出遗留的 Chromium 锁。保存完成或登录流程失败后，DigCrawl 会关闭由本次命令启动的专用 Chrome，并把 profile 未释放作为命令失败报告。命令会输出打开的登录 URL 和 Cookie 保存目录：
 
 ```bash
 digcrawl browser login --platform xiaohongshu
