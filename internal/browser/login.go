@@ -3,6 +3,7 @@ package browser
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/url"
@@ -15,6 +16,7 @@ import (
 	"github.com/go-rod/rod/lib/launcher/flags"
 	"github.com/go-rod/stealth"
 	"github.com/originaleric/digcrawl/config"
+	"golang.org/x/term"
 )
 
 // LoginSpec 平台登录页与 Cookie 域配置。
@@ -73,9 +75,12 @@ func LoginSpecFor(platform string) (LoginSpec, error) {
 }
 
 // InteractiveLogin 打开 headed 浏览器供用户扫码/登录，并保存 Cookie。
-func InteractiveLogin(ctx context.Context, platform string, cfg config.LocalBrowserConfig) error {
+func InteractiveLogin(ctx context.Context, platform string, cfg config.LocalBrowserConfig) (resultErr error) {
 	spec, err := LoginSpecFor(platform)
 	if err != nil {
+		return err
+	}
+	if err := requireInteractiveTerminal(os.Stdin); err != nil {
 		return err
 	}
 
@@ -95,35 +100,39 @@ func InteractiveLogin(ctx context.Context, platform string, cfg config.LocalBrow
 
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()
-
-	l := launcher.New().
-		Context(ctx).
-		Headless(false).
-		Set(flags.Flag("disable-gpu")).
-		UserDataDir(profileDir)
-	if cfg.ChromePath != "" {
-		l = l.Bin(cfg.ChromePath)
-	}
-	if cfg.CDPMode != nil && *cfg.CDPMode {
-		port := cfg.CDPPort
-		if port <= 0 {
-			port = 9222
-		}
-		l = l.RemoteDebuggingPort(port)
-	}
-	l = applyInteractiveLauncherPolicy(l, cfg)
-
-	controlURL, err := l.Launch()
+	clearedStaleLock, err := prepareInteractiveLoginProfile(profileDir, nil)
 	if err != nil {
-		return fmt.Errorf("启动浏览器失败: %w", err)
+		if errors.Is(err, errInteractiveLoginInProgress) {
+			return fmt.Errorf("%s 的 DigCrawl 登录浏览器仍在运行；为避免中断当前登录，本命令不会接管它。请回到原终端完成登录并按 Enter，或关闭该窗口后重试", spec.Platform)
+		}
+		return err
 	}
-	b := rod.New().ControlURL(controlURL).Context(ctx).Timeout(time.Duration(cfg.TotalTimeoutSec) * time.Second)
-	if err := b.Connect(); err != nil {
-		return fmt.Errorf("连接浏览器失败: %w", err)
+	if clearedStaleLock {
+		fmt.Fprintln(os.Stderr, "已清理上次异常退出遗留的 Chrome profile 锁。")
 	}
-	defer b.Close()
+	cookieSaved := false
 
-	page, err := stealth.Page(b)
+	connection, err := launchInteractiveLoginBrowser(ctx, cfg, profileDir)
+	if err != nil && connection == nil {
+		// A second command can race the first between its preflight and Chrome
+		// creating SingletonLock. Re-check once to give a non-takeover error; if
+		// the owner has died in that small window, clean only the stale locks and
+		// retry a fresh launch.
+		clearedAfterLaunch, profileErr := prepareInteractiveLoginProfile(profileDir, nil)
+		if errors.Is(profileErr, errInteractiveLoginInProgress) {
+			return fmt.Errorf("%s 的 DigCrawl 登录浏览器仍在运行；为避免中断当前登录，本命令不会接管它。请回到原终端完成登录并按 Enter，或关闭该窗口后重试", spec.Platform)
+		}
+		if profileErr == nil && clearedAfterLaunch {
+			fmt.Fprintln(os.Stderr, "已清理上次异常退出遗留的 Chrome profile 锁。")
+			connection, err = launchInteractiveLoginBrowser(ctx, cfg, profileDir)
+		}
+	}
+	if err != nil {
+		return finishInteractiveLogin(fmt.Errorf("启动或连接浏览器失败: %w", err), false, connection)
+	}
+	defer func() { resultErr = finishInteractiveLogin(resultErr, cookieSaved, connection) }()
+
+	page, err := stealth.Page(connection.browser)
 	if err != nil {
 		return fmt.Errorf("创建页面失败: %w", err)
 	}
@@ -137,25 +146,108 @@ func InteractiveLogin(ctx context.Context, platform string, cfg config.LocalBrow
 	if err := waitForLoginConfirmation(os.Stdin); err != nil {
 		return err
 	}
-
-	for _, raw := range spec.CookieURLs {
-		_, parseErr := url.Parse(raw)
-		if parseErr != nil {
-			continue
-		}
-		if err := page.Navigate(raw); err != nil {
-			return fmt.Errorf("打开 %s 以同步 cookie 失败: %w", raw, err)
-		}
-		_ = page.WaitLoad()
-	}
-	// A completed interactive login is the sole writer of the canonical session.
-	// Background browser work only reads it and therefore cannot overwrite this
-	// freshly authenticated session.
-	if err := saveDomainCookies(page, spec.CookieDomain, cfg.CookieStoreDir, target); err != nil {
+	warnings, err := persistConfirmedLoginCookies(
+		func() error {
+			// A completed interactive login is the sole writer of the canonical
+			// session. Background browser work only reads it and therefore cannot
+			// overwrite this freshly authenticated session.
+			return saveDomainCookies(page, spec.CookieDomain, cfg.CookieStoreDir, target)
+		},
+		spec.IndexURL,
+		spec.CookieURLs,
+		func(rawURL string) error {
+			if err := page.Navigate(rawURL); err != nil {
+				return err
+			}
+			return page.WaitLoad()
+		},
+	)
+	if err != nil {
 		return fmt.Errorf("保存 cookie 失败: %w", err)
 	}
-	fmt.Printf("已保存 %s Cookie 到 %s\n", spec.Platform, cfg.CookieStoreDir)
+	cookieSaved = true
+	for _, warning := range warnings {
+		fmt.Fprintf(os.Stderr, "登录 Cookie 已保存；%v\n", warning)
+	}
+	fmt.Printf("已保存 %s Cookie 到 %s，正在关闭专用浏览器。\n", spec.Platform, cfg.CookieStoreDir)
 	return nil
+}
+
+// launchInteractiveLoginBrowser always launches a fresh, profile-owned Chrome.
+// It intentionally ignores background CDP configuration: a fixed port may
+// refer to an unrelated local browser, which a login command must never close.
+func launchInteractiveLoginBrowser(ctx context.Context, cfg config.LocalBrowserConfig, profileDir string) (*browserConnection, error) {
+	l := launcher.New().
+		Context(ctx).
+		Headless(false).
+		Set(flags.Flag("disable-gpu")).
+		UserDataDir(profileDir)
+	if cfg.ChromePath != "" {
+		l = l.Bin(cfg.ChromePath)
+	}
+	l = applyInteractiveLauncherPolicy(l, cfg)
+
+	controlURL, err := l.Launch()
+	if err != nil {
+		return nil, err
+	}
+	connection := newBrowserConnection(nil, nil, l, true, profileDir, 0)
+	b := rod.New().ControlURL(controlURL).Context(ctx).Timeout(time.Duration(cfg.TotalTimeoutSec) * time.Second)
+	if err := b.Connect(); err != nil {
+		return connection, err
+	}
+	connection.browser = b
+	return connection, nil
+}
+
+// requireInteractiveTerminal rejects detached invocations before a browser is
+// launched. browser login needs stdin after the user finishes authentication to
+// persist the session, so starting it from nohup, launchd, or a closed pipe
+// would otherwise flash a window and then discard the login state.
+func requireInteractiveTerminal(in *os.File) error {
+	if in == nil || !term.IsTerminal(int(in.Fd())) {
+		return fmt.Errorf("browser login 需要可交互终端以确认并保存 Cookie；请直接在终端运行，勿通过 nohup、launchd 或重定向标准输入启动")
+	}
+	return nil
+}
+
+// persistConfirmedLoginCookies commits the authenticated session before
+// optional cross-origin warmup. A transient navigation failure must not turn a
+// completed login into a lost session: the first save is authoritative, while
+// later successful warmups merely refresh that snapshot with any extra cookies.
+func persistConfirmedLoginCookies(save func() error, indexURL string, cookieURLs []string, navigate func(string) error) ([]error, error) {
+	if err := save(); err != nil {
+		return nil, err
+	}
+
+	seen := make(map[string]struct{}, len(cookieURLs)+1)
+	if parsed, err := url.Parse(indexURL); err == nil {
+		seen[parsed.String()] = struct{}{}
+	}
+	var warnings []error
+	refreshed := false
+	for _, rawURL := range cookieURLs {
+		parsed, err := url.Parse(rawURL)
+		if err != nil {
+			continue
+		}
+		urlKey := parsed.String()
+		if _, ok := seen[urlKey]; ok {
+			continue
+		}
+		seen[urlKey] = struct{}{}
+		if err := navigate(rawURL); err != nil {
+			warnings = append(warnings, fmt.Errorf("同步 Cookie 来源 %s 失败: %w", rawURL, err))
+			continue
+		}
+		refreshed = true
+	}
+	if refreshed {
+		if err := save(); err != nil {
+			warnings = append(warnings, fmt.Errorf("同步后的 Cookie 刷新失败: %w", err))
+		}
+	}
+	return warnings, nil
 }
 
 func waitForLoginConfirmation(in io.Reader) error {
