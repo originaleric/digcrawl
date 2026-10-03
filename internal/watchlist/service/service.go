@@ -13,6 +13,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/go-sql-driver/mysql"
+	"github.com/google/uuid"
 	"github.com/originaleric/digcrawl/collect"
 	"github.com/originaleric/digcrawl/config"
 	"github.com/originaleric/digcrawl/internal/notify"
@@ -59,14 +60,23 @@ type pendingFeed struct {
 }
 
 type itemResult struct {
-	collected  int
-	summarized int
-	notified   int
-	activity   int
-	errors     []string
+	collected    int
+	summarized   int
+	notified     int
+	activity     int
+	errors       []string
+	handoffError error
 }
 
+var errLockOwnershipLost = errors.New("watchlist lock ownership lost")
+
 func NewService(cfg *config.Config) (*Service, error) {
+	if cfg.Watchlist.LoginRecovery.EnabledOrDefault() {
+		lookback, err := time.ParseDuration(cfg.Watchlist.LoginRecovery.LookbackOrDefault())
+		if err != nil || lookback <= 0 {
+			return nil, fmt.Errorf("Watchlist.LoginRecovery.Lookback must be a positive duration")
+		}
+	}
 	if err := validateNotificationConfig(cfg); err != nil {
 		return nil, err
 	}
@@ -256,6 +266,11 @@ func newNotifier(cfg *config.Config) (notify.Notifier, error) {
 		return notify.NewFeishu(cfg.Notifications.Feishu), nil
 	}
 	if cfg.Watchlist.EnabledOrDefault() {
+		if cfg.Watchlist.LoginRecovery.EnabledOrDefault() {
+			// RunItem validates the current channel before any notification. Keep
+			// the scheduler alive so expired or invalid recovery rows can settle.
+			return notify.NoopNotifier{}, nil
+		}
 		return nil, fmt.Errorf("watchlist notifications are not configured; enable Notifications.Feishu or set Watchlist.DryRun=true")
 	}
 	return notify.NoopNotifier{}, nil
@@ -267,6 +282,9 @@ func validateNotificationConfig(cfg *config.Config) error {
 	}
 	channels, _, err := validatedFeishuChannels(cfg)
 	if err != nil {
+		if cfg.Watchlist.LoginRecovery.EnabledOrDefault() {
+			return nil
+		}
 		return err
 	}
 	if cfg.Watchlist.SourceModeOrDefault() != "database" {
@@ -280,6 +298,9 @@ func validateNotificationConfig(cfg *config.Config) error {
 			}
 			context := fmt.Sprintf("watchlist item %q NotifyTo", strings.TrimSpace(item.ID))
 			if err := validateFeishuChannel(channels, id, context); err != nil {
+				if cfg.Watchlist.LoginRecovery.EnabledOrDefault() {
+					continue
+				}
 				return err
 			}
 		}
@@ -334,6 +355,9 @@ func validateDatabaseNotificationConfig(ctx context.Context, cfg *config.Config,
 	}
 	channels, _, err := validatedFeishuChannels(cfg)
 	if err != nil {
+		if cfg.Watchlist.LoginRecovery.EnabledOrDefault() {
+			return nil
+		}
 		return err
 	}
 	sources, err := st.ListSources(ctx, true)
@@ -347,6 +371,9 @@ func validateDatabaseNotificationConfig(ctx context.Context, cfg *config.Config,
 		}
 		context := fmt.Sprintf("database watchlist source %q NotifyTo", strings.TrimSpace(src.ID))
 		if err := validateFeishuChannel(channels, id, context); err != nil {
+			if cfg.Watchlist.LoginRecovery.EnabledOrDefault() {
+				continue
+			}
 			return err
 		}
 	}
@@ -472,6 +499,8 @@ func (s *Service) RunDue(ctx context.Context, now time.Time) ([]RunSummary, erro
 		def  TaskDefinition
 	}
 	var dueItems []scheduledItem
+	currentItems := map[string]WatchItem{}
+	invalidIDs := map[string]bool{}
 	activeTaskIDs := []string{}
 	rawItems, err := s.configuredItems(ctx)
 	if err != nil {
@@ -480,12 +509,18 @@ func (s *Service) RunDue(ctx context.Context, now time.Time) ([]RunSummary, erro
 	for _, raw := range rawItems {
 		item, err := s.normalizeItem(raw)
 		if err != nil {
+			if id := strings.TrimSpace(raw.ID); id != "" {
+				invalidIDs[id] = true
+				activeTaskIDs = append(activeTaskIDs, id)
+			}
 			if firstErr == nil {
 				firstErr = err
 			}
 			continue
 		}
+		delete(invalidIDs, item.ID)
 		def := taskDefinition(item)
+		currentItems[item.ID] = item
 		activeTaskIDs = append(activeTaskIDs, def.ID)
 		if err := s.store.UpsertTaskDefinition(ctx, def, now); err != nil {
 			if firstErr == nil {
@@ -495,6 +530,14 @@ func (s *Service) RunDue(ctx context.Context, now time.Time) ([]RunSummary, erro
 		}
 		if !item.Enabled {
 			continue
+		}
+		if s.cfg.Watchlist.LoginRecovery.EnabledOrDefault() {
+			if err := s.validateCurrentChannel(item); err != nil {
+				if firstErr == nil {
+					firstErr = err
+				}
+				continue
+			}
 		}
 		due, err := s.store.IsTaskDue(ctx, def.ID, now)
 		if err != nil {
@@ -506,7 +549,26 @@ func (s *Service) RunDue(ctx context.Context, now time.Time) ([]RunSummary, erro
 		if !due {
 			continue
 		}
+		if s.cfg.Watchlist.LoginRecovery.EnabledOrDefault() {
+			failed, err := s.store.HasFailedCollectForSource(ctx, item.ID)
+			if err != nil {
+				if firstErr == nil {
+					firstErr = err
+				}
+				continue
+			}
+			if failed {
+				continue
+			}
+		}
 		dueItems = append(dueItems, scheduledItem{item: item, def: def})
+	}
+	if s.cfg.Watchlist.LoginRecovery.EnabledOrDefault() {
+		if err := s.prepareLoginRecovery(ctx, currentItems, invalidIDs); err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+		}
 	}
 	summaries, runErr := runBounded(s.cfg.Watchlist.Scheduler.MaxConcurrentRunsOrDefault(), dueItems, func(due scheduledItem) (RunSummary, error) {
 		return s.runScheduledTask(ctx, due.item, due.def)
@@ -516,6 +578,11 @@ func (s *Service) RunDue(ctx context.Context, now time.Time) ([]RunSummary, erro
 	}
 	if err := s.store.DisableMissingTaskDefinitions(ctx, "watchlist.collect", activeTaskIDs, now); err != nil && firstErr == nil {
 		firstErr = err
+	}
+	if s.cfg.Watchlist.LoginRecovery.EnabledOrDefault() {
+		if err := s.replayLoginRecovery(ctx, now, currentItems, invalidIDs); err != nil && firstErr == nil {
+			firstErr = err
+		}
 	}
 	return summaries, firstErr
 }
@@ -564,10 +631,58 @@ func runBounded[T any](limit int, items []T, run func(T) (RunSummary, error)) ([
 	return summaries, firstErr
 }
 
+func keepLockAlive(ctx context.Context, ttl time.Duration, renew func(context.Context) (bool, error)) (context.Context, func()) {
+	workCtx, cancel := context.WithCancelCause(ctx)
+	interval := ttl / 3
+	if interval <= 0 {
+		interval = time.Nanosecond
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-workCtx.Done():
+				return
+			case <-ticker.C:
+				owned, err := renew(workCtx)
+				if err != nil {
+					cancel(fmt.Errorf("%w: renew failed: %v", errLockOwnershipLost, err))
+					return
+				}
+				if !owned {
+					cancel(errLockOwnershipLost)
+					return
+				}
+			}
+		}
+	}()
+	return workCtx, func() {
+		cancel(nil)
+		<-done
+	}
+}
+
+// RunItem is an explicit run; it may retry an expired failed item.
 func (s *Service) RunItem(ctx context.Context, item WatchItem) (RunSummary, error) {
+	return s.runItem(ctx, item, true, "")
+}
+
+func (s *Service) runItem(ctx context.Context, item WatchItem, retryFailed bool, sourceFailureID string) (RunSummary, error) {
 	sum := RunSummary{WatchID: item.ID}
-	lockTTL, _ := time.ParseDuration(s.cfg.Watchlist.LockTTLOrDefault())
-	locked, err := s.store.AcquireLock(ctx, item.ID, s.owner, lockTTL)
+	if s.cfg.Watchlist.LoginRecovery.EnabledOrDefault() {
+		if err := s.validateCurrentChannel(item); err != nil {
+			return sum, err
+		}
+	}
+	lockTTL, err := time.ParseDuration(s.cfg.Watchlist.LockTTLOrDefault())
+	if err != nil || lockTTL <= 0 {
+		lockTTL = 30 * time.Minute
+	}
+	lockOwner := s.owner + ":" + uuid.NewString()
+	locked, err := s.store.AcquireLock(ctx, item.ID, lockOwner, lockTTL)
 	if err != nil {
 		return sum, err
 	}
@@ -575,7 +690,11 @@ func (s *Service) RunItem(ctx context.Context, item WatchItem) (RunSummary, erro
 		sum.SkippedLocked = true
 		return sum, nil
 	}
-	defer s.store.ReleaseLock(context.Background(), item.ID, s.owner)
+	defer s.store.ReleaseLock(context.Background(), item.ID, lockOwner)
+	ctx, stopRenewing := keepLockAlive(ctx, lockTTL, func(renewCtx context.Context) (bool, error) {
+		return s.store.RenewLock(renewCtx, item.ID, lockOwner, lockTTL)
+	})
+	defer stopRenewing()
 	runID, err := s.store.StartRun(ctx, item.ID, s.owner)
 	if err != nil {
 		return sum, err
@@ -584,6 +703,10 @@ func (s *Service) RunItem(ctx context.Context, item WatchItem) (RunSummary, erro
 	status := "success"
 	errText := ""
 	defer func() {
+		if cause := context.Cause(ctx); cause != nil && status == "success" {
+			status = "failed"
+			errText = cause.Error()
+		}
 		_ = s.store.FinishRun(context.Background(), runID, sum, status, errText)
 	}()
 
@@ -601,17 +724,54 @@ func (s *Service) RunItem(ctx context.Context, item WatchItem) (RunSummary, erro
 		sum.Notified += retried
 	}
 	contentActivity := retried
+	handoffPersisted := true
+	recordResults := func(results []itemResult) {
+		for _, result := range results {
+			if result.handoffError != nil {
+				handoffPersisted = false
+			}
+			sum.Collected += result.collected
+			sum.Summarized += result.summarized
+			sum.Notified += result.notified
+			contentActivity += result.activity
+			sum.Errors = append(sum.Errors, result.errors...)
+		}
+	}
+	if err := context.Cause(ctx); err != nil {
+		return sum, err
+	}
 	feeds, err := s.feeds.ListLatest(ctx, item)
+	if cause := context.Cause(ctx); cause != nil {
+		return sum, cause
+	}
 	if err != nil {
 		status = "failed"
 		errText = err.Error()
 		sum.Errors = append(sum.Errors, err.Error())
+		if s.cfg.Watchlist.LoginRecovery.EnabledOrDefault() && !isLoginRequiredError(err) {
+			if _, _, queueErr := s.queueFailedCollect(ctx, item, watchlist.RecoveryDiscoverSource, FeedItem{}, err, false, "", sourceFailureID); queueErr != nil {
+				return sum, errors.Join(err, queueErr)
+			}
+		}
 		if isLoginRequiredError(err) {
-			notified, notifyErr := s.notifyLoginRequired(ctx, item, time.Now())
-			if notifyErr != nil {
-				sum.Errors = append(sum.Errors, notifyErr.Error())
-			} else if notified {
-				sum.Notified++
+			shouldNotify := true
+			reminderKey := loginRequiredDeliveryKey(item.Platform, time.Now())
+			if s.cfg.Watchlist.LoginRecovery.EnabledOrDefault() {
+				recovery, notify, queueErr := s.queueLoginRecovery(ctx, item, watchlist.RecoveryDiscoverSource, FeedItem{}, err, "", sourceFailureID)
+				if queueErr != nil {
+					sum.Errors = append(sum.Errors, queueErr.Error())
+					return sum, errors.Join(err, queueErr)
+				}
+				shouldNotify = notify
+				reminderKey = "__login_required__:" + recovery.ID
+			}
+			if shouldNotify {
+				notified, notifyErr := s.notifyLoginRequiredWithKey(ctx, item, reminderKey, watchlist.RecoveryDiscoverSource)
+				if notifyErr != nil {
+					sum.Errors = append(sum.Errors, notifyErr.Error())
+				} else if notified {
+					sum.Notified++
+				}
 			}
 		}
 		return sum, err
@@ -622,6 +782,7 @@ func (s *Service) RunItem(ctx context.Context, item WatchItem) (RunSummary, erro
 	}
 	sum.Discovered = len(feeds)
 	var pending []pendingFeed
+	discoveryPersisted := true
 	seenContentKeys := make(map[string]struct{}, len(feeds))
 	for _, feed := range feeds {
 		key := watchlist.ContentKey(feed)
@@ -630,6 +791,7 @@ func (s *Service) RunItem(ctx context.Context, item WatchItem) (RunSummary, erro
 		}
 		isNew, err := s.store.UpsertDiscovered(ctx, item.ID, feed, baseline)
 		if err != nil {
+			discoveryPersisted = false
 			sum.Errors = append(sum.Errors, err.Error())
 			continue
 		}
@@ -637,13 +799,35 @@ func (s *Service) RunItem(ctx context.Context, item WatchItem) (RunSummary, erro
 		if baseline {
 			continue
 		}
+		if s.cfg.Watchlist.LoginRecovery.EnabledOrDefault() {
+			failed, err := s.store.HasFailedCollectForItem(ctx, item.ID, key)
+			if err != nil {
+				sum.Errors = append(sum.Errors, err.Error())
+				discoveryPersisted = false
+				continue
+			}
+			if failed {
+				continue
+			}
+		}
 		if !isNew {
 			st, err := s.store.ItemStatus(ctx, item.ID, key)
 			if err != nil {
 				sum.Errors = append(sum.Errors, err.Error())
 				continue
 			}
+			// Automatic scans only resume unfinished work. Committed failures
+			// belong to the failed-collect table, including their expiry.
+			if s.cfg.Watchlist.LoginRecovery.EnabledOrDefault() && !retryFailed && st != StatusDiscovered && st != StatusCollected && st != StatusSummarized {
+				continue
+			}
 			if !retryableItemStatus(st) {
+				continue
+			}
+			if delivered, err := s.store.HasDelivery(ctx, item.ID, key); err != nil {
+				sum.Errors = append(sum.Errors, err.Error())
+				continue
+			} else if delivered {
 				continue
 			}
 		} else {
@@ -651,15 +835,16 @@ func (s *Service) RunItem(ctx context.Context, item WatchItem) (RunSummary, erro
 		}
 		pending = append(pending, pendingFeed{feed: feed, key: key})
 	}
-	results := runPendingFeeds(s.cfg.Watchlist.Collect.MaxConcurrentItemsOrDefault(), pending, func(pending pendingFeed) itemResult {
-		return s.processPendingFeed(ctx, item, pending.feed, pending.key)
-	})
-	for _, result := range results {
-		sum.Collected += result.collected
-		sum.Summarized += result.summarized
-		sum.Notified += result.notified
-		contentActivity += result.activity
-		sum.Errors = append(sum.Errors, result.errors...)
+	recordResults(runPendingFeeds(s.cfg.Watchlist.Collect.MaxConcurrentItemsOrDefault(), pending, func(pending pendingFeed) itemResult {
+		return s.processPendingFeed(ctx, item, pending.feed, pending.key, "")
+	}))
+	if cause := context.Cause(ctx); cause != nil {
+		return sum, cause
+	}
+	if s.cfg.Watchlist.LoginRecovery.EnabledOrDefault() && discoveryPersisted && handoffPersisted {
+		if err := s.store.DeleteFailedCollectFor(ctx, item.ID, watchlist.RecoveryDiscoverSource, FeedItem{}); err != nil {
+			sum.Errors = append(sum.Errors, err.Error())
+		}
 	}
 	if !baseline && sum.NewItems == 0 {
 		if alreadyNotified, err := s.store.HasNotifiedContentOnDate(ctx, item.ID, time.Now()); err != nil {
@@ -721,11 +906,62 @@ func runPendingFeeds[T any](limit int, feeds []T, run func(T) itemResult) []item
 	return results
 }
 
-func (s *Service) processPendingFeed(ctx context.Context, item WatchItem, feed FeedItem, key string) itemResult {
-	result := itemResult{}
+func (s *Service) processPendingFeed(ctx context.Context, item WatchItem, feed FeedItem, key, failureID string) (result itemResult) {
+	if err := context.Cause(ctx); err != nil {
+		result.errors = append(result.errors, err.Error())
+		return result
+	}
+	recoveryEnabled := s.cfg.Watchlist.LoginRecovery.EnabledOrDefault()
+	persistCtx := context.WithoutCancel(ctx)
+	queueFailure := func(failure error, waitLogin bool, itemStatus string) bool {
+		if !recoveryEnabled {
+			return true
+		}
+		var row watchlist.FailedCollect
+		var notify bool
+		var err error
+		if waitLogin {
+			row, notify, err = s.queueLoginRecovery(persistCtx, item, watchlist.RecoveryCollectItem, feed, failure, itemStatus, failureID)
+		} else {
+			row, _, err = s.queueFailedCollect(persistCtx, item, watchlist.RecoveryCollectItem, feed, failure, false, itemStatus, failureID)
+		}
+		if err != nil {
+			result.handoffError = err
+			result.errors = append(result.errors, err.Error())
+			return false
+		}
+		if notify {
+			if sent, notifyErr := s.notifyLoginRequiredWithKey(ctx, item, "__login_required__:"+row.ID, watchlist.RecoveryCollectItem); notifyErr != nil {
+				result.errors = append(result.errors, notifyErr.Error())
+			} else if sent {
+				result.notified++
+			}
+		}
+		return true
+	}
+	recordStatus := func(status, collectErr, summaryErr string) bool {
+		// Recovery owns the whole item pipeline. Preserve its previous status
+		// until a failure or delivery is committed; retry progress must not turn
+		// an expired failure back into ordinary unfinished work.
+		if recoveryEnabled && (status == StatusCollected || status == StatusSummarized) {
+			return true
+		}
+		if err := s.store.UpdateItemStatus(ctx, item.ID, key, status, collectErr, summaryErr); err != nil {
+			result.handoffError = err
+			result.errors = append(result.errors, err.Error())
+			return false
+		}
+		return true
+	}
 	collected, err := s.collectFeedItem(ctx, feed)
+	if cause := context.Cause(ctx); cause != nil {
+		result.errors = append(result.errors, cause.Error())
+		return result
+	}
 	if err != nil {
-		_ = s.store.UpdateItemStatus(ctx, item.ID, key, StatusCollectFailed, err.Error(), "")
+		if queueFailure(err, isLoginRequiredError(err), StatusCollectFailed) {
+			recordStatus(StatusCollectFailed, err.Error(), "")
+		}
 		result.errors = append(result.errors, err.Error())
 		return result
 	}
@@ -734,47 +970,97 @@ func (s *Service) processPendingFeed(ctx context.Context, item WatchItem, feed F
 	if err := s.store.UpdateItemCollectedMetadata(ctx, item.ID, key, collected.Title, collected.PublishedAt, collected.ContentType); err != nil {
 		result.errors = append(result.errors, err.Error())
 	}
-	_ = s.store.UpdateItemStatus(ctx, item.ID, key, StatusCollected, "", "")
+	if !recordStatus(StatusCollected, "", "") {
+		queueFailure(result.handoffError, false, StatusCollectFailed)
+		return result
+	}
 	req := summary.Request{WatchID: item.ID, Platform: item.Platform, SourceName: item.Name, RunTime: time.Now().Format(time.RFC3339), Items: []summary.Item{{
 		ItemID: key, URL: feed.URL, Title: firstNonEmpty(collected.Title, feed.Title),
 		PublishedAt: firstNonEmpty(collected.PublishedAt, feedPublishedAtText(feed.PublishedAt)),
 		Text:        collected.Text, ASRText: collected.ASRText, OCRText: collected.OCRText, Metadata: collected.Metadata,
 	}}}
 	res, err := s.summarizer.Summarize(ctx, req)
+	if cause := context.Cause(ctx); cause != nil {
+		result.errors = append(result.errors, cause.Error())
+		return result
+	}
 	if err != nil {
-		_ = s.store.UpdateItemStatus(ctx, item.ID, key, StatusSummaryFailed, "", err.Error())
+		if queueFailure(err, false, StatusSummaryFailed) {
+			recordStatus(StatusSummaryFailed, "", err.Error())
+		}
 		result.errors = append(result.errors, err.Error())
 		return result
 	}
 	if err := validateSummaryResultForCollectedItem(collected, res); err != nil {
-		_ = s.store.UpdateItemStatus(ctx, item.ID, key, StatusSummaryFailed, "", err.Error())
+		if queueFailure(err, false, StatusSummaryFailed) {
+			recordStatus(StatusSummaryFailed, "", err.Error())
+		}
 		result.errors = append(result.errors, err.Error())
 		return result
 	}
 	result.summarized++
-	_ = s.store.UpdateItemStatus(ctx, item.ID, key, StatusSummarized, "", res.Error)
+	if !recordStatus(StatusSummarized, "", res.Error) {
+		queueFailure(result.handoffError, false, StatusSummaryFailed)
+		return result
+	}
 	msg := watchlist.RenderNotification(res)
+	if cause := context.Cause(ctx); cause != nil {
+		result.errors = append(result.errors, cause.Error())
+		return result
+	}
 	notifyResult := s.notifier.Send(ctx, item.NotifyTo, msg)
+	// The external send has happened. Persist its outcome even if the run
+	// context was canceled meanwhile; the delivery row owns notification retry.
 	if notifyResult.Status == "notified" || notifyResult.Status == StatusNotified {
 		result.notified++
-		_ = s.store.UpdateItemStatus(ctx, item.ID, key, StatusNotified, "", "")
-		_ = s.store.UpsertDeliveryWithProvider(ctx, item.ID, key, notifyResult.ChannelID, StatusNotified, "", false, msg.Title, msg.Text, res.Provider)
+		if err := s.store.UpsertDeliveryWithProvider(persistCtx, item.ID, key, notifyResult.ChannelID, StatusNotified, "", false, msg.Title, msg.Text, res.Provider); err != nil {
+			result.handoffError = err
+			result.errors = append(result.errors, err.Error())
+			queueFailure(err, false, StatusNotifyFailed)
+			return result
+		}
+		if err := s.store.UpdateItemStatus(persistCtx, item.ID, key, StatusNotified, "", ""); err != nil {
+			result.errors = append(result.errors, err.Error())
+		}
+		if recoveryEnabled {
+			if err := s.store.DeleteFailedCollectFor(persistCtx, item.ID, watchlist.RecoveryCollectItem, feed); err != nil {
+				result.handoffError = err
+				result.errors = append(result.errors, err.Error())
+			}
+		}
 		return result
 	}
 	status := StatusNotifyFailed
 	if !notifyResult.Retryable {
 		status = StatusNotifyFinalFail
 	}
-	_ = s.store.UpdateItemStatus(ctx, item.ID, key, status, "", "")
-	_ = s.store.UpsertDeliveryWithProvider(ctx, item.ID, key, notifyResult.ChannelID, StatusNotifyFailed, notifyResult.Error, notifyResult.Retryable, msg.Title, msg.Text, res.Provider)
+	if err := s.store.UpsertDeliveryWithProvider(persistCtx, item.ID, key, notifyResult.ChannelID, StatusNotifyFailed, notifyResult.Error, notifyResult.Retryable, msg.Title, msg.Text, res.Provider); err != nil {
+		result.handoffError = err
+		result.errors = append(result.errors, err.Error())
+		queueFailure(err, false, StatusNotifyFailed)
+		return result
+	}
+	if err := s.store.UpdateItemStatus(persistCtx, item.ID, key, status, "", ""); err != nil {
+		result.errors = append(result.errors, err.Error())
+	}
+	if recoveryEnabled {
+		if err := s.store.DeleteFailedCollectFor(persistCtx, item.ID, watchlist.RecoveryCollectItem, feed); err != nil {
+			result.handoffError = err
+			result.errors = append(result.errors, err.Error())
+		}
+	}
 	result.errors = append(result.errors, notifyResult.Error)
 	return result
 }
 
 func (s *Service) runScheduledTask(ctx context.Context, item WatchItem, def TaskDefinition) (RunSummary, error) {
 	sum := RunSummary{WatchID: item.ID}
-	lockTTL, _ := time.ParseDuration(s.cfg.Watchlist.LockTTLOrDefault())
-	locked, err := s.store.AcquireTaskLock(ctx, def.ID, s.owner, lockTTL)
+	lockTTL, err := time.ParseDuration(s.cfg.Watchlist.LockTTLOrDefault())
+	if err != nil || lockTTL <= 0 {
+		lockTTL = 30 * time.Minute
+	}
+	lockOwner := s.owner + ":" + uuid.NewString()
+	locked, err := s.store.AcquireTaskLock(ctx, def.ID, lockOwner, lockTTL)
 	if err != nil {
 		return sum, err
 	}
@@ -782,7 +1068,11 @@ func (s *Service) runScheduledTask(ctx context.Context, item WatchItem, def Task
 		sum.SkippedLocked = true
 		return sum, s.store.InsertTaskEvent(ctx, def.ID, "", "run_skipped", StatusSkippedLocked, "task lock is held", "")
 	}
-	defer s.store.ReleaseTaskLock(context.Background(), def.ID, s.owner)
+	defer s.store.ReleaseTaskLock(context.Background(), def.ID, lockOwner)
+	ctx, stopRenewing := keepLockAlive(ctx, lockTTL, func(renewCtx context.Context) (bool, error) {
+		return s.store.RenewTaskLock(renewCtx, def.ID, lockOwner, lockTTL)
+	})
+	defer stopRenewing()
 	taskRunID, err := s.store.StartTaskRun(ctx, def, s.owner)
 	if err != nil {
 		return sum, err
@@ -806,7 +1096,7 @@ func (s *Service) runScheduledTask(ctx context.Context, item WatchItem, def Task
 		data, _ := json.Marshal(metadata)
 		_ = s.store.FinishTaskRun(context.Background(), taskRunID, def, status, errText, string(data), time.Now())
 	}()
-	sum, err = s.RunItem(ctx, item)
+	sum, err = s.runItem(ctx, item, false, "")
 	if sum.SkippedLocked {
 		status = "skipped_locked"
 		errText = "watchlist lock is held"
@@ -831,34 +1121,71 @@ func (s *Service) retryPendingDeliveries(ctx context.Context, item WatchItem) (i
 	}
 	notified := 0
 	for _, d := range pending {
+		if cause := context.Cause(ctx); cause != nil {
+			return notified, cause
+		}
+		if id := strings.TrimPrefix(d.ContentKey, "__login_required__:"); id != d.ContentKey {
+			if _, parseErr := uuid.Parse(id); parseErr == nil {
+				allowed, checkErr := s.store.ShouldRetryLoginReminder(ctx, id, time.Now())
+				if checkErr != nil {
+					return notified, checkErr
+				}
+				if !allowed {
+					if err := s.store.UpsertDelivery(ctx, d.WatchID, d.ContentKey, d.ChannelID, StatusNotifyFinalFail, "login reminder obsolete", false, d.Title, d.Text); err != nil {
+						return notified, err
+					}
+					continue
+				}
+			}
+		}
 		if strings.TrimSpace(d.Text) == "" {
-			_ = s.store.UpsertDelivery(ctx, d.WatchID, d.ContentKey, d.ChannelID, StatusNotifyFailed, "missing delivery message", false, d.Title, d.Text)
-			_ = s.store.UpdateItemStatus(ctx, d.WatchID, d.ContentKey, StatusNotifyFinalFail, "", "")
+			if err := s.store.UpsertDelivery(ctx, d.WatchID, d.ContentKey, d.ChannelID, StatusNotifyFailed, "missing delivery message", false, d.Title, d.Text); err != nil {
+				return notified, err
+			}
+			if err := s.store.UpdateItemStatus(ctx, d.WatchID, d.ContentKey, StatusNotifyFinalFail, "", ""); err != nil {
+				return notified, err
+			}
 			continue
 		}
 		if stale, reason := isStaleVideoPendingDelivery(d); stale {
-			_ = s.store.UpsertDeliveryWithProvider(ctx, d.WatchID, d.ContentKey, d.ChannelID, StatusNotifyFailed, reason, false, d.Title, d.Text, d.MessageProvider)
-			_ = s.store.UpdateItemStatus(ctx, d.WatchID, d.ContentKey, StatusSummaryFailed, "", reason)
+			if err := s.store.UpsertDeliveryWithProvider(ctx, d.WatchID, d.ContentKey, d.ChannelID, StatusNotifyFailed, reason, false, d.Title, d.Text, d.MessageProvider); err != nil {
+				return notified, err
+			}
+			if err := s.store.UpdateItemStatus(ctx, d.WatchID, d.ContentKey, StatusSummaryFailed, "", reason); err != nil {
+				return notified, err
+			}
 			continue
 		}
 		res := s.notifier.Send(ctx, d.ChannelID, notify.Message{Title: d.Title, Text: d.Text})
+		persistCtx := context.WithoutCancel(ctx)
 		if res.Status == StatusNotified || res.Status == "notified" {
+			if err := s.store.UpsertDeliveryWithProvider(persistCtx, d.WatchID, d.ContentKey, d.ChannelID, StatusNotified, "", false, d.Title, d.Text, d.MessageProvider); err != nil {
+				return notified, err
+			}
 			notified++
-			_ = s.store.UpdateItemStatus(ctx, d.WatchID, d.ContentKey, StatusNotified, "", "")
-			_ = s.store.UpsertDeliveryWithProvider(ctx, d.WatchID, d.ContentKey, d.ChannelID, StatusNotified, "", false, d.Title, d.Text, d.MessageProvider)
+			if err := s.store.UpdateItemStatus(persistCtx, d.WatchID, d.ContentKey, StatusNotified, "", ""); err != nil {
+				return notified, err
+			}
 			continue
 		}
 		status := StatusNotifyFailed
 		if !res.Retryable {
 			status = StatusNotifyFinalFail
 		}
-		_ = s.store.UpdateItemStatus(ctx, d.WatchID, d.ContentKey, status, "", "")
-		_ = s.store.UpsertDeliveryWithProvider(ctx, d.WatchID, d.ContentKey, d.ChannelID, StatusNotifyFailed, res.Error, res.Retryable, d.Title, d.Text, d.MessageProvider)
+		if err := s.store.UpsertDeliveryWithProvider(persistCtx, d.WatchID, d.ContentKey, d.ChannelID, StatusNotifyFailed, res.Error, res.Retryable, d.Title, d.Text, d.MessageProvider); err != nil {
+			return notified, err
+		}
+		if err := s.store.UpdateItemStatus(persistCtx, d.WatchID, d.ContentKey, status, "", ""); err != nil {
+			return notified, err
+		}
 	}
 	return notified, nil
 }
 
 func (s *Service) notifyNoUpdate(ctx context.Context, item WatchItem, now time.Time) (bool, error) {
+	if cause := context.Cause(ctx); cause != nil {
+		return false, cause
+	}
 	if now.IsZero() {
 		now = time.Now()
 	}
@@ -878,8 +1205,9 @@ func (s *Service) notifyNoUpdate(ctx context.Context, item WatchItem, now time.T
 	title := fmt.Sprintf("%s 今日无更新", name)
 	text := fmt.Sprintf("%s\n\n%s 今日无更新。", title, date)
 	res := s.notifier.Send(ctx, item.NotifyTo, notify.Message{Title: title, Text: text})
+	persistCtx := context.WithoutCancel(ctx)
 	if res.Status == "notified" || res.Status == StatusNotified {
-		if err := s.store.UpsertDelivery(ctx, item.ID, key, res.ChannelID, StatusNotified, "", false, title, text); err != nil {
+		if err := s.store.UpsertDelivery(persistCtx, item.ID, key, res.ChannelID, StatusNotified, "", false, title, text); err != nil {
 			return false, err
 		}
 		return true, nil
@@ -888,7 +1216,7 @@ func (s *Service) notifyNoUpdate(ctx context.Context, item WatchItem, now time.T
 	if !res.Retryable {
 		status = StatusNotifyFinalFail
 	}
-	if err := s.store.UpsertDelivery(ctx, item.ID, key, res.ChannelID, status, res.Error, res.Retryable, title, text); err != nil {
+	if err := s.store.UpsertDelivery(persistCtx, item.ID, key, res.ChannelID, status, res.Error, res.Retryable, title, text); err != nil {
 		return false, err
 	}
 	if strings.TrimSpace(res.Error) == "" {
@@ -906,6 +1234,17 @@ func (s *Service) notifyLoginRequired(ctx context.Context, item WatchItem, now t
 		platform = "目标平台"
 	}
 	key := loginRequiredDeliveryKey(platform, now)
+	return s.notifyLoginRequiredWithKey(ctx, item, key, watchlist.RecoveryDiscoverSource)
+}
+
+func (s *Service) notifyLoginRequiredWithKey(ctx context.Context, item WatchItem, key, stage string) (bool, error) {
+	if cause := context.Cause(ctx); cause != nil {
+		return false, cause
+	}
+	platform := strings.ToLower(strings.TrimSpace(item.Platform))
+	if platform == "" {
+		platform = "目标平台"
+	}
 	alreadyRecorded, err := s.store.HasDelivery(ctx, item.ID, key)
 	if err != nil {
 		return false, err
@@ -919,9 +1258,13 @@ func (s *Service) notifyLoginRequired(ctx context.Context, item WatchItem, now t
 	}
 	title := fmt.Sprintf("%s 需要重新登录", name)
 	text := fmt.Sprintf("%s\n\n来源「%s」的登录状态已失效，无法判断是否有更新。请在本机终端运行：\n\n%s\n\n完成登录后，Watchlist 会在下次轮询继续抓取。", title, name, loginRecoveryCommand(s.cfg, platform))
+	if stage == watchlist.RecoveryCollectItem {
+		text = fmt.Sprintf("%s\n\n来源「%s」的一条内容需要重新登录才能采集。请在本机终端运行：\n\n%s\n\n完成登录后，Watchlist 会在下次轮询精确回补该链接。", title, name, loginRecoveryCommand(s.cfg, platform))
+	}
 	res := s.notifier.Send(ctx, item.NotifyTo, notify.Message{Title: title, Text: text})
+	persistCtx := context.WithoutCancel(ctx)
 	if res.Status == "notified" || res.Status == StatusNotified {
-		if err := s.store.UpsertDelivery(ctx, item.ID, key, res.ChannelID, StatusNotified, "", false, title, text); err != nil {
+		if err := s.store.UpsertDelivery(persistCtx, item.ID, key, res.ChannelID, StatusNotified, "", false, title, text); err != nil {
 			return false, err
 		}
 		return true, nil
@@ -930,7 +1273,7 @@ func (s *Service) notifyLoginRequired(ctx context.Context, item WatchItem, now t
 	if !res.Retryable {
 		status = StatusNotifyFinalFail
 	}
-	if err := s.store.UpsertDelivery(ctx, item.ID, key, res.ChannelID, status, res.Error, res.Retryable, title, text); err != nil {
+	if err := s.store.UpsertDelivery(persistCtx, item.ID, key, res.ChannelID, status, res.Error, res.Retryable, title, text); err != nil {
 		return false, err
 	}
 	if strings.TrimSpace(res.Error) == "" {
