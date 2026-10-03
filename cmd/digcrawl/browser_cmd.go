@@ -10,10 +10,12 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/originaleric/digcrawl/config"
 	"github.com/originaleric/digcrawl/internal/browser"
 	"github.com/originaleric/digcrawl/internal/platform/healthcheck"
+	watchlistservice "github.com/originaleric/digcrawl/internal/watchlist/service"
 )
 
 func runBrowser(args []string) {
@@ -63,8 +65,26 @@ func runBrowserLogin(args []string) {
 	defer stop()
 
 	if err := browser.InteractiveLogin(ctx, *platform, cfg.LocalBrowser); err != nil {
+		if cfg.Watchlist.LoginRecovery.EnabledOrDefault() {
+			log.Fatalf("login: %v；自动回补未登记", err)
+		}
 		log.Fatalf("login: %v", err)
 	}
+	if err := recordWatchlistLogin(cfg, *platform); err != nil {
+		log.Fatalf("login: Cookie 已保存，但自动回补未登记: %v", err)
+	}
+}
+
+func recordWatchlistLogin(cfg *config.Config, platform string) error {
+	if !cfg.Watchlist.LoginRecovery.EnabledOrDefault() {
+		return nil
+	}
+	store, err := watchlistservice.OpenConfiguredStore(cfg)
+	if err != nil {
+		return err
+	}
+	defer store.Close()
+	return store.RecordLogin(context.Background(), platform, time.Now())
 }
 
 func runBrowserCheck(args []string) {

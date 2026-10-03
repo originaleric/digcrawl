@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	_ "github.com/go-sql-driver/mysql"
@@ -16,8 +17,9 @@ import (
 )
 
 type Store struct {
-	db      *sql.DB
-	dialect string
+	db         *sql.DB
+	dialect    string
+	recoveryMu sync.Mutex
 }
 
 type StoreOptions struct {
@@ -333,6 +335,9 @@ func (s *Store) migrate() error {
 	if err := s.addColumnIfMissing("dc_watchlist_sources", "schedule_at", s.shortTextColumnType()); err != nil {
 		return err
 	}
+	if err := s.migrateFailedCollects(context.Background()); err != nil {
+		return err
+	}
 	if s.dialect == "sqlite" {
 		if err := s.migrateLegacyTables(); err != nil {
 			return err
@@ -486,6 +491,8 @@ func sqliteMigrationStatements() []string {
 		`CREATE INDEX IF NOT EXISTS idx_dc_task_events_task_id ON dc_task_events(task_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_dc_task_events_run_id ON dc_task_events(run_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_dc_task_events_created_at ON dc_task_events(created_at)`,
+		`CREATE TABLE IF NOT EXISTS dc_watchlist_failed_collects (failure_id TEXT PRIMARY KEY, task_id TEXT NOT NULL, failure_key TEXT NOT NULL, config_hash TEXT NOT NULL, platform TEXT NOT NULL, stage TEXT NOT NULL, content_key_hash TEXT NOT NULL DEFAULT '', cookie_domain TEXT NOT NULL DEFAULT '', notify_channel TEXT NOT NULL DEFAULT '', first_failed_at TEXT NOT NULL, expires_at TEXT NOT NULL, last_failed_at TEXT NOT NULL, ready_at TEXT, attempts INTEGER NOT NULL DEFAULT 0, error_code TEXT NOT NULL DEFAULT '', diagnostic TEXT NOT NULL DEFAULT '', UNIQUE(task_id, stage, failure_key))`,
+		`CREATE INDEX IF NOT EXISTS idx_dc_watchlist_failed_collects_ready ON dc_watchlist_failed_collects(ready_at, first_failed_at)`,
 	}
 }
 
@@ -614,6 +621,7 @@ func mysqlMigrationStatements() []string {
   KEY idx_dc_task_events_run_id (run_id),
   KEY idx_dc_task_events_created_at (created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+		`CREATE TABLE IF NOT EXISTS dc_watchlist_failed_collects (failure_id VARCHAR(191) PRIMARY KEY, task_id VARCHAR(191) NOT NULL, failure_key VARCHAR(191) NOT NULL, config_hash VARCHAR(128) NOT NULL, platform VARCHAR(64) NOT NULL, stage VARCHAR(32) NOT NULL, content_key_hash VARCHAR(71) NOT NULL DEFAULT '', cookie_domain VARCHAR(253) NOT NULL DEFAULT '', notify_channel VARCHAR(191) NOT NULL DEFAULT '', first_failed_at VARCHAR(64) NOT NULL, expires_at VARCHAR(64) NOT NULL, last_failed_at VARCHAR(64) NOT NULL, ready_at VARCHAR(64), attempts INT NOT NULL DEFAULT 0, error_code VARCHAR(64) NOT NULL DEFAULT '', diagnostic TEXT NOT NULL, UNIQUE KEY uq_dc_watchlist_failed_collects (task_id, stage, failure_key), KEY idx_dc_watchlist_failed_collects_ready (ready_at, first_failed_at)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 	}
 }
 
@@ -734,10 +742,10 @@ func (s *Store) AcquireLock(ctx context.Context, watchID, owner string, ttl time
 			return false, tx.Commit()
 		}
 		_, err = tx.ExecContext(ctx, `UPDATE dc_watchlist_locks SET owner = ?, acquired_at = ?, expires_at = ? WHERE watch_id = ?`,
-			owner, now.Format(time.RFC3339), now.Add(ttl).Format(time.RFC3339), watchID)
+			owner, now.Format(failureTimeFormat), now.Add(ttl).Format(failureTimeFormat), watchID)
 	} else {
 		_, err = tx.ExecContext(ctx, `INSERT INTO dc_watchlist_locks (watch_id, owner, acquired_at, expires_at) VALUES (?, ?, ?, ?)`,
-			watchID, owner, now.Format(time.RFC3339), now.Add(ttl).Format(time.RFC3339))
+			watchID, owner, now.Format(failureTimeFormat), now.Add(ttl).Format(failureTimeFormat))
 	}
 	if err != nil {
 		return false, err
@@ -747,6 +755,16 @@ func (s *Store) AcquireLock(ctx context.Context, watchID, owner string, ttl time
 
 func (s *Store) ReleaseLock(ctx context.Context, watchID, owner string) {
 	_, _ = s.db.ExecContext(ctx, `DELETE FROM dc_watchlist_locks WHERE watch_id = ? AND owner = ?`, watchID, owner)
+}
+
+func (s *Store) RenewLock(ctx context.Context, watchID, owner string, ttl time.Duration) (bool, error) {
+	now := time.Now().UTC()
+	result, err := s.db.ExecContext(ctx, `UPDATE dc_watchlist_locks SET expires_at=? WHERE watch_id=? AND owner=? AND expires_at>?`, now.Add(ttl).Format(failureTimeFormat), watchID, owner, now.Format(failureTimeFormat))
+	if err != nil {
+		return false, err
+	}
+	count, err := result.RowsAffected()
+	return count == 1, err
 }
 
 func (s *Store) StartRun(ctx context.Context, watchID, owner string) (string, error) {
@@ -888,10 +906,10 @@ func (s *Store) AcquireTaskLock(ctx context.Context, taskID, owner string, ttl t
 			return false, tx.Commit()
 		}
 		_, err = tx.ExecContext(ctx, `UPDATE dc_task_locks SET owner = ?, acquired_at = ?, expires_at = ? WHERE task_id = ?`,
-			owner, now.Format(time.RFC3339), now.Add(ttl).Format(time.RFC3339), taskID)
+			owner, now.Format(failureTimeFormat), now.Add(ttl).Format(failureTimeFormat), taskID)
 	} else {
 		_, err = tx.ExecContext(ctx, `INSERT INTO dc_task_locks (task_id, owner, acquired_at, expires_at) VALUES (?, ?, ?, ?)`,
-			taskID, owner, now.Format(time.RFC3339), now.Add(ttl).Format(time.RFC3339))
+			taskID, owner, now.Format(failureTimeFormat), now.Add(ttl).Format(failureTimeFormat))
 	}
 	if err != nil {
 		return false, err
@@ -901,6 +919,16 @@ func (s *Store) AcquireTaskLock(ctx context.Context, taskID, owner string, ttl t
 
 func (s *Store) ReleaseTaskLock(ctx context.Context, taskID, owner string) {
 	_, _ = s.db.ExecContext(ctx, `DELETE FROM dc_task_locks WHERE task_id = ? AND owner = ?`, taskID, owner)
+}
+
+func (s *Store) RenewTaskLock(ctx context.Context, taskID, owner string, ttl time.Duration) (bool, error) {
+	now := time.Now().UTC()
+	result, err := s.db.ExecContext(ctx, `UPDATE dc_task_locks SET expires_at=? WHERE task_id=? AND owner=? AND expires_at>?`, now.Add(ttl).Format(failureTimeFormat), taskID, owner, now.Format(failureTimeFormat))
+	if err != nil {
+		return false, err
+	}
+	count, err := result.RowsAffected()
+	return count == 1, err
 }
 
 func (s *Store) StartTaskRun(ctx context.Context, def TaskDefinition, owner string) (string, error) {
@@ -971,15 +999,19 @@ func (s *Store) UpsertDiscovered(ctx context.Context, watchID string, item FeedI
 		return false, err
 	}
 	if err == nil {
+		preserveURL, err := s.HasFailedCollectForItem(ctx, watchID, key)
+		if err != nil {
+			return false, err
+		}
 		_, err = s.db.ExecContext(ctx, `UPDATE dc_watchlist_items SET
   last_seen_at = ?,
   title = COALESCE(?, title),
-  url = ?,
-  canonical_url = COALESCE(?, canonical_url),
+  url = CASE WHEN ? = 1 THEN url ELSE ? END,
+  canonical_url = CASE WHEN ? = 1 THEN canonical_url ELSE COALESCE(?, canonical_url) END,
   published_at = COALESCE(?, published_at),
   content_type = COALESCE(?, content_type)
 WHERE watch_id = ? AND content_key = ?`,
-			now, nullStr(item.Title), item.URL, nullStr(item.CanonicalURL), timeStr(item.PublishedAt), nullStr(item.ContentType), watchID, key)
+			now, nullStr(item.Title), boolInt(preserveURL), item.URL, boolInt(preserveURL), nullStr(item.CanonicalURL), timeStr(item.PublishedAt), nullStr(item.ContentType), watchID, key)
 		return false, err
 	}
 	status := StatusDiscovered

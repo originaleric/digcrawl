@@ -106,3 +106,8 @@ type CollectedItem struct {
 	Metadata    map[string]any
 	Summary     *summary.Result
 }
+
+const (
+	RecoveryDiscoverSource = "discover_source"
+	RecoveryCollectItem    = "collect_item"
+)

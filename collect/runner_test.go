@@ -3,8 +3,10 @@ package collect
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 
+	"github.com/originaleric/digcrawl/internal/platform"
 	"github.com/originaleric/digcrawl/protocol"
 	platformprov "github.com/originaleric/digcrawl/provider/platform"
 	"github.com/originaleric/digcrawl/runtime"
@@ -35,6 +37,10 @@ func TestRunTreatsStructuredPlatformErrorAsFailure(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected structured platform error to fail collect.Run")
+	}
+	var readErr *platform.ReadError
+	if !errors.As(err, &readErr) || readErr.Code != platform.ErrSelectorStale {
+		t.Fatalf("expected structured ReadError, got %T %v", err, err)
 	}
 	if result == nil || result.Status != "success" {
 		t.Fatalf("expected tool call itself to succeed with structured output, got %+v", result)
