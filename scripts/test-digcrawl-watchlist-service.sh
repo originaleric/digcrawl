@@ -213,17 +213,23 @@ test_upgrade_prepares_before_stopping() (
     fi
     command mv "$@"
   }
+  # Run the CLI in its own Bash process. Sourcing it inside an if-condition
+  # suppresses errexit throughout its functions on Bash 5, unlike real usage.
+  # Export only the mocks and fixture values needed by that process.
+  export -f uname mock_go launchctl systemctl plutil mv
+  export test_os lifecycle build_failure replace_failure definition_replace_failure
+  export manager_failure manager_failed service_definition
   export DIGCRAWL_WATCHLIST_SERVICE_TEST=0
   if [[ "${test_command}" == "install" ]]; then
     export DIGCRAWL_LOG_DIR="${TEST_ROOT}/blocked-log"
     : >"${DIGCRAWL_LOG_DIR}"
-    if (source "${SERVICE_SCRIPT}" "${test_command}") >"${TEST_ROOT}/output" 2>&1; then
+    if "${BASH}" "${SERVICE_SCRIPT}" "${test_command}" >"${TEST_ROOT}/output" 2>&1; then
       printf 'assertion failed: install must reject unavailable log directory\n' >&2; exit 1;
     fi
     [[ ! -s "${lifecycle}" && "$(<"${DIGCRAWL_BIN}")" == 'old' ]] || exit 1
     unset DIGCRAWL_LOG_DIR
   fi
-  if (source "${SERVICE_SCRIPT}" "${test_command}") >"${TEST_ROOT}/output" 2>&1; then
+  if "${BASH}" "${SERVICE_SCRIPT}" "${test_command}" >"${TEST_ROOT}/output" 2>&1; then
     printf 'assertion failed: %s %s must reject failed build\n' "${test_os}" "${test_command}" >&2
     exit 1
   fi
@@ -238,7 +244,7 @@ test_upgrade_prepares_before_stopping() (
   mkdir -p "${HOME}/.local/bin"
   : >"${HOME}/.local/bin/digcrawl"
   : >"${lifecycle}"
-  if (source "${SERVICE_SCRIPT}" "${test_command}") >"${TEST_ROOT}/output" 2>&1; then
+  if "${BASH}" "${SERVICE_SCRIPT}" "${test_command}" >"${TEST_ROOT}/output" 2>&1; then
     printf 'assertion failed: %s %s must reject CLI collision\n' "${test_os}" "${test_command}" >&2
     exit 1
   fi
@@ -248,7 +254,7 @@ test_upgrade_prepares_before_stopping() (
   rm "${HOME}/.local/bin/digcrawl"
   replace_failure=1
   : >"${lifecycle}"
-  if (source "${SERVICE_SCRIPT}" "${test_command}") >"${TEST_ROOT}/output" 2>&1; then
+  if "${BASH}" "${SERVICE_SCRIPT}" "${test_command}" >"${TEST_ROOT}/output" 2>&1; then
     printf 'assertion failed: upgrade must reject failed binary replacement\n' >&2; exit 1;
   fi
   assert_contains "$(<"${lifecycle}")" $'build:old\nstop:old' 'replacement failure must follow successful preparation'
@@ -258,7 +264,7 @@ test_upgrade_prepares_before_stopping() (
   if [[ "${test_command}" == "install" ]]; then
     definition_replace_failure=1
     : >"${lifecycle}"
-    if (source "${SERVICE_SCRIPT}" "${test_command}") >"${TEST_ROOT}/output" 2>&1; then
+    if "${BASH}" "${SERVICE_SCRIPT}" "${test_command}" >"${TEST_ROOT}/output" 2>&1; then
       printf 'assertion failed: install must reject failed service definition replacement\n' >&2; exit 1;
     fi
     assert_contains "$(<"${lifecycle}")" 'start:new' 'definition replacement failure must restore service using its existing definition'
@@ -276,7 +282,7 @@ test_upgrade_prepares_before_stopping() (
       manager_failure="${failed_action}"
       manager_failed=0
       : >"${lifecycle}"
-      if (source "${SERVICE_SCRIPT}" "${test_command}") >"${TEST_ROOT}/output" 2>&1; then
+      if "${BASH}" "${SERVICE_SCRIPT}" "${test_command}" >"${TEST_ROOT}/output" 2>&1; then
         printf 'assertion failed: failed %s must remain an installation error\n' "${failed_action}" >&2; exit 1;
       fi
       assert_contains "$(<"${lifecycle}")" "failure:${failed_action}" 'test must reach the service manager failure'
@@ -286,7 +292,7 @@ test_upgrade_prepares_before_stopping() (
     manager_failure=""
   fi
   : >"${lifecycle}"
-  (source "${SERVICE_SCRIPT}" "${test_command}") >"${TEST_ROOT}/output" 2>&1 || {
+  "${BASH}" "${SERVICE_SCRIPT}" "${test_command}" >"${TEST_ROOT}/output" 2>&1 || {
     cat "${TEST_ROOT}/output" >&2; exit 1;
   }
   local calls
