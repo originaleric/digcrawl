@@ -173,35 +173,60 @@ configure_ffmpeg() {
   echo "detected DIGCRAWL_FFMPEG_PATH=${DIGCRAWL_FFMPEG_PATH}"
 }
 
-build_binary() {
+build_binary() (
+  staged_binary=""
+  build_log=""
+  local stopped_service=0
+  trap 'rm -f -- "${staged_binary}" "${build_log}"' EXIT
   if [[ "${DIGCRAWL_AUTO_BUILD}" != "1" ]]; then
     require_binary
-    return
-  fi
-  mkdir -p "$(dirname "${BIN_PATH}")"
-  mkdir -p "${DIGCRAWL_BUILD_GOCACHE}" "${DIGCRAWL_BUILD_GOMODCACHE}"
-  local go_bin
-  local build_log
-  go_bin="${GO:-go}"
-  local build_args=()
-  if [[ -n "${DIGCRAWL_BUILD_TAGS}" ]]; then
-    build_args+=("-tags" "${DIGCRAWL_BUILD_TAGS}")
-  fi
-  build_log="$(mktemp "${DIGCRAWL_BUILD_GOCACHE%/}/digcrawl-build.XXXXXX")" || fail "failed to create Go build log"
-  if ! GOCACHE="${DIGCRAWL_BUILD_GOCACHE}" GOMODCACHE="${DIGCRAWL_BUILD_GOMODCACHE}" "${go_bin}" build "${build_args[@]}" -o "${BIN_PATH}" ./cmd/digcrawl >"${build_log}" 2>&1; then
-    cat "${build_log}" >&2
+  else
+    mkdir -p "$(dirname "${BIN_PATH}")"
+    mkdir -p "${DIGCRAWL_BUILD_GOCACHE}" "${DIGCRAWL_BUILD_GOMODCACHE}"
+    local go_bin
+    go_bin="${GO:-go}"
+    local build_args=()
+    if [[ -n "${DIGCRAWL_BUILD_TAGS}" ]]; then
+      build_args+=("-tags" "${DIGCRAWL_BUILD_TAGS}")
+    fi
+    build_log="$(mktemp "${DIGCRAWL_BUILD_GOCACHE%/}/digcrawl-build.XXXXXX")" || fail "failed to create Go build log"
+    staged_binary="$(mktemp "${BIN_PATH}.tmp.XXXXXX")" || fail "failed to stage digcrawl binary"
+    if ! GOCACHE="${DIGCRAWL_BUILD_GOCACHE}" GOMODCACHE="${DIGCRAWL_BUILD_GOMODCACHE}" "${go_bin}" build "${build_args[@]}" -o "${staged_binary}" ./cmd/digcrawl >"${build_log}" 2>&1; then
+      cat "${build_log}" >&2
+      fail "failed to build digcrawl binary: ${BIN_PATH}"
+    fi
+
+    # Apple's compiler wrappers can emit this diagnostic when their optional
+    # xcrun lookup cache cannot be persisted. A successful `go build` has
+    # produced a valid binary, so retain every other diagnostic but omit this
+    # misleading non-fatal line from normal installation output.
+    awk '!/^(cc|clang|ar): error: couldn\x27t create cache file .+\/xcrun_db-[^\x27]+\x27 \(errno=Operation not permitted\)$/' "${build_log}" >&2
     rm -f "${build_log}"
-    fail "failed to build digcrawl binary: ${BIN_PATH}"
+    [[ -x "${staged_binary}" ]] || fail "failed to build digcrawl binary: ${BIN_PATH}"
   fi
 
-  # Apple's compiler wrappers can emit this diagnostic when their optional
-  # xcrun lookup cache cannot be persisted. A successful `go build` has
-  # produced a valid binary, so retain every other diagnostic but omit this
-  # misleading non-fatal line from normal installation output.
-  awk '!/^(cc|clang|ar): error: couldn\x27t create cache file .+\/xcrun_db-[^\x27]+\x27 \(errno=Operation not permitted\)$/' "${build_log}" >&2
-  rm -f "${build_log}"
-  [[ -x "${BIN_PATH}" ]] || fail "failed to build digcrawl binary: ${BIN_PATH}"
-}
+  if [[ "${1:-}" == "--stop-service" ]]; then
+    # Finish preparation before stopping the current process. The staged
+    # binary stays beside its destination so replacement is an atomic rename.
+    install_cli_link
+    case "${OS_NAME}" in
+      Darwin) [[ ! -f "$(mac_plist_path)" ]] || stopped_service=1 ;;
+      Linux) [[ ! -f "$(linux_unit_path)" ]] || stopped_service=1 ;;
+      *) fail "unsupported OS: ${OS_NAME}" ;;
+    esac
+    if [[ "${stopped_service}" == "1" ]]; then
+      dispatch_platform stop
+    fi
+  fi
+  if [[ -n "${staged_binary}" ]]; then
+    if ! mv -f -- "${staged_binary}" "${BIN_PATH}"; then
+      if [[ "${stopped_service}" == "1" ]]; then
+        dispatch_platform start || true
+      fi
+      fail "failed to replace digcrawl binary: ${BIN_PATH}"
+    fi
+  fi
+)
 
 cli_profile_paths() {
   case "$(basename "${SHELL:-}")" in
@@ -335,17 +360,26 @@ use_installed_bin_path_if_available() {
   fi
 }
 
-install_macos() {
+install_macos() (
+  install_plist=""
+  restore_service=0
+  trap '
+    install_exit=$?
+    rm -f -- "${install_plist}"
+    if [[ "${install_exit}" != "0" && "${restore_service}" == "1" && -f "$(mac_plist_path)" ]]; then
+      dispatch_platform start || true
+    fi
+    exit "${install_exit}"
+  ' EXIT
   require_config
   ensure_ffmpeg_env
-  build_binary
-  install_cli_link
   mkdir -p "${HOME}/Library/LaunchAgents" "${LOG_DIR}"
   local launcher
   launcher="$(stage_macos_launcher)"
   local plist
   plist="$(mac_plist_path)"
-  cat >"${plist}" <<EOF
+  install_plist="$(mktemp "${plist}.tmp.XXXXXX")"
+  cat >"${install_plist}" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -395,20 +429,35 @@ install_macos() {
 </dict>
 </plist>
 EOF
+  plutil -lint "${install_plist}" >/dev/null
+  build_binary --stop-service
+  restore_service=1
+  if ! mv -f -- "${install_plist}" "${plist}"; then
+    fail "failed to replace launchd plist: ${plist}"
+  fi
   echo "installed launchd plist: ${plist}"
   start_macos_service
   echo "installed and running ${SERVICE_LABEL}"
-}
+)
 
-install_linux() {
+install_linux() (
+  install_unit=""
+  restore_service=0
+  trap '
+    install_exit=$?
+    rm -f -- "${install_unit}"
+    if [[ "${install_exit}" != "0" && "${restore_service}" == "1" && -f "$(linux_unit_path)" ]]; then
+      dispatch_platform start || true
+    fi
+    exit "${install_exit}"
+  ' EXIT
   require_config
   ensure_ffmpeg_env
-  build_binary
-  install_cli_link
   mkdir -p "${HOME}/.config/systemd/user" "${LOG_DIR}"
   local unit
   unit="$(linux_unit_path)"
-  cat >"${unit}" <<EOF
+  install_unit="$(mktemp "${unit}.tmp.XXXXXX")"
+  cat >"${install_unit}" <<EOF
 [Unit]
 Description=DigCrawl Watchlist Scheduler
 After=network-online.target
@@ -436,6 +485,11 @@ StandardError=journal
 [Install]
 WantedBy=default.target
 EOF
+  build_binary --stop-service
+  restore_service=1
+  if ! mv -f -- "${install_unit}" "${unit}"; then
+    fail "failed to replace systemd unit: ${unit}"
+  fi
   systemctl --user daemon-reload
   systemctl --user enable "${SERVICE_NAME}.service"
   systemctl --user restart "${SERVICE_NAME}.service"
@@ -443,7 +497,7 @@ EOF
     fail "install did not leave ${SERVICE_NAME}.service running; inspect: systemctl --user status ${SERVICE_NAME}.service --no-pager"
   fi
   echo "installed and running systemd user unit: ${unit}"
-}
+)
 
 start_macos_service() {
   local plist
@@ -645,12 +699,22 @@ case "${cmd}" in
     configure_ffmpeg
     ;;
   rebuild-restart|deploy)
-    require_config
-    use_installed_bin_path_if_available
-    build_binary
-    install_cli_link
-    dispatch_platform restart
-    dispatch_platform status
+    (
+      restore_service=0
+      trap '
+        deploy_exit=$?
+        if [[ "${deploy_exit}" != "0" && "${restore_service}" == "1" ]]; then
+          dispatch_platform start || true
+        fi
+        exit "${deploy_exit}"
+      ' EXIT
+      require_config
+      use_installed_bin_path_if_available
+      build_binary --stop-service
+      restore_service=1
+      dispatch_platform start
+      dispatch_platform status
+    )
     ;;
   start)
     dispatch_platform start

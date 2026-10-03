@@ -751,18 +751,33 @@ func (c ASRConfig) LocalCommandOrDefault() string {
 
 // WatchlistConfig controls periodic source monitoring.
 type WatchlistConfig struct {
-	Enabled          *bool                      `yaml:"Enabled" json:"Enabled,omitempty"`
-	DryRun           *bool                      `yaml:"DryRun" json:"DryRun,omitempty"`
-	DefaultInterval  string                     `yaml:"DefaultInterval" json:"DefaultInterval,omitempty"`
-	Scheduler        SchedulerConfig            `yaml:"Scheduler" json:"Scheduler,omitempty"`
-	Collect          WatchlistCollectConfig     `yaml:"Collect" json:"Collect,omitempty"`
-	Source           WatchlistSourceConfig      `yaml:"Source" json:"Source,omitempty"`
-	NotifyOnFirstRun *bool                      `yaml:"NotifyOnFirstRun" json:"NotifyOnFirstRun,omitempty"`
-	MaxItemsPerRun   int                        `yaml:"MaxItemsPerRun" json:"MaxItemsPerRun,omitempty"`
-	LockTTL          string                     `yaml:"LockTTL" json:"LockTTL,omitempty"`
-	Persistence      WatchlistPersistenceConfig `yaml:"Persistence" json:"Persistence,omitempty"`
-	DBPath           string                     `yaml:"DBPath" json:"DBPath,omitempty"` // Deprecated: use Persistence.SQLitePath.
-	Items            []WatchlistItem            `yaml:"Items" json:"Items,omitempty"`
+	Enabled          *bool                        `yaml:"Enabled" json:"Enabled,omitempty"`
+	DryRun           *bool                        `yaml:"DryRun" json:"DryRun,omitempty"`
+	DefaultInterval  string                       `yaml:"DefaultInterval" json:"DefaultInterval,omitempty"`
+	Scheduler        SchedulerConfig              `yaml:"Scheduler" json:"Scheduler,omitempty"`
+	Collect          WatchlistCollectConfig       `yaml:"Collect" json:"Collect,omitempty"`
+	LoginRecovery    WatchlistLoginRecoveryConfig `yaml:"LoginRecovery" json:"LoginRecovery,omitempty"`
+	Source           WatchlistSourceConfig        `yaml:"Source" json:"Source,omitempty"`
+	NotifyOnFirstRun *bool                        `yaml:"NotifyOnFirstRun" json:"NotifyOnFirstRun,omitempty"`
+	MaxItemsPerRun   int                          `yaml:"MaxItemsPerRun" json:"MaxItemsPerRun,omitempty"`
+	LockTTL          string                       `yaml:"LockTTL" json:"LockTTL,omitempty"`
+	Persistence      WatchlistPersistenceConfig   `yaml:"Persistence" json:"Persistence,omitempty"`
+	DBPath           string                       `yaml:"DBPath" json:"DBPath,omitempty"` // Deprecated: use Persistence.SQLitePath.
+	Items            []WatchlistItem              `yaml:"Items" json:"Items,omitempty"`
+}
+
+// WatchlistLoginRecoveryConfig controls replay after a successful browser login.
+type WatchlistLoginRecoveryConfig struct {
+	Enabled  *bool  `yaml:"Enabled" json:"Enabled,omitempty"`
+	Lookback string `yaml:"Lookback" json:"Lookback,omitempty"`
+}
+
+func (c WatchlistLoginRecoveryConfig) EnabledOrDefault() bool { return c.Enabled != nil && *c.Enabled }
+func (c WatchlistLoginRecoveryConfig) LookbackOrDefault() string {
+	if strings.TrimSpace(c.Lookback) != "" {
+		return strings.TrimSpace(c.Lookback)
+	}
+	return "24h"
 }
 
 // WatchlistPersistenceConfig controls local watchlist runtime persistence.

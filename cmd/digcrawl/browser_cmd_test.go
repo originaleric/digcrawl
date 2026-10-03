@@ -1,13 +1,49 @@
 package main
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/originaleric/digcrawl/config"
+	"github.com/originaleric/digcrawl/internal/watchlist"
+	"github.com/originaleric/digcrawl/internal/watchlist/service"
 )
+
+func TestRecordWatchlistLoginUnlocksFailedCollect(t *testing.T) {
+	enabled := true
+	cfg := &config.Config{Watchlist: config.WatchlistConfig{
+		LoginRecovery: config.WatchlistLoginRecoveryConfig{Enabled: &enabled},
+		Persistence:   config.WatchlistPersistenceConfig{Driver: "sqlite", SQLitePath: filepath.Join(t.TempDir(), "watch.db")},
+	}}
+	st, err := service.OpenConfiguredStore(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	_, _, err = st.UpsertFailedCollect(ctx, watchlist.FailedCollect{TaskID: "task", ConfigHash: "v1", Platform: "toutiao", Stage: watchlist.RecoveryDiscoverSource}, 24*time.Hour, true, time.Now().UTC().Add(-time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := recordWatchlistLogin(cfg, "toutiao"); err != nil {
+		t.Fatal(err)
+	}
+	st, err = service.OpenConfiguredStore(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	ready, err := st.ListReadyFailedCollects(ctx, time.Now())
+	if err != nil || len(ready) != 1 {
+		t.Fatalf("ready=%+v err=%v", ready, err)
+	}
+}
 
 func TestBrowserProfilePathPrefersProjectConfigThenUserSkillProfile(t *testing.T) {
 	dir := t.TempDir()

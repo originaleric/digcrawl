@@ -147,6 +147,164 @@ test_linux_install_restarts_and_reports_running() {
   rm -rf "${TEST_ROOT}"
 }
 
-test_macos_install_starts_and_reports_running
-test_linux_install_restarts_and_reports_running
+test_upgrade_prepares_before_stopping() (
+  local test_os="$1"
+  local test_command="$2"
+  setup_runtime
+  trap 'rm -rf "${TEST_ROOT}"' EXIT
+  local lifecycle="${TEST_ROOT}/lifecycle.log"
+  : >"${lifecycle}"
+  printf 'old\n' >"${DIGCRAWL_BIN}"
+  mkdir -p "${HOME}/Library/LaunchAgents" "${HOME}/.config/systemd/user"
+  printf 'old service\n' >"${HOME}/Library/LaunchAgents/com.digcrawl.watchlist.plist"
+  printf 'old service\n' >"${HOME}/.config/systemd/user/digcrawl-watchlist.service"
+  local service_definition="${HOME}/.config/systemd/user/digcrawl-watchlist.service"
+  if [[ "${test_os}" == "Darwin" ]]; then
+    service_definition="${HOME}/Library/LaunchAgents/com.digcrawl.watchlist.plist"
+  fi
+  export DIGCRAWL_AUTO_BUILD=1
+  export DIGCRAWL_BUILD_GOCACHE="${TEST_ROOT}/gocache"
+  export DIGCRAWL_BUILD_GOMODCACHE="${TEST_ROOT}/gomodcache"
+  export GO=mock_go
+  local build_failure=1
+  local replace_failure=0
+  local definition_replace_failure=0
+  local manager_failure=""
+  local manager_failed=0
+  uname() { printf '%s\n' "${test_os}"; }
+  mock_go() {
+    printf 'build:%s\n' "$(<"${DIGCRAWL_BIN}")" >>"${lifecycle}"
+    local target=""
+    while (( $# )); do
+      if [[ "$1" == "-o" ]]; then target="$2"; break; fi
+      shift
+    done
+    [[ "${target}" != "${DIGCRAWL_BIN}" && -n "${target}" ]] || return 1
+    printf 'new\n' >"${target}"
+    chmod +x "${target}"
+    [[ "${build_failure}" == "0" ]]
+  }
+  launchctl() {
+    case "$1" in
+      print) printf '    state = running\n    pid = 4242\n' ;;
+      bootout|unload) printf 'stop:%s\n' "$(<"${DIGCRAWL_BIN}")" >>"${lifecycle}" ;;
+      bootstrap|load) printf 'start:%s\n' "$(<"${DIGCRAWL_BIN}")" >>"${lifecycle}" ;;
+    esac
+  }
+  systemctl() {
+    if [[ "$2" == "${manager_failure}" && "${manager_failed}" == "0" ]]; then
+      manager_failed=1
+      printf 'failure:%s\n' "$2" >>"${lifecycle}"
+      return 1
+    fi
+    case "$2" in
+      stop) printf 'stop:%s\n' "$(<"${DIGCRAWL_BIN}")" >>"${lifecycle}" ;;
+      start|restart) printf 'start:%s\n' "$(<"${DIGCRAWL_BIN}")" >>"${lifecycle}" ;;
+      is-active) printf 'active\n' ;;
+    esac
+  }
+  plutil() { return 0; }
+  mv() {
+    local destination
+    for destination in "$@"; do :; done
+    if [[ "${destination}" == "${DIGCRAWL_BIN}" && "${replace_failure}" == "1" ]] ||
+       [[ "${destination}" == "${service_definition}" && "${definition_replace_failure}" == "1" ]]; then
+      return 1
+    fi
+    command mv "$@"
+  }
+  export DIGCRAWL_WATCHLIST_SERVICE_TEST=0
+  if [[ "${test_command}" == "install" ]]; then
+    export DIGCRAWL_LOG_DIR="${TEST_ROOT}/blocked-log"
+    : >"${DIGCRAWL_LOG_DIR}"
+    if (source "${SERVICE_SCRIPT}" "${test_command}") >"${TEST_ROOT}/output" 2>&1; then
+      printf 'assertion failed: install must reject unavailable log directory\n' >&2; exit 1;
+    fi
+    [[ ! -s "${lifecycle}" && "$(<"${DIGCRAWL_BIN}")" == 'old' ]] || exit 1
+    unset DIGCRAWL_LOG_DIR
+  fi
+  if (source "${SERVICE_SCRIPT}" "${test_command}") >"${TEST_ROOT}/output" 2>&1; then
+    printf 'assertion failed: %s %s must reject failed build\n' "${test_os}" "${test_command}" >&2
+    exit 1
+  fi
+  [[ "$(<"${lifecycle}")" == 'build:old' && "$(<"${DIGCRAWL_BIN}")" == 'old' ]] || {
+    printf 'assertion failed: failed build stopped service or replaced old binary\n' >&2; exit 1;
+  }
+  [[ "$(<"${service_definition}")" == 'old service' ]] || exit 1
+
+  # A CLI path collision is another preparation failure. It must also leave
+  # the running service and its binary alone after compilation succeeds.
+  build_failure=0
+  mkdir -p "${HOME}/.local/bin"
+  : >"${HOME}/.local/bin/digcrawl"
+  : >"${lifecycle}"
+  if (source "${SERVICE_SCRIPT}" "${test_command}") >"${TEST_ROOT}/output" 2>&1; then
+    printf 'assertion failed: %s %s must reject CLI collision\n' "${test_os}" "${test_command}" >&2
+    exit 1
+  fi
+  [[ "$(<"${lifecycle}")" == 'build:old' && "$(<"${DIGCRAWL_BIN}")" == 'old' ]] || {
+    printf 'assertion failed: CLI failure stopped service or replaced old binary\n' >&2; exit 1;
+  }
+  rm "${HOME}/.local/bin/digcrawl"
+  replace_failure=1
+  : >"${lifecycle}"
+  if (source "${SERVICE_SCRIPT}" "${test_command}") >"${TEST_ROOT}/output" 2>&1; then
+    printf 'assertion failed: upgrade must reject failed binary replacement\n' >&2; exit 1;
+  fi
+  assert_contains "$(<"${lifecycle}")" $'build:old\nstop:old' 'replacement failure must follow successful preparation'
+  assert_contains "$(<"${lifecycle}")" 'start:old' 'replacement failure must restart the old binary'
+  [[ "$(<"${DIGCRAWL_BIN}")" == 'old' && "$(<"${service_definition}")" == 'old service' ]] || exit 1
+  replace_failure=0
+  if [[ "${test_command}" == "install" ]]; then
+    definition_replace_failure=1
+    : >"${lifecycle}"
+    if (source "${SERVICE_SCRIPT}" "${test_command}") >"${TEST_ROOT}/output" 2>&1; then
+      printf 'assertion failed: install must reject failed service definition replacement\n' >&2; exit 1;
+    fi
+    assert_contains "$(<"${lifecycle}")" 'start:new' 'definition replacement failure must restore service using its existing definition'
+    [[ "$(<"${service_definition}")" == 'old service' ]] || exit 1
+    definition_replace_failure=0
+    printf 'old\n' >"${DIGCRAWL_BIN}"
+  fi
+  if [[ "${test_os}" == "Linux" ]]; then
+    local failed_action
+    local failed_actions=(start is-active)
+    if [[ "${test_command}" == "install" ]]; then
+      failed_actions=(daemon-reload enable restart is-active)
+    fi
+    for failed_action in "${failed_actions[@]}"; do
+      manager_failure="${failed_action}"
+      manager_failed=0
+      : >"${lifecycle}"
+      if (source "${SERVICE_SCRIPT}" "${test_command}") >"${TEST_ROOT}/output" 2>&1; then
+        printf 'assertion failed: failed %s must remain an installation error\n' "${failed_action}" >&2; exit 1;
+      fi
+      assert_contains "$(<"${lifecycle}")" "failure:${failed_action}" 'test must reach the service manager failure'
+      assert_contains "$(<"${lifecycle}")" $'\nstart:new' 'post-stop failure must attempt to restore service'
+      printf 'old\n' >"${DIGCRAWL_BIN}"
+    done
+    manager_failure=""
+  fi
+  : >"${lifecycle}"
+  (source "${SERVICE_SCRIPT}" "${test_command}") >"${TEST_ROOT}/output" 2>&1 || {
+    cat "${TEST_ROOT}/output" >&2; exit 1;
+  }
+  local calls
+  calls="$(<"${lifecycle}")"
+  assert_contains "${calls}" $'build:old\nstop:old' 'upgrade must stop the old process only after build succeeds'
+  assert_contains "${calls}" 'start:new' 'upgrade must start the newly replaced binary'
+  [[ "$(<"${DIGCRAWL_BIN}")" == 'new' ]] || exit 1
+  local leftover
+  for leftover in "${DIGCRAWL_BIN}".tmp.* "${DIGCRAWL_BUILD_GOCACHE}"/digcrawl-build.* "${service_definition}".tmp.*; do
+    [[ ! -e "${leftover}" ]] || { printf 'assertion failed: staged build files were left behind\n' >&2; exit 1; }
+  done
+)
+
+(test_macos_install_starts_and_reports_running)
+(test_linux_install_restarts_and_reports_running)
+for test_os in Darwin Linux; do
+  for test_command in install deploy rebuild-restart; do
+    test_upgrade_prepares_before_stopping "${test_os}" "${test_command}"
+  done
+done
 printf 'Watchlist service install lifecycle regression checks passed\n'

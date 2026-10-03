@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
+	"github.com/originaleric/digcrawl/internal/platform"
 	"github.com/originaleric/digcrawl/protocol"
 	browserprov "github.com/originaleric/digcrawl/provider/browser"
 	platformprov "github.com/originaleric/digcrawl/provider/platform"
@@ -66,6 +67,9 @@ func Run(ctx context.Context, rt *runtime.Runtime, opts RunOptions) (map[string]
 	}
 
 	if result.Status != "success" && !isRecoverableProviderVideoRetentionFailure(result, out) {
+		if code, message := structuredPlatformError(out); code != "" {
+			return out, result, platform.NewReadError(code, message, match.Platform, nil)
+		}
 		msg := "tool execution failed"
 		if result.Error != nil {
 			msg = result.Error.Message
@@ -76,7 +80,7 @@ func Run(ctx context.Context, rt *runtime.Runtime, opts RunOptions) (map[string]
 		if message == "" {
 			message = code
 		}
-		return out, result, fmt.Errorf("%s", message)
+		return out, result, platform.NewReadError(code, message, match.Platform, nil)
 	}
 	out["_collect_platform"] = match.Platform
 	if _, ok := out["source_url"]; !ok {

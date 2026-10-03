@@ -48,6 +48,63 @@ type staticFeedReader struct {
 	err   error
 }
 
+type blockingFeedReader struct {
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (r blockingFeedReader) ListLatest(ctx context.Context, item WatchItem) ([]FeedItem, error) {
+	close(r.entered)
+	select {
+	case <-r.release:
+		return nil, nil
+	case <-ctx.Done():
+		return nil, context.Cause(ctx)
+	}
+}
+
+func TestRunDueRenewsTaskAndWatchLocks(t *testing.T) {
+	ctx := context.Background()
+	st, err := watchlist.OpenStore(filepath.Join(t.TempDir(), "watch.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	cfg := &config.Config{Watchlist: config.WatchlistConfig{
+		DryRun: boolPtr(true), DefaultInterval: "6h", LockTTL: "300ms",
+		LoginRecovery: config.WatchlistLoginRecoveryConfig{Enabled: boolPtr(true)},
+		Items:         []config.WatchlistItem{{ID: "source", Platform: "feed", Type: "rss", URL: "https://example.com/feed", Enabled: boolPtr(true)}},
+	}}
+	reader := blockingFeedReader{entered: make(chan struct{}), release: make(chan struct{})}
+	svc := &Service{cfg: cfg, store: st, feeds: reader, notifier: &recordingNotifier{}, owner: "test"}
+	done := make(chan error, 1)
+	go func() {
+		_, err := svc.RunDue(ctx, time.Now())
+		done <- err
+	}()
+	select {
+	case <-reader.entered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("scheduled task did not enter source discovery")
+	}
+	time.Sleep(800 * time.Millisecond)
+	if locked, err := st.AcquireTaskLock(ctx, "source", "other", time.Second); err != nil || locked {
+		t.Fatalf("task lock expired during active work: acquired=%v err=%v", locked, err)
+	}
+	if locked, err := st.AcquireLock(ctx, "source", "other", time.Second); err != nil || locked {
+		t.Fatalf("watch lock expired during active work: acquired=%v err=%v", locked, err)
+	}
+	close(reader.release)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("scheduled task did not finish")
+	}
+}
+
 func (r staticFeedReader) ListLatest(ctx context.Context, item WatchItem) ([]FeedItem, error) {
 	return r.items, r.err
 }
