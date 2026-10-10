@@ -1,0 +1,5 @@
+ok  	github.com/originaleric/digcrawl/internal/browser	0.007s
+ok  	github.com/originaleric/digcrawl/transport/bridge	0.004s
+ok  	github.com/originaleric/digcrawl/transport/mcp	0.004s
+ok  	github.com/originaleric/digcrawl/transport/collector	0.004s
+ok  	github.com/originaleric/digcrawl/cmd/digcrawl	0.003s

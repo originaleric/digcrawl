@@ -12,6 +12,7 @@ import (
 
 // ReadArticle 读取今日头条文章（API 优先，Browser 兜底）。
 func ReadArticle(ctx context.Context, in platform.ReadInput) (*platform.Content, error) {
+	ctx = browser.WithBrowseRetryContext(ctx)
 	url := strings.TrimSpace(in.URL)
 	if url == "" {
 		return nil, fmt.Errorf("url 不能为空")

@@ -119,9 +119,14 @@ func writeBridgeStartupFailure(path string, cause error) {
 		return
 	}
 	defer os.Remove(tmp.Name())
-	message := strings.ReplaceAll(strings.TrimSpace(cause.Error()), "\n", " ")
-	if len(message) > 1024 {
-		message = message[:1024]
+	// Keep only controlled failure text in the cross-process handoff. YAML
+	// parse errors and raw exceptions can include credentials or signed URLs.
+	message := "local Bridge startup failed; run doctor --config <actual profile> and check configuration and local ownership"
+	for _, known := range []error{bridge.ErrBrowserProfileInUse, bridge.ErrAlreadyRunning, bridge.ErrBuildMismatch} {
+		if errors.Is(cause, known) {
+			message = known.Error()
+			break
+		}
 	}
 	if _, err := tmp.WriteString(message); err != nil {
 		_ = tmp.Close()

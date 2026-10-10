@@ -263,6 +263,7 @@ func TestManagerShutdownImmediatelyClosesOwnedConnectionWithActiveLease(t *testi
 		close(closed)
 		return nil
 	})
+	conn.owned = true
 	conn.leases = 1
 	m := &browserManager{
 		cfg:    config.LocalBrowserConfig{TotalTimeoutSec: 1},
@@ -294,8 +295,8 @@ func TestWaitForProfileUnlock(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
 	defer cancel()
-	if err := waitForProfileUnlock(ctx, profile); !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("locked profile error=%v, want deadline exceeded", err)
+	if err := waitForProfileUnlock(ctx, profile); err == nil {
+		t.Fatalf("unknown lock must be rejected, error=%v", err)
 	}
 	if err := os.Remove(lock); err != nil {
 		t.Fatal(err)

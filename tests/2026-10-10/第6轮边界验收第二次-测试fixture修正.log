@@ -1,0 +1,83 @@
+=== RUN   TestPageChangeGuidanceAndDiagnosticPreserveReason
+--- FAIL: TestPageChangeGuidanceAndDiagnosticPreserveReason (0.00s)
+panic: assignment to entry in nil map [recovered, repanicked]
+
+goroutine 8 [running]:
+testing.tRunner.func1.2({0x101aa93a0, 0x101bf7d60})
+	/Users/dig/.gvm/gos/go1.26.1/src/testing/testing.go:1974 +0x1a0
+testing.tRunner.func1()
+	/Users/dig/.gvm/gos/go1.26.1/src/testing/testing.go:1977 +0x318
+panic({0x101aa93a0?, 0x101bf7d60?})
+	/Users/dig/.gvm/gos/go1.26.1/src/runtime/panic.go:860 +0x12c
+github.com/originaleric/digcrawl/internal/browser.TestPageChangeGuidanceAndDiagnosticPreserveReason(0x2dbcdb01c908)
+	/Users/dig/Documents/文稿 - XinYe的MacBook Pro (5)/Projects/go-app/DigCrawl/internal/browser/browser_browse_test.go:162 +0xa0
+testing.tRunner(0x2dbcdb01c908, 0x101b86dd0)
+	/Users/dig/.gvm/gos/go1.26.1/src/testing/testing.go:2036 +0xc4
+created by testing.(*T).Run in goroutine 1
+	/Users/dig/.gvm/gos/go1.26.1/src/testing/testing.go:2101 +0x3a8
+FAIL	github.com/originaleric/digcrawl/internal/browser	0.769s
+=== RUN   TestChromeTextOnlyProviderAcceptance
+--- PASS: TestChromeTextOnlyProviderAcceptance (1.03s)
+PASS
+ok  	github.com/originaleric/digcrawl/provider/browser	2.089s
+=== RUN   TestChromePlatformSourcePolicyAcceptance
+--- PASS: TestChromePlatformSourcePolicyAcceptance (0.58s)
+=== RUN   TestWechatRedirectRespectsFinalSourcePolicy
+=== RUN   TestWechatRedirectRespectsFinalSourcePolicy/call_restriction
+2026/10/10 21:44:53 [platform-read] platform=wechat channel=http source=html api_ms=0 feed_ms=0 browser_ms=0 retries=0
+=== RUN   TestWechatRedirectRespectsFinalSourcePolicy/config_restriction
+2026/10/10 21:44:53 [platform-read] platform=wechat channel=http source=html api_ms=0 feed_ms=0 browser_ms=0 retries=0
+=== RUN   TestWechatRedirectRespectsFinalSourcePolicy/platform_default_allows_redirect
+2026/10/10 21:44:53 [platform-read] platform=wechat channel=http source=html api_ms=0 feed_ms=0 browser_ms=0 retries=0
+=== RUN   TestWechatRedirectRespectsFinalSourcePolicy/call_overrides_config
+2026/10/10 21:44:53 [platform-read] platform=wechat channel=http source=html api_ms=0 feed_ms=0 browser_ms=0 retries=0
+--- PASS: TestWechatRedirectRespectsFinalSourcePolicy (0.00s)
+    --- PASS: TestWechatRedirectRespectsFinalSourcePolicy/call_restriction (0.00s)
+    --- PASS: TestWechatRedirectRespectsFinalSourcePolicy/config_restriction (0.00s)
+    --- PASS: TestWechatRedirectRespectsFinalSourcePolicy/platform_default_allows_redirect (0.00s)
+    --- PASS: TestWechatRedirectRespectsFinalSourcePolicy/call_overrides_config (0.00s)
+=== RUN   TestPlatformSourceRejectionPrecedesEnhancementAndStorage
+=== RUN   TestPlatformSourceRejectionPrecedesEnhancementAndStorage/reddit=false/collect=false/source_url
+=== RUN   TestPlatformSourceRejectionPrecedesEnhancementAndStorage/reddit=false/collect=false/final_url
+=== RUN   TestPlatformSourceRejectionPrecedesEnhancementAndStorage/reddit=false/collect=false/resolved_url
+=== RUN   TestPlatformSourceRejectionPrecedesEnhancementAndStorage/reddit=false/collect=false/empty_source
+=== RUN   TestPlatformSourceRejectionPrecedesEnhancementAndStorage/reddit=false/collect=false/nil_content
+=== RUN   TestPlatformSourceRejectionPrecedesEnhancementAndStorage/reddit=false/collect=true/source_url
+=== RUN   TestPlatformSourceRejectionPrecedesEnhancementAndStorage/reddit=false/collect=true/final_url
+=== RUN   TestPlatformSourceRejectionPrecedesEnhancementAndStorage/reddit=false/collect=true/resolved_url
+=== RUN   TestPlatformSourceRejectionPrecedesEnhancementAndStorage/reddit=false/collect=true/empty_source
+=== RUN   TestPlatformSourceRejectionPrecedesEnhancementAndStorage/reddit=false/collect=true/nil_content
+=== RUN   TestPlatformSourceRejectionPrecedesEnhancementAndStorage/reddit=true/collect=false/source_url
+=== RUN   TestPlatformSourceRejectionPrecedesEnhancementAndStorage/reddit=true/collect=false/final_url
+=== RUN   TestPlatformSourceRejectionPrecedesEnhancementAndStorage/reddit=true/collect=false/resolved_url
+=== RUN   TestPlatformSourceRejectionPrecedesEnhancementAndStorage/reddit=true/collect=false/empty_source
+=== RUN   TestPlatformSourceRejectionPrecedesEnhancementAndStorage/reddit=true/collect=false/nil_content
+=== RUN   TestPlatformSourceRejectionPrecedesEnhancementAndStorage/reddit=true/collect=true/source_url
+=== RUN   TestPlatformSourceRejectionPrecedesEnhancementAndStorage/reddit=true/collect=true/final_url
+=== RUN   TestPlatformSourceRejectionPrecedesEnhancementAndStorage/reddit=true/collect=true/resolved_url
+=== RUN   TestPlatformSourceRejectionPrecedesEnhancementAndStorage/reddit=true/collect=true/empty_source
+=== RUN   TestPlatformSourceRejectionPrecedesEnhancementAndStorage/reddit=true/collect=true/nil_content
+--- PASS: TestPlatformSourceRejectionPrecedesEnhancementAndStorage (0.01s)
+    --- PASS: TestPlatformSourceRejectionPrecedesEnhancementAndStorage/reddit=false/collect=false/source_url (0.00s)
+    --- PASS: TestPlatformSourceRejectionPrecedesEnhancementAndStorage/reddit=false/collect=false/final_url (0.00s)
+    --- PASS: TestPlatformSourceRejectionPrecedesEnhancementAndStorage/reddit=false/collect=false/resolved_url (0.00s)
+    --- PASS: TestPlatformSourceRejectionPrecedesEnhancementAndStorage/reddit=false/collect=false/empty_source (0.00s)
+    --- PASS: TestPlatformSourceRejectionPrecedesEnhancementAndStorage/reddit=false/collect=false/nil_content (0.00s)
+    --- PASS: TestPlatformSourceRejectionPrecedesEnhancementAndStorage/reddit=false/collect=true/source_url (0.00s)
+    --- PASS: TestPlatformSourceRejectionPrecedesEnhancementAndStorage/reddit=false/collect=true/final_url (0.00s)
+    --- PASS: TestPlatformSourceRejectionPrecedesEnhancementAndStorage/reddit=false/collect=true/resolved_url (0.00s)
+    --- PASS: TestPlatformSourceRejectionPrecedesEnhancementAndStorage/reddit=false/collect=true/empty_source (0.00s)
+    --- PASS: TestPlatformSourceRejectionPrecedesEnhancementAndStorage/reddit=false/collect=true/nil_content (0.00s)
+    --- PASS: TestPlatformSourceRejectionPrecedesEnhancementAndStorage/reddit=true/collect=false/source_url (0.00s)
+    --- PASS: TestPlatformSourceRejectionPrecedesEnhancementAndStorage/reddit=true/collect=false/final_url (0.00s)
+    --- PASS: TestPlatformSourceRejectionPrecedesEnhancementAndStorage/reddit=true/collect=false/resolved_url (0.00s)
+    --- PASS: TestPlatformSourceRejectionPrecedesEnhancementAndStorage/reddit=true/collect=false/empty_source (0.00s)
+    --- PASS: TestPlatformSourceRejectionPrecedesEnhancementAndStorage/reddit=true/collect=false/nil_content (0.00s)
+    --- PASS: TestPlatformSourceRejectionPrecedesEnhancementAndStorage/reddit=true/collect=true/source_url (0.00s)
+    --- PASS: TestPlatformSourceRejectionPrecedesEnhancementAndStorage/reddit=true/collect=true/final_url (0.00s)
+    --- PASS: TestPlatformSourceRejectionPrecedesEnhancementAndStorage/reddit=true/collect=true/resolved_url (0.00s)
+    --- PASS: TestPlatformSourceRejectionPrecedesEnhancementAndStorage/reddit=true/collect=true/empty_source (0.00s)
+    --- PASS: TestPlatformSourceRejectionPrecedesEnhancementAndStorage/reddit=true/collect=true/nil_content (0.00s)
+PASS
+ok  	github.com/originaleric/digcrawl/provider/platform	4.278s
+FAIL

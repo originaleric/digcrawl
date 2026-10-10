@@ -13,6 +13,7 @@ import (
 
 // ReadPost 读取 X/Twitter 帖子（仅首条 status，不展开 thread）。
 func ReadPost(ctx context.Context, in platform.ReadInput) (*platform.Content, error) {
+	ctx = browser.WithBrowseRetryContext(ctx)
 	return ReadPostWithConfig(ctx, in, config.Get().Platform.X)
 }
 
@@ -20,6 +21,7 @@ func ReadPost(ctx context.Context, in platform.ReadInput) (*platform.Content, er
 // of the Runtime that registered the provider. ReadPost remains the direct
 // compatibility entry point for callers that use the default profile.
 func ReadPostWithConfig(ctx context.Context, in platform.ReadInput, cfg config.XAPIConfig) (*platform.Content, error) {
+	ctx = browser.WithBrowseRetryContext(ctx)
 	url := strings.TrimSpace(in.URL)
 	if url == "" {
 		return nil, fmt.Errorf("url 不能为空")

@@ -14,6 +14,7 @@ import (
 
 	"github.com/originaleric/digcrawl/config"
 	"github.com/originaleric/digcrawl/protocol"
+	"github.com/originaleric/digcrawl/runtime/version"
 )
 
 func TestSocketPathCanonicalizesProfileSymlink(t *testing.T) {
@@ -254,7 +255,7 @@ func TestExecuteBoundsStalledBridgeRPCToCallPolicy(t *testing.T) {
 	server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/manifest":
-			_ = json.NewEncoder(w).Encode(protocol.ToolManifest{Type: protocol.TypeToolManifest})
+			_ = json.NewEncoder(w).Encode(protocol.ToolManifest{Type: protocol.TypeToolManifest, Runtime: version.RuntimeName, RuntimeVersion: version.RuntimeVersion, BuildID: version.BuildIdentity()})
 		case "/tools/call":
 			close(callStarted)
 			<-r.Context().Done()
@@ -306,7 +307,7 @@ func TestRemoteArtifactStoreBoundsStalledBridgeArtifactFetch(t *testing.T) {
 	server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/manifest":
-			_ = json.NewEncoder(w).Encode(protocol.ToolManifest{Type: protocol.TypeToolManifest})
+			_ = json.NewEncoder(w).Encode(protocol.ToolManifest{Type: protocol.TypeToolManifest, Runtime: version.RuntimeName, RuntimeVersion: version.RuntimeVersion, BuildID: version.BuildIdentity()})
 		case "/artifacts/stalled":
 			close(artifactStarted)
 			<-r.Context().Done()

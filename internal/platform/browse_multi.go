@@ -22,6 +22,7 @@ func BrowseWithFallbacks(
 	base BrowseSpec,
 	attempts []BrowseAttempt,
 ) (*browser.BrowserBrowseResponse, error) {
+	ctx = browser.WithBrowseRetryContext(ctx)
 	if len(attempts) == 0 {
 		resp, err := Browse(ctx, url, in, base)
 		return resp, err
@@ -38,6 +39,9 @@ func BrowseWithFallbacks(
 		resp, err := Browse(ctx, url, in, spec)
 		if err != nil {
 			lastErr = err
+			if ctx.Err() != nil || !browser.CanBrowseFallback(err) {
+				return nil, err
+			}
 			continue
 		}
 		return resp, nil

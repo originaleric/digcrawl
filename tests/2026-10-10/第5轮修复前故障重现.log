@@ -1,0 +1,67 @@
+=== RUN   TestDOMHelpersStopOnInfrastructureFailure
+=== RUN   TestDOMHelpersStopOnInfrastructureFailure/main/browser_connection_closed
+    browser_browse_test.go:112: cause lost or continued after failure: err=未能提取页面正文: EOF calls=5
+=== RUN   TestDOMHelpersStopOnInfrastructureFailure/summary/browser_connection_closed
+    browser_browse_test.go:112: cause lost or continued after failure: err=未能提取页面摘要 calls=7
+=== RUN   TestDOMHelpersStopOnInfrastructureFailure/main/cancelled
+    browser_browse_test.go:112: cause lost or continued after failure: err=未能提取页面正文 calls=5
+=== RUN   TestDOMHelpersStopOnInfrastructureFailure/summary/cancelled
+    browser_browse_test.go:112: cause lost or continued after failure: err=未能提取页面摘要 calls=7
+=== RUN   TestDOMHelpersStopOnInfrastructureFailure/main/send_queue
+    browser_browse_test.go:112: cause lost or continued after failure: err=未能提取页面正文 calls=5
+=== RUN   TestDOMHelpersStopOnInfrastructureFailure/summary/send_queue
+    browser_browse_test.go:112: cause lost or continued after failure: err=未能提取页面摘要 calls=7
+=== RUN   TestDOMHelpersStopOnInfrastructureFailure/main/send_write
+    browser_browse_test.go:112: cause lost or continued after failure: err=未能提取页面正文 calls=5
+=== RUN   TestDOMHelpersStopOnInfrastructureFailure/summary/send_write
+    browser_browse_test.go:112: cause lost or continued after failure: err=未能提取页面摘要 calls=7
+--- FAIL: TestDOMHelpersStopOnInfrastructureFailure (0.00s)
+    --- FAIL: TestDOMHelpersStopOnInfrastructureFailure/main/browser_connection_closed (0.00s)
+    --- FAIL: TestDOMHelpersStopOnInfrastructureFailure/summary/browser_connection_closed (0.00s)
+    --- FAIL: TestDOMHelpersStopOnInfrastructureFailure/main/cancelled (0.00s)
+    --- FAIL: TestDOMHelpersStopOnInfrastructureFailure/summary/cancelled (0.00s)
+    --- FAIL: TestDOMHelpersStopOnInfrastructureFailure/main/send_queue (0.00s)
+    --- FAIL: TestDOMHelpersStopOnInfrastructureFailure/summary/send_queue (0.00s)
+    --- FAIL: TestDOMHelpersStopOnInfrastructureFailure/main/send_write (0.00s)
+    --- FAIL: TestDOMHelpersStopOnInfrastructureFailure/summary/send_write (0.00s)
+=== RUN   TestCookieCollectionUsesCurrentPageContext
+    browser_browse_test.go:145: current login context not used: err=读取浏览器 cookie session 失败: context canceled seen=true
+--- FAIL: TestCookieCollectionUsesCurrentPageContext (0.00s)
+=== RUN   TestDiagnosticDoesNotMarkRejectedReadAsSuccess
+    browser_browse_test.go:155: rejected read diagnostic: records=[map[attempts:0 build_id:sha256:b9aec89870065d4347bd807e413e3ab93d07b2f939c03329d316be08fdd8f32c diagnostic_id:158c757d0492ce5c095b40a3 fallback_count:0 first_failure:<nil> handled:true max_retries:1 recovery_action:none recovery_status:not_attempted retry_count:0 status:success time:2026-10-10T13:00:10.046524Z]] err=<nil>
+--- FAIL: TestDiagnosticDoesNotMarkRejectedReadAsSuccess (0.02s)
+FAIL
+FAIL	github.com/originaleric/digcrawl/internal/browser	0.359s
+=== RUN   TestBrowseEntryOnlyRequestsNeededImageMetadata
+=== RUN   TestBrowseEntryOnlyRequestsNeededImageMetadata/text
+    entries_test.go:162: metadata requested=true want=false
+=== RUN   TestBrowseEntryOnlyRequestsNeededImageMetadata/media
+=== RUN   TestBrowseEntryOnlyRequestsNeededImageMetadata/explicit_ocr
+=== RUN   TestBrowseEntryOnlyRequestsNeededImageMetadata/root_ocr
+=== RUN   TestBrowseEntryOnlyRequestsNeededImageMetadata/skill_ocr
+=== RUN   TestBrowseEntryOnlyRequestsNeededImageMetadata/retain_images
+=== RUN   TestBrowseEntryOnlyRequestsNeededImageMetadata/collect_text
+    entries_test.go:162: metadata requested=true want=false
+=== RUN   TestBrowseEntryOnlyRequestsNeededImageMetadata/collect_media
+=== RUN   TestBrowseEntryOnlyRequestsNeededImageMetadata/collect_retain
+--- FAIL: TestBrowseEntryOnlyRequestsNeededImageMetadata (0.00s)
+    --- FAIL: TestBrowseEntryOnlyRequestsNeededImageMetadata/text (0.00s)
+    --- PASS: TestBrowseEntryOnlyRequestsNeededImageMetadata/media (0.00s)
+    --- PASS: TestBrowseEntryOnlyRequestsNeededImageMetadata/explicit_ocr (0.00s)
+    --- PASS: TestBrowseEntryOnlyRequestsNeededImageMetadata/root_ocr (0.00s)
+    --- PASS: TestBrowseEntryOnlyRequestsNeededImageMetadata/skill_ocr (0.00s)
+    --- PASS: TestBrowseEntryOnlyRequestsNeededImageMetadata/retain_images (0.00s)
+    --- FAIL: TestBrowseEntryOnlyRequestsNeededImageMetadata/collect_text (0.00s)
+    --- PASS: TestBrowseEntryOnlyRequestsNeededImageMetadata/collect_media (0.00s)
+    --- PASS: TestBrowseEntryOnlyRequestsNeededImageMetadata/collect_retain (0.00s)
+=== RUN   TestBrowseEntryChecksFinalURLAgainstCallPolicy
+=== RUN   TestBrowseEntryChecksFinalURLAgainstCallPolicy/configured
+    entries_test.go:225: final URL restriction bypassed: out=map[browser_diagnostics:map[] source_url:https://blocked.example/ text:foreign content title:] err=<nil>
+=== RUN   TestBrowseEntryChecksFinalURLAgainstCallPolicy/per_call
+    entries_test.go:225: final URL restriction bypassed: out=map[browser_diagnostics:map[] source_url:https://blocked.example/ text:foreign content title:] err=<nil>
+--- FAIL: TestBrowseEntryChecksFinalURLAgainstCallPolicy (0.00s)
+    --- FAIL: TestBrowseEntryChecksFinalURLAgainstCallPolicy/configured (0.00s)
+    --- FAIL: TestBrowseEntryChecksFinalURLAgainstCallPolicy/per_call (0.00s)
+FAIL
+FAIL	github.com/originaleric/digcrawl/provider/browser	0.646s
+FAIL

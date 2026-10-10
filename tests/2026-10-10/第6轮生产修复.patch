@@ -1,0 +1,229 @@
+--- a/internal/browser/browser_browse.go
++++ b/internal/browser/browser_browse.go
+@@ -234,6 +234,15 @@
+ 	if err := policy.ValidateURLDomain(finalURL, rootCfg.Gateway.AllowedDomains, nil); err != nil {
+ 		return nil, err
+ 	}
++	// Keep the main document identity local to this attempt. URL comparison
++	// detects SPA navigation; the loader also detects a reload at the same URL.
++	frame, frameErr := (proto.PageGetFrameTree{}).Call(page)
++	if frameErr != nil {
++		return nil, newBrowseError(ErrorBrowserUnavailable, "read_page", "确认页面文档失败", frameErr, false)
++	}
++	if frame.FrameTree == nil || frame.FrameTree.Frame == nil || frame.FrameTree.Frame.LoaderID == "" {
++		return nil, newBrowseError(ErrorBrowserContentNotFound, "read_page", "无法确认页面文档", nil, false)
++	}
+ 	title := strings.TrimSpace(info.TargetInfo.Title)
+ 	resp = &BrowserBrowseResponse{
+ 		URL:   finalURL,
+@@ -330,7 +339,24 @@
+ 	if err := policy.ValidateURLDomain(info.TargetInfo.URL, rootCfg.Gateway.AllowedDomains, nil); err != nil {
+ 		return nil, err
+ 	}
+-	resp.URL = strings.TrimSpace(info.TargetInfo.URL)
++	finalFrame, frameErr := (proto.PageGetFrameTree{}).Call(page)
++	if frameErr != nil {
++		return nil, newBrowseError(ErrorBrowserUnavailable, "read_page", "确认页面最终文档失败", frameErr, false)
++	}
++	if finalFrame.FrameTree == nil || finalFrame.FrameTree.Frame == nil || finalFrame.FrameTree.Frame.LoaderID == "" {
++		return nil, newBrowseError(ErrorBrowserContentNotFound, "read_page", "无法确认页面最终文档", nil, false)
++	}
++	if strings.TrimSpace(info.TargetInfo.URL) != finalURL ||
++		frame.FrameTree.Frame.URL+frame.FrameTree.Frame.URLFragment != finalURL ||
++		finalFrame.FrameTree.Frame.URL+finalFrame.FrameTree.Frame.URLFragment != finalURL ||
++		frame.FrameTree.Frame.ID != finalFrame.FrameTree.Frame.ID ||
++		frame.FrameTree.Frame.LoaderID != finalFrame.FrameTree.Frame.LoaderID ||
++		frame.FrameTree.Frame.URL != finalFrame.FrameTree.Frame.URL ||
++		frame.FrameTree.Frame.URLFragment != finalFrame.FrameTree.Frame.URLFragment {
++		e := newBrowseError(ErrorBrowserContentNotFound, "read_page", "读取期间页面已切换，请等待页面稳定后重新读取", nil, false).(*BrowseError)
++		e.Diagnostics = map[string]any{"operation": "read_page", "reason": "page_changed"}
++		return nil, e
++	}
+ 	resp.Title = strings.TrimSpace(info.TargetInfo.Title)
+ 	return resp, nil
+ }
+--- a/internal/browser/browse_retry.go
++++ b/internal/browser/browse_retry.go
+@@ -101,6 +101,10 @@
+ 		action = "retry_read"
+ 		instruction = "核对链接与内容选择器，修正后再读取"
+ 	}
++	if ctx.Err() == nil && e.Diagnostics["reason"] == "page_changed" {
++		action = "retry_read"
++		instruction = "页面在提取期间发生切换；等待页面稳定后重新读取，本次混合内容已丢弃"
++	}
+ 	if browseCauseReason(e.Cause) == "external_target_cleanup_required" {
+ 		action = "cleanup_external_browser"
+ 		instruction = "清理本次读取遗留的外部 CDP 页面；无法确认时重启该外部浏览器，再重启 DigCrawl 后读取"
+--- a/internal/platform/browse.go
++++ b/internal/platform/browse.go
+@@ -25,7 +25,7 @@
+ 	if waitSelector == "" {
+ 		waitSelector = spec.WaitSelector
+ 	}
+-	return browser.BrowserBrowse(ctx, &browser.BrowserBrowseRequest{
++	resp, err := browser.BrowserBrowse(ctx, &browser.BrowserBrowseRequest{
+ 		URL:               url,
+ 		Action:            action,
+ 		CaptureScreenshot: in.IncludeScreenshot,
+@@ -36,4 +36,12 @@
+ 		MetadataScript:    spec.MetadataScript,
+ 		CaptureMedia:      spec.CaptureMedia,
+ 	})
++	if err != nil {
++		return nil, err
++	}
++	// Many adapters keep the original link in SourceURL. Preserve the browser's
++	// confirmed source in the existing metadata field for provider policy checks.
++	resp.Metadata = EnsureMeta(resp.Metadata)
++	resp.Metadata["final_url"] = resp.URL
++	return resp, nil
+ }
+--- a/provider/platform/executor.go
++++ b/provider/platform/executor.go
+@@ -209,6 +209,14 @@
+ 			}
+ 			return nil, nil, err
+ 		}
++		if content == nil {
++			return nil, nil, fmt.Errorf("%s: platform reader returned no content", policy.CodeInvalidInput)
++		}
++		if err := validatePlatformURL(content.SourceURL, call, configDomains, defaultDomains,
++			iplatform.MetaString(content.PlatformMetadata, "final_url"),
++			iplatform.MetaString(content.PlatformMetadata, "resolved_url")); err != nil {
++			return nil, nil, err
++		}
+ 		var artifacts []protocol.Artifact
+ 		var localVideoPaths []string
+ 		var localImages []skill.LocalImageInput
+@@ -377,12 +385,23 @@
+ 	return store.Put(ctx, artifact.NewID(), "video/mp4", filepath.Base(path), data)
+ }
+ 
+-func validatePlatformURL(rawURL string, call *protocol.ToolCall, configDomains, defaultDomains []string) error {
++func validatePlatformURL(rawURL string, call *protocol.ToolCall, configDomains, defaultDomains []string, resolvedURLs ...string) error {
+ 	domains := policy.MergeDomains(&call.Policy, configDomains)
+ 	if len(domains) == 0 {
+ 		domains = defaultDomains
+ 	}
+-	return policy.ValidateURLDomain(rawURL, domains, nil)
++	if err := policy.ValidateURLDomain(rawURL, domains, nil); err != nil {
++		return err
++	}
++	for _, resolvedURL := range resolvedURLs {
++		if strings.TrimSpace(resolvedURL) == "" {
++			continue
++		}
++		if err := policy.ValidateURLDomain(resolvedURL, domains, nil); err != nil {
++			return err
++		}
++	}
++	return nil
+ }
+ 
+ // activeSkillMediaRetentionConfig takes the local media settings used by a
+--- a/provider/platform/reddit.go
++++ b/provider/platform/reddit.go
+@@ -15,6 +15,7 @@
+ 	"github.com/originaleric/digcrawl/protocol"
+ 	"github.com/originaleric/digcrawl/runtime/artifact"
+ 	"github.com/originaleric/digcrawl/runtime/executor"
++	"github.com/originaleric/digcrawl/runtime/policy"
+ 	"github.com/originaleric/digcrawl/runtime/registry"
+ 	"github.com/originaleric/digcrawl/skill"
+ )
+@@ -159,6 +160,14 @@
+ 			}
+ 			return nil, nil, err
+ 		}
++		if content == nil {
++			return nil, nil, fmt.Errorf("%s: platform reader returned no content", policy.CodeInvalidInput)
++		}
++		if err := validatePlatformURL(content.SourceURL, call, configDomains, redditDefaultDomains,
++			platform.MetaString(content.PlatformMetadata, "final_url"),
++			platform.MetaString(content.PlatformMetadata, "resolved_url")); err != nil {
++			return nil, nil, err
++		}
+ 		out := platform.ApplyFormats(content, in.Format)
+ 		if d := browser.BrowseDiagnostics(ctx); d != nil && d["attempts"].(int) > 0 {
+ 			out["browser_diagnostics"] = d
+--- a/internal/browser/browse_diagnostics.go
++++ b/internal/browser/browse_diagnostics.go
+@@ -45,6 +45,9 @@
+ 		d["code"] = browseErr.Code
+ 		d["stage"] = browseErr.Stage
+ 		d["reason"] = browseCauseReason(browseErr.Cause)
++		if reason, ok := browseErr.Diagnostics["reason"].(string); ok {
++			d["reason"] = reason
++		}
+ 	}
+ 	writeBrowserDiagnostic(d)
+ }
+--- a/internal/browser/accessibility.go
++++ b/internal/browser/accessibility.go
+@@ -74,7 +74,7 @@
+ // 返回节点列表和引用到NodeID的映射
+ func FetchAXTree(ctx context.Context, page *rod.Page) ([]AXNode, map[string]int64, error) {
+ 	// 启用无障碍域
+-	_, err := page.Call(ctx, "", "Accessibility.enable", nil)
++	_, err := page.Call(ctx, string(page.SessionID), "Accessibility.enable", nil)
+ 	if err != nil {
+ 		return nil, nil, fmt.Errorf("启用无障碍域失败: %w", err)
+ 	}
+@@ -83,7 +83,7 @@
+ 	var result struct {
+ 		Nodes json.RawMessage `json:"nodes"`
+ 	}
+-	res, err := page.Call(ctx, "", "Accessibility.getFullAXTree", nil)
++	res, err := page.Call(ctx, string(page.SessionID), "Accessibility.getFullAXTree", nil)
+ 	if err != nil {
+ 		return nil, nil, fmt.Errorf("获取无障碍树失败: %w", err)
+ 	}
+--- a/provider/platform/feed.go
++++ b/provider/platform/feed.go
+@@ -2,6 +2,9 @@
+ 
+ import (
+ 	"context"
++	"fmt"
++	"net/http"
++	"time"
+ 
+ 	"github.com/originaleric/digcrawl/internal/feed"
+ 	"github.com/originaleric/digcrawl/internal/platform"
+@@ -23,9 +26,21 @@
+ }
+ 
+ func readFeed(ctx context.Context, in platform.ReadInput) (*platform.Content, error) {
+-	doc, err := feed.Service{}.Read(ctx, in.URL)
++	finalURL := in.URL
++	// The feed's original link is preserved in SourceURL. Use the existing
++	// client option to retain its actual HTTP source for the shared policy gate.
++	client := &http.Client{Timeout: 20 * time.Second, CheckRedirect: func(req *http.Request, via []*http.Request) error {
++		if len(via) >= 10 {
++			return fmt.Errorf("stopped after 10 redirects")
++		}
++		finalURL = req.URL.String()
++		return nil
++	}}
++	doc, err := (feed.Service{Client: client}).Read(ctx, in.URL)
+ 	if err != nil {
+ 		return nil, err
+ 	}
+-	return feed.ToContent(doc, in.URL), nil
++	content := feed.ToContent(doc, in.URL)
++	content.PlatformMetadata["final_url"] = finalURL
++	return content, nil
+ }
+--- a/provider/browser/entries.go
++++ b/provider/browser/entries.go
+@@ -137,6 +137,9 @@
+ 			}
+ 			if resp.Summary != "" {
+ 				out["summary"] = resp.Summary
++			}
++			if strings.EqualFold(strings.TrimSpace(in.Mode), "snapshot") {
++				out["elements"] = append([]browser.AXNode{}, resp.Elements...)
+ 			}
+ 			if returnMedia || ocrPolicy.requested || retainProviderImages {
+ 				if media := browserImageMedia(resp.Metadata); len(media) > 0 {

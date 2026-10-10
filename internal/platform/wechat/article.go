@@ -33,6 +33,7 @@ var articleBrowseFn = browseArticleWithFallbacks
 
 // ReadArticle 读取微信公众号文章。
 func ReadArticle(ctx context.Context, in platform.ReadInput) (*platform.Content, error) {
+	ctx = browser.WithBrowseRetryContext(ctx)
 	url := strings.TrimSpace(in.URL)
 	if url == "" {
 		return nil, fmt.Errorf("url 不能为空")
@@ -129,6 +130,9 @@ func browseArticleWithFallbacks(ctx context.Context, url string, in platform.Rea
 		resp, err := platform.Browse(ctx, url, in, spec)
 		if err != nil {
 			lastErr = err
+			if ctx.Err() != nil || !browser.CanBrowseFallback(err) {
+				return nil, "", err
+			}
 			continue
 		}
 		return resp, spec.ContentSelector, nil

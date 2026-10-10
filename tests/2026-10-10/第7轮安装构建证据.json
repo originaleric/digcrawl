@@ -1,0 +1,9 @@
+{
+  "installed_build_id": "sha256:8a2983b0363f61aa5286e2e230ee91661cec6079cefc9b1e078db8e6429de5e3",
+  "previous_build_id": "sha256:e2a343c1e79dc7f30070599d9d435db6750dd9d876b476df7a573bdad7fbf1d7",
+  "backup": "/private/tmp/digcrawl.pre-round7",
+  "backup_build_id": "sha256:e2a343c1e79dc7f30070599d9d435db6750dd9d876b476df7a573bdad7fbf1d7",
+  "terminated_exact_profile_mcp_clients": [],
+  "profile_unchanged": true,
+  "bridge_restart_exit": 0
+}

@@ -59,32 +59,34 @@ func IsFeedURL(rawURL string) bool {
 }
 
 func (s Service) Read(ctx context.Context, rawURL string) (*Document, error) {
-	data, _, err := s.Fetch(ctx, rawURL)
+	data, _, finalURL, err := s.Fetch(ctx, rawURL)
 	if err != nil {
 		return nil, err
 	}
-	doc, err := Parse(data, rawURL)
+	doc, err := Parse(data, finalURL)
 	if err == nil {
 		return doc, nil
 	}
-	if sm, smErr := ParseSitemap(data, rawURL); smErr == nil {
+	if sm, smErr := ParseSitemap(data, finalURL); smErr == nil {
 		return sm, nil
 	}
 	return nil, err
 }
 
 func (s Service) ReadSitemap(ctx context.Context, rawURL string) (*Document, error) {
-	data, _, err := s.Fetch(ctx, rawURL)
+	data, _, finalURL, err := s.Fetch(ctx, rawURL)
 	if err != nil {
 		return nil, err
 	}
-	return ParseSitemap(data, rawURL)
+	return ParseSitemap(data, finalURL)
 }
 
-func (s Service) Fetch(ctx context.Context, rawURL string) ([]byte, string, error) {
+// Fetch returns the actual response URL as well as the body and content type.
+// Every feed consumer gets the same source truth, including redirects.
+func (s Service) Fetch(ctx context.Context, rawURL string) ([]byte, string, string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
-		return nil, "", err
+		return nil, "", "", err
 	}
 	ua := strings.TrimSpace(s.UserAgent)
 	if ua == "" {
@@ -93,27 +95,30 @@ func (s Service) Fetch(ctx context.Context, rawURL string) ([]byte, string, erro
 	req.Header.Set("User-Agent", ua)
 	resp, err := s.httpClient().Do(req)
 	if err != nil {
-		return nil, "", err
+		return nil, "", "", err
 	}
 	defer resp.Body.Close()
+	if resp.Request == nil || resp.Request.URL == nil || resp.Request.URL.String() == "" {
+		return nil, "", "", fmt.Errorf("feed response has no confirmed source URL")
+	}
 	maxBytes := s.MaxBytes
 	if maxBytes <= 0 {
 		maxBytes = 5 * 1024 * 1024
 	}
 	data, err := io.ReadAll(io.LimitReader(resp.Body, maxBytes))
 	if err != nil {
-		return nil, "", err
+		return nil, "", "", err
 	}
 	if resp.StatusCode == http.StatusTooManyRequests {
-		return nil, "", fmt.Errorf("RATE_LIMITED: feed request returned 429")
+		return nil, "", "", fmt.Errorf("RATE_LIMITED: feed request returned 429")
 	}
 	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-		return nil, "", fmt.Errorf("LOGIN_REQUIRED: feed request returned %d", resp.StatusCode)
+		return nil, "", "", fmt.Errorf("LOGIN_REQUIRED: feed request returned %d", resp.StatusCode)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, "", fmt.Errorf("feed request returned %d", resp.StatusCode)
+		return nil, "", "", fmt.Errorf("feed request returned %d", resp.StatusCode)
 	}
-	return data, resp.Header.Get("Content-Type"), nil
+	return data, resp.Header.Get("Content-Type"), resp.Request.URL.String(), nil
 }
 
 func (s Service) httpClient() *http.Client {
@@ -250,6 +255,7 @@ func ToContent(doc *Document, sourceURL string) *platform.Content {
 		Markdown:     documentMarkdown(doc),
 		CapturedAt:   platform.NowRFC3339(),
 		PlatformMetadata: map[string]any{
+			"final_url":         doc.URL,
 			"extraction_source": "rss",
 			"entry_count":       len(doc.Entries),
 			"entries":           entries,

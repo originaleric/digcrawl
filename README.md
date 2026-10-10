@@ -209,6 +209,8 @@ Codex and Claude Code examples are available in the [Skill directory](./.agents/
 
 The default Skill is intentionally keyless. It uses the host agent’s multimodal model for page screenshots and image understanding; optional local ASR remains explicit and requires local dependencies and configuration.
 
+Browser reads and platform fallbacks share one total browser deadline and at most one automatic fault retry. Cancellation, send-queue contention, login requirements, and page changes do not trigger unconditional replay. Navigation or document reload during extraction discards the mixed result. Confirmed browser, Feed/Reddit RSS, and merged Bilibili media sources are checked against the call policy before delivery, downloads, or storage. For `BROWSER_*` failures, `error_details` includes the failed stage, recovery outcome, `next_actions`, and `diagnostic_id`; an agent receiving `handled: true` should complete the indicated prerequisite before starting a new read. See the [troubleshooting and upgrade steps](./USAGE.md#浏览器超时或反复失败).
+
 ## Local-First Security
 
 DigCrawl runs on the user’s machine and is designed to make its access boundaries visible:
@@ -220,30 +222,6 @@ DigCrawl runs on the user’s machine and is designed to make its access boundar
 - Artifacts, audit records, and optional retention policies are managed separately from collected output.
 
 Read the [runtime documentation](./runtime/README.md) before exposing a Gateway or Collector beyond a trusted local environment.
-
-## Latest Highlights
-
-| Date | Highlight | Why it matters |
-| --- | --- | --- |
-| 2026-09-24 | Rebuilt the local Bridge around one lifecycle lock and one managed worker group. | OCR failures degrade as metadata instead of failing a completed read; one lost CDP connection recovers in-request; concurrent MCP callers converge on one worker, while stop/restart directly terminates only the verified current group. |
-| 2026-09-20 | Simplified the single-user MCP Bridge lifecycle and verified a Toutiao article read with configured image OCR. | Each profile keeps one on-demand Bridge while disposable stdio proxies are reclaimed; direct stop/restart releases the browser before replacement, avoiding both idle-request failures and accumulated browser-owning processes. |
-| 2026-09-06 | Added explicit provider-scoped local video retention. | Users can opt supported platforms into saving one validated local video; API-first page content remains authoritative, and Collect still exports a successful read when optional retention fails. |
-| 2026-09-04 | Unified local ASR setup, configuration scopes, and readiness checks. | Release users can install faster-whisper without Go; setup, transcription, and `asr check` share one root/Skill cache domain, while custom runners are reported as externally managed rather than falsely ready. |
-| 2026-08-31 | Stabilized browser sessions and Watchlist login recovery. | Canonical sessions prevent background readers from overwriting a completed login; every Watchlist entry generates its recovery command from the running executable and loaded configuration. |
-| 2026-08-30 | Added direct local-file and direct-media-URL video analysis. | `digcrawl video` reuses bounded ASR and frame OCR, cleans up URL downloads by default, and can use the user Skill profile without weakening an explicit project configuration. |
-| 2026-08-29 | Added opt-in Watchlist source/item concurrency with safe collection coordination. | Discovery and processing can use bounded goroutines while content keys, output paths, index.json, and platform request spacing remain controlled. |
-| 2026-08-26 | Added explicit Skill video-retention preferences and safe profile updates. | Agents can retain or clean up downloaded videos and set a download cap without editing YAML; concurrent local profile writes are serialized and cancellable. |
-| 2026-08-26 | Finalized execution isolation and external-ID boundaries for video understanding. | Each Skill media operation owns a distinct workspace; external call IDs correlate requests only and cannot overwrite local media or manifests. |
-| 2026-08-26 | Decoupled downloaded-video understanding for YouTube, Skill, and Collect. | Providers own download/cleanup; ASR and frame OCR accept only a local video path and return content. MP4 retention is explicit opt-in and Collect export remains a separate delivery path. |
-| 2026-08-25 | Added public YouTube video/Shorts reading, caption enrichment, and Watchlist discovery. | URLs are normalized and player identity is verified before content is accepted. |
-| 2026-08-24 | Video-frame OCR was production-validated with an OpenAI-compatible vision provider. | Downloaded local videos can yield burned-in subtitle and on-screen text even when ASR has no usable speech; blank frames remain normal empty results rather than provider failures. |
-| 2026-08-17 | Browser recovery, CDP service management, and local ASR startup were rebuilt around explicit lifecycle and cache state. | Browser profiles are not relaunched before they are released; Playwright cache paths are discovered dynamically; existing local ASR models and upgraded runners remain usable across restarts. |
-| 2026-08 | OCR uses DigCrawl’s OpenAI-compatible vision client and remains opt-in. | Image enrichment stays independent of DigFlow and does not require a bundled key; downloaded local videos can additionally use explicit, bounded frame OCR for burned-in subtitles. |
-| 2026-07 | ASR supports API-compatible and local `faster-whisper` providers. | Video and audio collections can include explicit, locally controlled transcripts. |
-| 2026-07 | Watchlists gained persistent sources, task scheduling, summaries, and notifications. | Sources can be monitored repeatedly instead of collected only once. |
-| 2026-07 | Reddit, RSS/Atom, Bilibili, Weibo, Kuaishou, Zhihu, Threads, and Instagram support expanded. | More source types share the same normalized collection pipeline. |
-
-For operational details and the full change history, consult the [usage guide](./USAGE.md) and project documentation.
 
 ## Architecture and Interfaces
 
@@ -285,3 +263,13 @@ DigCrawl is a local content tool. You are responsible for complying with the ter
 ## License
 
 [MIT](./LICENSE)
+
+### Browser recovery and diagnostics
+
+`BrowserBrowse` owns browser fault retries. Platform fallbacks share at most one additional attempt within one total browser deadline; platform and Collector retry settings no longer multiply these attempts. Normal content/selector fallbacks are counted separately. Media retention, OCR and ASR failures after a successful read do not replay the whole handler.
+
+Read `browser_diagnostics` on success and `error_details` on failure for attempt counts, recovery status and next actions. `handled: true` means the invocation already made its retry decision; agents must complete the indicated prerequisite before a new read. A CDP send-queue timeout is local contention and does not restart a healthy browser.
+
+`digcrawl doctor --config <actual profile>` checks dependencies, Bridge transport, build identity and browser operations separately. The existing Bridge creates and closes a blank test page; doctor never starts a competing browser. Before the first MCP connection an unreachable Bridge means the operation check was not executed. `digcrawl doctor --diagnostic-id <returned ID>` reads a bounded safe local summary.
+
+After upgrading, close old DigCrawl MCP connections, run the installed binary's `digcrawl bridge restart --config <actual profile>`, then reconnect. Restart interrupts in-flight calls; clients never automatically swap Bridge versions. Occupied or unverified profiles require explicit resolution; login data and cookies are not deleted as a directory.

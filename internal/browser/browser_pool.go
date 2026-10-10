@@ -3,6 +3,7 @@ package browser
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -22,6 +23,7 @@ import (
 	"github.com/go-rod/rod/lib/cdp"
 	"github.com/go-rod/rod/lib/launcher"
 	"github.com/go-rod/rod/lib/launcher/flags"
+	"github.com/go-rod/rod/lib/proto"
 	"github.com/go-rod/stealth"
 	"github.com/originaleric/digcrawl/config"
 )
@@ -42,9 +44,11 @@ type browserManager struct {
 	// active is the only connection allowed to receive new page leases. A
 	// retired connection remains visible separately until every lease has been
 	// returned and its owner-specific teardown has completed.
-	active   *browserConnection
-	retiring *browserConnection
-	opening  chan struct{}
+	active        *browserConnection
+	retiring      *browserConnection
+	opening       chan struct{}
+	openingCancel context.CancelFunc
+	openingErr    *error
 	// openFn is injected only by lifecycle tests. Keeping the state machine
 	// independent from Chromium makes teardown/replacement invariants testable.
 	openFn func(context.Context) (*browserConnection, error)
@@ -52,7 +56,7 @@ type browserManager struct {
 	// request recovery without a real Chromium process. Production always uses
 	// acquire/release below, so connection ownership remains in this manager.
 	acquireSessionFn func(context.Context) (*browserSession, error)
-	releaseSessionFn func(*browserSession)
+	releaseSessionFn func(*browserSession) error
 	slots            chan struct{}
 	sessions         map[uint64]*browserSession
 	nextID           uint64
@@ -68,12 +72,11 @@ func (m *browserManager) acquireSession(ctx context.Context) (*browserSession, e
 	return m.acquire(ctx)
 }
 
-func (m *browserManager) releaseSession(session *browserSession) {
+func (m *browserManager) releaseSession(session *browserSession) error {
 	if m != nil && m.releaseSessionFn != nil {
-		m.releaseSessionFn(session)
-		return
+		return m.releaseSessionFn(session)
 	}
-	m.release(session)
+	return m.release(session)
 }
 
 var (
@@ -99,10 +102,7 @@ func getBrowserManager() *browserManager {
 // return their leases. The explicit Bridge lifecycle uses ShutdownImmediately
 // when it intentionally cancels those callers first.
 func Shutdown(ctx context.Context) error {
-	if globalBrowserMgr == nil {
-		return nil
-	}
-	return globalBrowserMgr.shutdown(ctx)
+	return getBrowserManager().shutdown(ctx)
 }
 
 // ShutdownImmediately forcibly closes the browser owned by this process even
@@ -111,10 +111,7 @@ func Shutdown(ctx context.Context) error {
 // already been closed, so preserving that caller would only make a one-user
 // restart race its replacement. Attached CDP browsers remain untouched.
 func ShutdownImmediately(ctx context.Context) error {
-	if globalBrowserMgr == nil {
-		return nil
-	}
-	return globalBrowserMgr.shutdownImmediately(ctx)
+	return getBrowserManager().shutdownImmediately(ctx)
 }
 
 func normalizeLocalBrowserConfig(cfg config.LocalBrowserConfig) config.LocalBrowserConfig {
@@ -478,6 +475,8 @@ func browserProcessOwned(cfg config.LocalBrowserConfig) bool {
 func (m *browserManager) acquire(ctx context.Context) (*browserSession, error) {
 	select {
 	case m.slots <- struct{}{}:
+	case <-m.stopCh:
+		return nil, fmt.Errorf("browser manager stopped")
 	case <-ctx.Done():
 		return nil, fmt.Errorf("等待浏览器并发槽位超时: %w", ctx.Err())
 	}
@@ -488,48 +487,78 @@ func (m *browserManager) acquire(ctx context.Context) (*browserSession, error) {
 		return nil, err
 	}
 
-	page, err := stealth.Page(conn.browser)
+	pageCtx, cancel := browserOperationContext(ctx, 5*time.Second)
+	pageStart := time.Now()
+	page, err := createStealthPage(pageCtx, conn.browser)
+	recordBrowserStage(ctx, "create_page", conn, time.Since(pageStart), err)
+	cancel()
+	if err == nil {
+		err = ctx.Err()
+	}
 	if err != nil {
-		m.retireConnection(conn)
-		m.releaseConnection(conn)
-		conn, err = m.acquireConnection(ctx)
-		if err != nil {
-			<-m.slots
-			return nil, err
+		if page != nil {
+			if closeErr := closePageWithin(page, 3*time.Second); closeErr != nil {
+				conn.rememberUnreleasedTarget(closeErr)
+				m.retireConnection(conn)
+			}
 		}
-		page, err = stealth.Page(conn.browser)
-		if err != nil {
+		// A timed-out create may have reached Chrome without returning its ID.
+		// Do not reuse that uncertain owner. A queue failure never wrote a target.
+		uncertainTarget := strings.HasPrefix(err.Error(), "create_target:") && !isLocalBrowserFailure(nil, err) && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || isConnectionFailure(err))
+		if uncertainTarget || strings.HasPrefix(err.Error(), "close_target:") {
+			conn.rememberUnreleasedTarget(err)
+		}
+		if isConnectionFailure(err) || uncertainTarget || strings.HasPrefix(err.Error(), "close_target:") {
 			m.retireConnection(conn)
-			m.releaseConnection(conn)
-			<-m.slots
-			return nil, fmt.Errorf("创建 stealth 页面失败: %w", err)
 		}
+		m.releaseConnection(conn)
+		<-m.slots
+		if cleanupErr := conn.externalCleanupError(); cleanupErr != nil {
+			err = cleanupErr
+		}
+		return nil, fmt.Errorf("create_page: %w", err)
 	}
 
 	id := atomic.AddUint64(&m.nextID, 1)
 	s := &browserSession{
 		id:        id,
-		page:      page,
+		page:      page.Context(ctx),
 		conn:      conn,
 		startedAt: time.Now(),
 	}
 
 	m.mu.Lock()
+	select {
+	case <-m.stopCh:
+		err = fmt.Errorf("browser manager stopped before page publication")
+	default:
+		err = ctx.Err()
+	}
+	if err != nil {
+		m.mu.Unlock()
+		if cleanupErr := m.release(s); browseCauseReason(cleanupErr) == "external_target_cleanup_required" {
+			err = cleanupErr
+		}
+		return nil, err
+	}
 	m.sessions[id] = s
 	m.mu.Unlock()
 	return s, nil
 }
 
-func (m *browserManager) release(s *browserSession) {
+func (m *browserManager) release(s *browserSession) error {
 	if s == nil || !s.released.CompareAndSwap(false, true) {
-		return
+		return nil
 	}
 
+	var closeErr error
 	if s.page != nil {
 		// A renderer crash can leave the CDP close command unanswered. Releasing
 		// a pool slot must never inherit that stuck request and hold the caller
 		// (or the next crawl) indefinitely.
 		if err := closePageWithin(s.page, 3*time.Second); err != nil {
+			closeErr = err
+			s.conn.rememberUnreleasedTarget(err)
 			// A page that cannot acknowledge close may keep renderer/CDP state
 			// behind after its slot is returned. Retire the shared connection so
 			// it drains safely instead of reusing an uncertain process forever.
@@ -546,6 +575,10 @@ func (m *browserManager) release(s *browserSession) {
 	case <-m.slots:
 	default:
 	}
+	if err := s.conn.externalCleanupError(); err != nil {
+		return err
+	}
+	return closeErr
 }
 
 func closePageWithin(page *rod.Page, timeout time.Duration) error {
@@ -557,7 +590,42 @@ func closePageWithin(page *rod.Page, timeout time.Duration) error {
 	// Rod binds CDP calls to the page context. Using a timed clone keeps a
 	// renderer crash from blocking a pool release without leaving one goroutine
 	// behind for every stuck Close call.
-	return page.Context(ctx).Close()
+	err := page.Context(ctx).Close()
+	if err == nil {
+		return nil
+	}
+	// Page.Close can stall on a renderer/beforeunload handler. Target.closeTarget
+	// closes only this known target, through the browser session with a fresh bound.
+	return closeTargetWithin(page.Browser(), page.TargetID, timeout)
+}
+
+func closeTargetWithin(browser *rod.Browser, id proto.TargetTargetID, timeout time.Duration) error {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	b := browser.Context(ctx)
+	result, err := (proto.TargetCloseTarget{TargetID: id}).Call(b)
+	if err == nil && result != nil && result.Success {
+		b.RemoveState(id)
+		return nil
+	}
+	if err == nil {
+		err = fmt.Errorf("target close was not acknowledged")
+	}
+	targets, listErr := (proto.TargetGetTargets{}).Call(b)
+	if listErr == nil {
+		found := false
+		for _, target := range targets.TargetInfos {
+			if target.TargetID == id {
+				found = true
+				break
+			}
+		}
+		if !found {
+			b.RemoveState(id)
+			return nil
+		}
+	}
+	return errors.Join(err, listErr)
 }
 
 // browserOperationContext keeps CDP setup and health checks bounded by both
@@ -588,8 +656,7 @@ func connectCDPBrowser(ctx context.Context, controlURL string, timeout time.Dura
 	browser := rod.New().
 		Context(context.Background()).
 		ControlURL("").
-		Client(cdp.New().Start(transport)).
-		Timeout(timeout)
+		Client(cdp.New().Start(&boundedCDPTransport{ws: transport, conn: dialer.conn, close: func() { safeCloseCDPTransport(transport) }, sender: make(chan struct{}, 1), limit: 2 * time.Second}))
 	if err := connectBrowserWithin(ctx, browser, transport); err != nil {
 		safeCloseCDPTransport(transport)
 		return nil, nil, fmt.Errorf("连接 Chromium CDP 失败: %w", err)
@@ -674,10 +741,11 @@ func safeCloseCDPTransport(transport *cdp.WebSocket) {
 }
 
 func (m *browserManager) openBrowserConnection(ctx context.Context) (*browserConnection, error) {
-	operationCtx, cancel := browserOperationContext(ctx, time.Duration(m.cfg.TotalTimeoutSec)*time.Second)
+	operationCtx, cancel := browserOperationContext(ctx, 10*time.Second)
 	defer cancel()
 	owned := browserProcessOwned(m.cfg)
 	var started *launcher.Launcher
+	var profileLock *ProfileLock
 	profileDir := strings.TrimSpace(m.cfg.UserDataDir)
 	cdpPort := 0
 	var controlURL string
@@ -692,6 +760,17 @@ func (m *browserManager) openBrowserConnection(ctx context.Context) (*browserCon
 			return nil, fmt.Errorf("连接已有 CDP 浏览器失败: %w", err)
 		}
 	} else {
+		if profileDir != "" {
+			profileLock, profileDir, err = acquireOwnedProfile(profileDir)
+			if err != nil {
+				return nil, err
+			}
+			defer func() {
+				if started == nil && profileLock != nil {
+					_ = profileLock.Close()
+				}
+			}()
+		}
 		started = launcher.New().
 			Context(operationCtx).
 			NoSandbox(true).
@@ -701,8 +780,11 @@ func (m *browserManager) openBrowserConnection(ctx context.Context) (*browserCon
 			started = started.Bin(m.cfg.ChromePath)
 		}
 		if profileDir != "" {
-			if err := os.MkdirAll(profileDir, 0o755); err != nil {
-				return nil, fmt.Errorf("创建 UserDataDir 失败: %w", err)
+			if _, err := prepareInteractiveLoginProfile(profileDir, nil); err != nil {
+				if profileLock != nil {
+					_ = profileLock.Close()
+				}
+				return nil, err
 			}
 			started = started.UserDataDir(profileDir)
 		}
@@ -718,22 +800,39 @@ func (m *browserManager) openBrowserConnection(ctx context.Context) (*browserCon
 			started = started.Proxy(proxy)
 		}
 		started = applyBackgroundLauncherPolicy(started, m.cfg.ExtraArgs)
-		controlURL, err = started.Launch()
+		controlURL, err = launchBrowser(started)
 	}
 	if err != nil {
-		return nil, fmt.Errorf("启动 Chromium 失败: %w", err)
+		c := newBrowserConnection(nil, nil, started, owned, profileDir, cdpPort)
+		c.profileLock = profileLock
+		return c, fmt.Errorf("启动 Chromium 失败: %w", err)
 	}
 	browser, transport, err := connectCDPBrowser(operationCtx, controlURL, time.Duration(m.cfg.TotalTimeoutSec)*time.Second)
 	if err != nil {
-		if started != nil {
-			started.Kill()
-			if releaseErr := waitForBrowserResourceRelease(operationCtx, profileDir, cdpPort); releaseErr != nil {
-				return newBrowserConnection(nil, nil, started, true, profileDir, cdpPort), fmt.Errorf("cleanup failed browser launch: %w", releaseErr)
+		c := newBrowserConnection(nil, nil, started, owned, profileDir, cdpPort)
+		c.profileLock = profileLock
+		return c, err
+	}
+
+	c := newBrowserConnection(browser, transport, started, owned, profileDir, cdpPort)
+	c.profileLock = profileLock
+	return c, nil
+}
+
+// Rod panics on a discovery response-body read failure. Convert that startup
+// failure to the existing owner-retaining error path instead of losing the
+// process and profile guard when the bounded HTTP read expires.
+func launchBrowser(started *launcher.Launcher) (controlURL string, err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			if cause, ok := recovered.(error); ok {
+				err = cause
+			} else {
+				err = fmt.Errorf("Chromium startup discovery failed")
 			}
 		}
-		return nil, err
-	}
-	return newBrowserConnection(browser, transport, started, owned, profileDir, cdpPort), nil
+	}()
+	return started.Launch()
 }
 
 // ProfileDirForPlatform returns persistent profile path for a platform login session.
@@ -780,4 +879,50 @@ func (m *browserManager) cleanupZombieSessions() {
 			m.release(s)
 		}
 	}
+}
+
+// Keep the target reference even if stealth initialization fails.
+func createStealthPage(ctx context.Context, b *rod.Browser) (*rod.Page, error) {
+	// Rod.Page closes an attachment failure using the already-expired context.
+	// Retain the target ID ourselves so that cleanup gets an independent bound.
+	b = b.Context(ctx)
+	target, err := (proto.TargetCreateTarget{URL: "about:blank", BrowserContextID: b.BrowserContextID}).Call(b)
+	if err != nil {
+		return nil, fmt.Errorf("create_target: %w", err)
+	}
+	p, err := b.PageFromTarget(target.TargetID)
+	if err != nil {
+		closeErr := closeTargetWithin(b, target.TargetID, 3*time.Second)
+		if closeErr != nil {
+			return nil, fmt.Errorf("close_target: %w", errors.Join(err, closeErr))
+		}
+		return nil, fmt.Errorf("attach_target: %w", err)
+	}
+	_, err = p.EvalOnNewDocument(stealth.JS)
+	return p, err
+}
+
+// CheckOperation is called by the Bridge diagnostic handler, never by doctor
+// locally. It exercises the same slots, leases and page initialization as reads.
+func CheckOperation(ctx context.Context) error {
+	ctx = WithBrowseRetryContext(ctx)
+	state := ctx.Value(browseRetryKey{}).(*browseRetryState)
+	state.mu.Lock()
+	state.attempts++
+	state.mu.Unlock()
+	m := getBrowserManager()
+	s, err := m.acquire(ctx)
+	if err != nil {
+		err = finishBrowseError(ctx, newBrowseError(ErrorBrowserUnavailable, "acquire", "浏览器操作检查失败", err, false))
+		recordBrowseDiagnostic(ctx, err)
+		return err
+	}
+	closeErr := m.release(s)
+	if closeErr != nil {
+		err = finishBrowseError(ctx, newBrowseError(ErrorBrowserUnavailable, "close_page", "浏览器测试页关闭失败", closeErr, false))
+	} else if ctx.Err() != nil {
+		err = finishBrowseError(ctx, newBrowseError(ErrorBrowserUnavailable, "close_page", "浏览器操作检查未完成", ctx.Err(), false))
+	}
+	recordBrowseDiagnostic(ctx, err)
+	return err
 }

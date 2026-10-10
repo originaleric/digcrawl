@@ -1,0 +1,484 @@
+--- a/internal/browser/browser_snapshot.go
++++ b/internal/browser/browser_snapshot.go
+@@ -4,9 +4,6 @@
+ 	"context"
+ 	"fmt"
+ 	"strings"
+-	"time"
+-
+-	"github.com/originaleric/digcrawl/config"
+ )
+ 
+ // BrowserSnapshotRequest 浏览器快照请求
+@@ -27,12 +24,11 @@
+ }
+ 
+ // BrowserSnapshot 获取页面结构化快照
+-func BrowserSnapshot(ctx context.Context, req *BrowserSnapshotRequest) (resp *BrowserSnapshotResponse, retErr error) {
++func BrowserSnapshot(ctx context.Context, req *BrowserSnapshotRequest) (*BrowserSnapshotResponse, error) {
+ 	if req == nil || strings.TrimSpace(req.URL) == "" {
+ 		return nil, fmt.Errorf("url 不能为空")
+ 	}
+ 
+-	cfg := normalizeLocalBrowserConfig(config.Get().LocalBrowser)
+ 	filter := strings.ToLower(strings.TrimSpace(req.Filter))
+ 	if filter == "" {
+ 		filter = FilterInteractive // 默认仅返回可交互元素
+@@ -46,72 +42,13 @@
+ 		maxDepth = -1 // 默认不限制深度
+ 	}
+ 
+-	targetURL, err := validateURL(req.URL)
++	// Both snapshot entry points use the same read, recovery and source boundary.
++	resp, err := BrowserBrowse(ctx, &BrowserBrowseRequest{
++		URL: req.URL, Mode: "snapshot", WaitSelector: req.WaitSelector,
++		UseCookieDomain: req.UseCookieDomain, snapshotFilter: filter, snapshotMaxDepth: maxDepth,
++	})
+ 	if err != nil {
+ 		return nil, err
+ 	}
+-	if err := checkAllowedDomain(targetURL.Hostname(), cfg.AllowedDomains); err != nil {
+-		return nil, err
+-	}
+-	ctx, cancel := context.WithTimeout(ctx, time.Duration(cfg.TotalTimeoutSec)*time.Second)
+-	defer cancel()
+-
+-	manager := getBrowserManager()
+-	session, err := manager.acquire(ctx)
+-	if err != nil {
+-		return nil, err
+-	}
+-	defer func() {
+-		if err := manager.release(session); err != nil {
+-			resp = nil
+-			retErr = newBrowseError(ErrorBrowserUnavailable, "close_page", "浏览器页面清理失败", err, false)
+-		}
+-	}()
+-
+-	page := session.page.Context(ctx).Timeout(time.Duration(cfg.TotalTimeoutSec) * time.Second)
+-
+-	// 加载Cookie（如果指定）
+-	if req.UseCookieDomain != "" {
+-		if err := checkAllowedDomain(req.UseCookieDomain, cfg.AllowedDomains); err != nil {
+-			return nil, fmt.Errorf("cookie 域名不在白名单: %w", err)
+-		}
+-		if err := loadDomainCookies(page, req.UseCookieDomain, cfg.CookieStoreDir, targetURL); err != nil {
+-			return nil, err
+-		}
+-	}
+-
+-	// 导航到目标URL
+-	if err := page.Timeout(time.Duration(cfg.NavigateTimeoutSec) * time.Second).Navigate(targetURL.String()); err != nil {
+-		return nil, fmt.Errorf("页面导航失败: %w", err)
+-	}
+-	if err := page.WaitLoad(); err != nil {
+-		return nil, fmt.Errorf("页面加载失败: %w", err)
+-	}
+-
+-	// 等待选择器（如果指定）
+-	if req.WaitSelector != "" {
+-		if _, err := page.Timeout(time.Duration(cfg.WaitSelectorTimeoutSec) * time.Second).Element(req.WaitSelector); err != nil {
+-			return nil, fmt.Errorf("等待选择器失败: %w", err)
+-		}
+-	}
+-
+-	// 获取页面标题
+-	title, _ := pageTitle(page)
+-
+-	// 获取无障碍树快照
+-	elements, refs, err := FetchAXTree(ctx, page)
+-	if err != nil {
+-		return nil, fmt.Errorf("获取无障碍树失败: %w", err)
+-	}
+-
+-	// 应用过滤器
+-	filteredElements := filterElements(elements, filter)
+-
+-	resp = &BrowserSnapshotResponse{
+-		URL:      targetURL.String(),
+-		Title:    title,
+-		Elements: filteredElements,
+-		Refs:     refs,
+-	}
+-	return resp, nil
++	return &BrowserSnapshotResponse{URL: resp.URL, Title: resp.Title, Elements: resp.Elements, Refs: resp.snapshotRefs}, nil
+ }
+--- a/internal/browser/browser_browse.go
++++ b/internal/browser/browser_browse.go
+@@ -36,6 +36,9 @@
+ 	CaptureMedia bool `json:"capture_media,omitempty" jsonschema:"description=是否探测页面播放媒体资源，仅视频读取链路按需启用"`
+ 	// MetadataScript 可选：页面加载后执行的 JS 表达式，应返回可 JSON 序列化的对象（平台结构化字段提取）。
+ 	MetadataScript string `json:"metadata_script,omitempty" jsonschema:"description=可选 JS 表达式，返回 JSON 对象作为 metadata"`
++	// Internal options preserve browser.snapshot's existing filter/depth contract.
++	snapshotFilter   string
++	snapshotMaxDepth int
+ }
+ 
+ // BrowserBrowseResponse 本地浏览器抓取响应
+@@ -51,6 +54,7 @@
+ 	Metadata       map[string]any `json:"metadata,omitempty" jsonschema:"description=MetadataScript 提取的结构化字段"`
+ 	Diagnostics    map[string]any `json:"browser_diagnostics,omitempty"`
+ 	MediaURLs      []string       `json:"media_urls,omitempty" jsonschema:"description=浏览器探测到的 HTTP 媒体资源地址"`
++	snapshotRefs   map[string]int64
+ }
+ 
+ // BrowserBrowse 使用本地 go-rod 浏览器读取动态页面或截图
+@@ -106,6 +110,11 @@
+ 
+ 	rootCfg := config.Get()
+ 	cfg := normalizeLocalBrowserConfig(rootCfg.LocalBrowser)
++	sourceDomains := rootCfg.Gateway.AllowedDomains
++	if req.snapshotFilter != "" {
++		// Preserve the dedicated snapshot API's existing local-browser policy.
++		sourceDomains = cfg.AllowedDomains
++	}
+ 	action := strings.ToLower(strings.TrimSpace(req.Action))
+ 	if action == "" {
+ 		action = "read"
+@@ -126,7 +135,7 @@
+ 	if err != nil {
+ 		return nil, err
+ 	}
+-	if err := policy.ValidateURLDomain(targetURL.String(), rootCfg.Gateway.AllowedDomains, nil); err != nil {
++	if err := policy.ValidateURLDomain(targetURL.String(), sourceDomains, nil); err != nil {
+ 		return nil, err
+ 	}
+ 	ctx, cancel := context.WithTimeout(ctx, time.Duration(cfg.TotalTimeoutSec)*time.Second)
+@@ -182,7 +191,7 @@
+ 	}
+ 
+ 	if req.UseCookieDomain != "" {
+-		if err := policy.ValidateURLDomain("https://"+req.UseCookieDomain, rootCfg.Gateway.AllowedDomains, nil); err != nil {
++		if err := policy.ValidateURLDomain("https://"+req.UseCookieDomain, sourceDomains, nil); err != nil {
+ 			return nil, fmt.Errorf("cookie 域名不在白名单: %w", err)
+ 		}
+ 		if err := loadDomainCookies(page, req.UseCookieDomain, cfg.CookieStoreDir, targetURL); err != nil {
+@@ -231,7 +240,7 @@
+ 		return nil, newBrowseError(ErrorBrowserContentNotFound, "read_page", "无法确认页面实际地址", fmt.Errorf("target info has no URL"), false)
+ 	}
+ 	finalURL := strings.TrimSpace(info.TargetInfo.URL)
+-	if err := policy.ValidateURLDomain(finalURL, rootCfg.Gateway.AllowedDomains, nil); err != nil {
++	if err := policy.ValidateURLDomain(finalURL, sourceDomains, nil); err != nil {
+ 		return nil, err
+ 	}
+ 	// Keep the main document identity local to this attempt. URL comparison
+@@ -256,12 +265,25 @@
+ 		switch mode {
+ 		case "snapshot":
+ 			// 快照模式：仅返回可交互元素
+-			elements, _, err := FetchAXTree(ctx, page)
++			elements, refs, err := FetchAXTree(ctx, page)
+ 			if err != nil {
+ 				return nil, newBrowseError(ErrorBrowserContentNotFound, "snapshot", "获取页面快照失败", err, false)
+ 			}
+-			// 过滤仅可交互元素
+-			resp.Elements = filterElements(elements, FilterInteractive)
++			filter := req.snapshotFilter
++			if filter == "" {
++				filter = FilterInteractive
++			}
++			resp.Elements = filterElements(elements, filter)
++			if req.snapshotMaxDepth > 0 {
++				filtered := make([]AXNode, 0, len(resp.Elements))
++				for _, node := range resp.Elements {
++					if node.Depth <= req.snapshotMaxDepth {
++						filtered = append(filtered, node)
++					}
++				}
++				resp.Elements = filtered
++			}
++			resp.snapshotRefs = refs
+ 		case "summary":
+ 			// 摘要模式：提取关键信息
+ 			summary, err := extractSummary(page, cfg.WaitSelectorTimeoutSec)
+@@ -336,7 +358,7 @@
+ 	if info.TargetInfo == nil || strings.TrimSpace(info.TargetInfo.URL) == "" {
+ 		return nil, newBrowseError(ErrorBrowserContentNotFound, "read_page", "无法确认页面最终地址", fmt.Errorf("target info has no URL"), false)
+ 	}
+-	if err := policy.ValidateURLDomain(info.TargetInfo.URL, rootCfg.Gateway.AllowedDomains, nil); err != nil {
++	if err := policy.ValidateURLDomain(info.TargetInfo.URL, sourceDomains, nil); err != nil {
+ 		return nil, err
+ 	}
+ 	finalFrame, frameErr := (proto.PageGetFrameTree{}).Call(page)
+--- a/provider/browser/entries.go
++++ b/provider/browser/entries.go
+@@ -267,6 +267,9 @@
+ 			}
+ 			resp, err := browser.BrowserSnapshot(ctx, &in)
+ 			if err != nil {
++				return nil, nil, err
++			}
++			if err := validateCallURL(resp.URL, call, configDomains); err != nil {
+ 				return nil, nil, err
+ 			}
+ 			return map[string]any{
+--- a/internal/feed/service.go
++++ b/internal/feed/service.go
+@@ -59,32 +59,34 @@
+ }
+ 
+ func (s Service) Read(ctx context.Context, rawURL string) (*Document, error) {
+-	data, _, err := s.Fetch(ctx, rawURL)
++	data, _, finalURL, err := s.Fetch(ctx, rawURL)
+ 	if err != nil {
+ 		return nil, err
+ 	}
+-	doc, err := Parse(data, rawURL)
++	doc, err := Parse(data, finalURL)
+ 	if err == nil {
+ 		return doc, nil
+ 	}
+-	if sm, smErr := ParseSitemap(data, rawURL); smErr == nil {
++	if sm, smErr := ParseSitemap(data, finalURL); smErr == nil {
+ 		return sm, nil
+ 	}
+ 	return nil, err
+ }
+ 
+ func (s Service) ReadSitemap(ctx context.Context, rawURL string) (*Document, error) {
+-	data, _, err := s.Fetch(ctx, rawURL)
++	data, _, finalURL, err := s.Fetch(ctx, rawURL)
+ 	if err != nil {
+ 		return nil, err
+ 	}
+-	return ParseSitemap(data, rawURL)
+-}
+-
+-func (s Service) Fetch(ctx context.Context, rawURL string) ([]byte, string, error) {
++	return ParseSitemap(data, finalURL)
++}
++
++// Fetch returns the actual response URL as well as the body and content type.
++// Every feed consumer gets the same source truth, including redirects.
++func (s Service) Fetch(ctx context.Context, rawURL string) ([]byte, string, string, error) {
+ 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+ 	if err != nil {
+-		return nil, "", err
++		return nil, "", "", err
+ 	}
+ 	ua := strings.TrimSpace(s.UserAgent)
+ 	if ua == "" {
+@@ -93,27 +95,30 @@
+ 	req.Header.Set("User-Agent", ua)
+ 	resp, err := s.httpClient().Do(req)
+ 	if err != nil {
+-		return nil, "", err
++		return nil, "", "", err
+ 	}
+ 	defer resp.Body.Close()
++	if resp.Request == nil || resp.Request.URL == nil || resp.Request.URL.String() == "" {
++		return nil, "", "", fmt.Errorf("feed response has no confirmed source URL")
++	}
+ 	maxBytes := s.MaxBytes
+ 	if maxBytes <= 0 {
+ 		maxBytes = 5 * 1024 * 1024
+ 	}
+ 	data, err := io.ReadAll(io.LimitReader(resp.Body, maxBytes))
+ 	if err != nil {
+-		return nil, "", err
++		return nil, "", "", err
+ 	}
+ 	if resp.StatusCode == http.StatusTooManyRequests {
+-		return nil, "", fmt.Errorf("RATE_LIMITED: feed request returned 429")
++		return nil, "", "", fmt.Errorf("RATE_LIMITED: feed request returned 429")
+ 	}
+ 	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+-		return nil, "", fmt.Errorf("LOGIN_REQUIRED: feed request returned %d", resp.StatusCode)
++		return nil, "", "", fmt.Errorf("LOGIN_REQUIRED: feed request returned %d", resp.StatusCode)
+ 	}
+ 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+-		return nil, "", fmt.Errorf("feed request returned %d", resp.StatusCode)
+-	}
+-	return data, resp.Header.Get("Content-Type"), nil
++		return nil, "", "", fmt.Errorf("feed request returned %d", resp.StatusCode)
++	}
++	return data, resp.Header.Get("Content-Type"), resp.Request.URL.String(), nil
+ }
+ 
+ func (s Service) httpClient() *http.Client {
+@@ -250,6 +255,7 @@
+ 		Markdown:     documentMarkdown(doc),
+ 		CapturedAt:   platform.NowRFC3339(),
+ 		PlatformMetadata: map[string]any{
++			"final_url":         doc.URL,
+ 			"extraction_source": "rss",
+ 			"entry_count":       len(doc.Entries),
+ 			"entries":           entries,
+--- a/internal/source/service.go
++++ b/internal/source/service.go
+@@ -1346,7 +1346,7 @@
+ var relativeContentPathRe = regexp.MustCompile(`(?i)/(?:article|group|video|w)/[0-9]+/?|/[A-Za-z0-9_]{1,32}/status/[0-9]+/?|/video/(?:BV[0-9A-Za-z]+|av[0-9]+)/?|/(?:detail|status)/[0-9A-Za-z]+/?|/(?:short-video|photo)/[0-9A-Za-z_-]+/?|/question/[0-9]+/answer/[0-9]+/?|/p/[0-9A-Za-z_-]+/?|/reel/[0-9A-Za-z_-]+/?|/@[A-Za-z0-9._]+/post/[0-9A-Za-z_-]+/?|/zvideo/[0-9]+/?`)
+ 
+ func (r Service) readHTMLLinks(ctx context.Context, item Source, platformName string) ([]Item, error) {
+-	data, _, err := r.feedService().Fetch(ctx, item.URL)
++	data, _, _, err := r.feedService().Fetch(ctx, item.URL)
+ 	base, _ := url.Parse(item.URL)
+ 	var staticErr error
+ 	if err != nil {
+--- a/provider/platform/feed.go
++++ b/provider/platform/feed.go
+@@ -2,9 +2,6 @@
+ 
+ import (
+ 	"context"
+-	"fmt"
+-	"net/http"
+-	"time"
+ 
+ 	"github.com/originaleric/digcrawl/internal/feed"
+ 	"github.com/originaleric/digcrawl/internal/platform"
+@@ -26,21 +23,9 @@
+ }
+ 
+ func readFeed(ctx context.Context, in platform.ReadInput) (*platform.Content, error) {
+-	finalURL := in.URL
+-	// The feed's original link is preserved in SourceURL. Use the existing
+-	// client option to retain its actual HTTP source for the shared policy gate.
+-	client := &http.Client{Timeout: 20 * time.Second, CheckRedirect: func(req *http.Request, via []*http.Request) error {
+-		if len(via) >= 10 {
+-			return fmt.Errorf("stopped after 10 redirects")
+-		}
+-		finalURL = req.URL.String()
+-		return nil
+-	}}
+-	doc, err := (feed.Service{Client: client}).Read(ctx, in.URL)
++	doc, err := (feed.Service{}).Read(ctx, in.URL)
+ 	if err != nil {
+ 		return nil, err
+ 	}
+-	content := feed.ToContent(doc, in.URL)
+-	content.PlatformMetadata["final_url"] = finalURL
+-	return content, nil
++	return feed.ToContent(doc, in.URL), nil
+ }
+--- a/internal/platform/reddit/rss.go
++++ b/internal/platform/reddit/rss.go
+@@ -39,6 +39,7 @@
+ 	}
+ 	comments := commentsFromFeedEntries(doc.Entries[1:], opts)
+ 	meta := map[string]any{
++		"final_url":         doc.URL,
+ 		"extraction_source": "rss",
+ 		"platform_id":       norm.PlatformID,
+ 		"fullname":          "t3_" + norm.PlatformID,
+@@ -122,6 +123,7 @@
+ 	if doc == nil {
+ 		return res
+ 	}
++	res.SourceURL = doc.URL
+ 	for _, entry := range doc.Entries {
+ 		if limit > 0 && len(res.Items) >= limit {
+ 			break
+--- a/internal/platform/reddit/client.go
++++ b/internal/platform/reddit/client.go
+@@ -73,6 +73,9 @@
+ type ListingResult struct {
+ 	Items []ListingItem
+ 	After string
++	// SourceURL is the confirmed page source for an RSS fallback. API results
++	// use the configured API backend and do not masquerade as page reads.
++	SourceURL string `json:"-"`
+ }
+ 
+ type redditListing struct {
+--- a/provider/platform/reddit.go
++++ b/provider/platform/reddit.go
+@@ -152,6 +152,10 @@
+ 		if err != nil {
+ 			var re *platform.ReadError
+ 			if errors.As(err, &re) {
++				if err := validatePlatformURL(in.URL, call, configDomains, redditDefaultDomains,
++					platform.MetaString(re.Meta, "final_url"), platform.MetaString(re.Meta, "resolved_url")); err != nil {
++					return nil, nil, err
++				}
+ 				out := platform.ErrorOutput(re)
+ 				if d := browser.BrowseDiagnostics(ctx); d != nil && d["attempts"].(int) > 0 {
+ 					out["browser_diagnostics"] = d
+@@ -235,6 +239,11 @@
+ 		if err != nil {
+ 			return nil, nil, err
+ 		}
++		if res != nil {
++			if err := validateOptionalRedditURL(res.SourceURL, call, configDomains); err != nil {
++				return nil, nil, err
++			}
++		}
+ 		return listingResultMap(res), nil, nil
+ 	}
+ }
+@@ -255,6 +264,11 @@
+ 		res, err := reddit.ReadUser(ctx, reddit.ListingOptions{Username: user, Where: in.Where, Limit: in.Limit, After: in.After})
+ 		if err != nil {
+ 			return nil, nil, err
++		}
++		if res != nil {
++			if err := validateOptionalRedditURL(res.SourceURL, call, configDomains); err != nil {
++				return nil, nil, err
++			}
+ 		}
+ 		return listingResultMap(res), nil, nil
+ 	}
+--- a/internal/platform/bilibili/video.go
++++ b/internal/platform/bilibili/video.go
+@@ -8,6 +8,7 @@
+ 	"time"
+ 
+ 	"github.com/originaleric/digcrawl/internal/platform"
++	"github.com/originaleric/digcrawl/runtime/policy"
+ )
+ 
+ func ReadVideo(ctx context.Context, in platform.ReadInput) (*platform.Content, error) {
+@@ -77,7 +78,9 @@
+ 		// is needed solely because that API does not expose a playable stream;
+ 		// never let a login shell or otherwise incomplete browser page replace
+ 		// already-successful title, text, author, and metadata.
+-		appendBrowserVideoMedia(apiContent, content)
++		if err := appendBrowserVideoMedia(apiContent, content); err != nil {
++			return nil, err
++		}
+ 		apiContent.PlatformMetadata = platform.MergeAPIMeta(apiContent.PlatformMetadata, apiAttempt)
+ 		platform.MergeContentMetrics(apiContent, platform.ReadMetrics{
+ 			Platform:         PlatformName,
+@@ -122,13 +125,25 @@
+ // appendBrowserVideoMedia keeps API content as the source of truth while
+ // adding only browser-confirmed video references. The generic retention layer
+ // will perform the bounded download and final file validation afterwards.
+-func appendBrowserVideoMedia(apiContent, browserContent *platform.Content) {
++func appendBrowserVideoMedia(apiContent, browserContent *platform.Content) error {
+ 	if apiContent == nil || browserContent == nil {
+-		return
++		return nil
+ 	}
++	if !hasVideoMedia(browserContent.Media) {
++		return nil
++	}
++	finalURL := platform.MetaString(browserContent.PlatformMetadata, "final_url")
++	if err := policy.ValidateURLDomain(finalURL, nil, nil); err != nil {
++		return fmt.Errorf("browser video source: %w", err)
++	}
++	// Preserve the source of accepted browser media without replacing API text
++	// or metadata. The provider validates it before downloads and delivery.
++	apiContent.PlatformMetadata = platform.EnsureMeta(apiContent.PlatformMetadata)
++	apiContent.PlatformMetadata["final_url"] = finalURL
+ 	for _, item := range browserContent.Media {
+ 		if strings.EqualFold(strings.TrimSpace(item.Type), "video") && (strings.TrimSpace(item.URL) != "" || strings.TrimSpace(item.ArtifactID) != "") {
+ 			apiContent.Media = append(apiContent.Media, item)
+ 		}
+ 	}
++	return nil
+ }
+--- a/provider/platform/executor.go
++++ b/provider/platform/executor.go
+@@ -201,6 +201,12 @@
+ 		if err != nil {
+ 			var re *iplatform.ReadError
+ 			if errors.As(err, &re) {
++				// Error metadata is also delivered data. Keep known page sources
++				// under the same policy before returning a login/partial result.
++				if err := validatePlatformURL(in.URL, call, configDomains, defaultDomains,
++					iplatform.MetaString(re.Meta, "final_url"), iplatform.MetaString(re.Meta, "resolved_url")); err != nil {
++					return nil, nil, err
++				}
+ 				out := iplatform.ErrorOutput(re)
+ 				if d := browser.BrowseDiagnostics(ctx); d != nil && d["attempts"].(int) > 0 {
+ 					out["browser_diagnostics"] = d

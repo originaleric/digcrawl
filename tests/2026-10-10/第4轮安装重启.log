@@ -1,0 +1,3 @@
+2026/10/10 15:49:34 DigCrawl Bridge stopped for /Users/dig/.config/digcrawl/digcrawl-skill.yaml
+2026/10/10 15:49:34 DigCrawl Bridge restarted for /Users/dig/.config/digcrawl/digcrawl-skill.yaml
+{"installed": true, "build_id": "sha256:7341437b28a0bbf51986cc911de1abbc00d86c10f0230e4a8a5e5f11a7effbec", "previous_sha256": "a1601d96b9ac47fa93667c91afaee723fe71a80e3492e6a2b2e31384f4259985", "old_mcp_clients_closed": 1, "legacy_bridge_candidates_removed": 1, "running_bridge_count": 1, "running_bridge_pids": [78404], "rollback_binary": "/private/tmp/digcrawl-browser-20261010/digcrawl.pre-round4"}

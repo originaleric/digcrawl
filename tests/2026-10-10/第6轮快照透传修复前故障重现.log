@@ -1,0 +1,6 @@
+=== RUN   TestBrowseEntryReturnsSnapshotElements
+    entries_test.go:59: elements=[] out=map[browser_diagnostics:map[] source_url:https://example.com/article title:]
+--- FAIL: TestBrowseEntryReturnsSnapshotElements (0.00s)
+FAIL
+FAIL	github.com/originaleric/digcrawl/provider/browser	0.324s
+FAIL

@@ -1,0 +1,8 @@
+ok  	github.com/originaleric/digcrawl/internal/browser	8.461s
+ok  	github.com/originaleric/digcrawl/internal/platform	4.559s
+ok  	github.com/originaleric/digcrawl/internal/platform/toutiao	8.351s
+ok  	github.com/originaleric/digcrawl/provider/browser	4.883s
+ok  	github.com/originaleric/digcrawl/provider/platform	6.851s
+ok  	github.com/originaleric/digcrawl/runtime	5.921s
+ok  	github.com/originaleric/digcrawl/transport/collector	4.831s
+ok  	github.com/originaleric/digcrawl/transport/bridge	9.558s

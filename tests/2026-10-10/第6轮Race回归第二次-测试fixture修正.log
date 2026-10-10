@@ -1,0 +1,34 @@
+--- FAIL: TestPageChangeGuidanceAndDiagnosticPreserveReason (0.00s)
+panic: assignment to entry in nil map [recovered, repanicked]
+
+goroutine 161 [running]:
+testing.tRunner.func1.2({0x1054ef300, 0x10564a4a0})
+	/Users/dig/.gvm/gos/go1.26.1/src/testing/testing.go:1974 +0x2b8
+testing.tRunner.func1()
+	/Users/dig/.gvm/gos/go1.26.1/src/testing/testing.go:1977 +0x460
+panic({0x1054ef300?, 0x10564a4a0?})
+	/Users/dig/.gvm/gos/go1.26.1/src/runtime/panic.go:860 +0x12c
+github.com/originaleric/digcrawl/internal/browser.TestPageChangeGuidanceAndDiagnosticPreserveReason(0xc0002a4fc8)
+	/Users/dig/Documents/文稿 - XinYe的MacBook Pro (5)/Projects/go-app/DigCrawl/internal/browser/browser_browse_test.go:162 +0xc0
+testing.tRunner(0xc0002a4fc8, 0x1055d1870)
+	/Users/dig/.gvm/gos/go1.26.1/src/testing/testing.go:2036 +0x168
+created by testing.(*T).Run in goroutine 1
+	/Users/dig/.gvm/gos/go1.26.1/src/testing/testing.go:2101 +0x7c0
+FAIL	github.com/originaleric/digcrawl/internal/browser	1.856s
+ok  	github.com/originaleric/digcrawl/internal/platform	2.909s
+ok  	github.com/originaleric/digcrawl/internal/platform/reddit	2.606s
+ok  	github.com/originaleric/digcrawl/internal/platform/wechat	3.204s
+ok  	github.com/originaleric/digcrawl/internal/platform/xiaohongshu	4.632s
+ok  	github.com/originaleric/digcrawl/provider/browser	3.936s
+--- FAIL: TestPlatformReadHandlerRejectsNonVideoArtifactForProviderRetention (0.00s)
+    ocr_test.go:322: err=INVALID_INPUT: only http/https URLs are supported
+2026/10/10 21:44:56 [platform-read] platform=wechat channel=http source=html api_ms=1 feed_ms=0 browser_ms=0 retries=0
+2026/10/10 21:44:56 [platform-read] platform=wechat channel=http source=html api_ms=1 feed_ms=0 browser_ms=0 retries=0
+2026/10/10 21:44:56 [platform-read] platform=wechat channel=http source=html api_ms=1 feed_ms=0 browser_ms=0 retries=0
+2026/10/10 21:44:56 [platform-read] platform=wechat channel=http source=html api_ms=1 feed_ms=0 browser_ms=0 retries=0
+FAIL
+FAIL	github.com/originaleric/digcrawl/provider/platform	7.952s
+ok  	github.com/originaleric/digcrawl/runtime	5.318s
+ok  	github.com/originaleric/digcrawl/transport/bridge	10.353s
+ok  	github.com/originaleric/digcrawl/transport/collector	5.568s
+FAIL

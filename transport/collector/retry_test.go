@@ -16,8 +16,8 @@ func TestShouldRetryToolResult(t *testing.T) {
 		Status: "error",
 		Error:  &protocol.ToolError{Code: "TOOL_EXEC_FAILED", Message: "navigation timeout"},
 	}
-	if !shouldRetryToolResult(fail) {
-		t.Fatal("expected retry for timeout")
+	if shouldRetryToolResult(fail) {
+		t.Fatal("unknown tool timeout text must not authorize replay")
 	}
 	rate := &protocol.ToolResult{
 		Status: "error",

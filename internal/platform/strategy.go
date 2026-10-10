@@ -1,8 +1,10 @@
 package platform
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"github.com/originaleric/digcrawl/internal/browser"
 	"strings"
 )
 
@@ -148,7 +150,14 @@ func apiBusinessMessage(parsed map[string]any, code string) string {
 }
 
 // ShouldStopStrategy 判断是否应终止 strategy chain（fatal，不 fallback）。
-func ShouldStopStrategy(err error) (*ReadError, bool) {
+func ShouldStopStrategy(err error) (error, bool) {
+	var be *browser.BrowseError
+	if errors.As(err, &be) {
+		return err, true
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return err, true
+	}
 	var re *ReadError
 	if errors.As(err, &re) {
 		return re, true

@@ -11,10 +11,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/go-rod/rod"
 	"github.com/go-rod/rod/lib/launcher"
 	"github.com/go-rod/rod/lib/launcher/flags"
-	"github.com/go-rod/stealth"
 	"github.com/originaleric/digcrawl/config"
 	"golang.org/x/term"
 )
@@ -98,6 +96,12 @@ func InteractiveLogin(ctx context.Context, platform string, cfg config.LocalBrow
 		return err
 	}
 
+	guard, identity, err := AcquireProfileLock(profileDir)
+	if err != nil {
+		return err
+	}
+	defer guard.Close()
+	profileDir = identity
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()
 	clearedStaleLock, err := prepareInteractiveLoginProfile(profileDir, nil)
@@ -132,10 +136,13 @@ func InteractiveLogin(ctx context.Context, platform string, cfg config.LocalBrow
 	}
 	defer func() { resultErr = finishInteractiveLogin(resultErr, cookieSaved, connection) }()
 
-	page, err := stealth.Page(connection.browser)
+	pageCtx, pageCancel := browserOperationContext(ctx, 5*time.Second)
+	page, err := createStealthPage(pageCtx, connection.browser)
+	pageCancel()
 	if err != nil {
 		return fmt.Errorf("创建页面失败: %w", err)
 	}
+	page = page.Context(ctx)
 	if err := page.Navigate(spec.IndexURL); err != nil {
 		return fmt.Errorf("打开登录页失败: %w", err)
 	}
@@ -177,8 +184,10 @@ func InteractiveLogin(ctx context.Context, platform string, cfg config.LocalBrow
 // It intentionally ignores background CDP configuration: a fixed port may
 // refer to an unrelated local browser, which a login command must never close.
 func launchInteractiveLoginBrowser(ctx context.Context, cfg config.LocalBrowserConfig, profileDir string) (*browserConnection, error) {
+	setupCtx, cancel := browserOperationContext(ctx, 10*time.Second)
+	defer cancel()
 	l := launcher.New().
-		Context(ctx).
+		Context(setupCtx).
 		Headless(false).
 		Set(flags.Flag("disable-gpu")).
 		UserDataDir(profileDir)
@@ -187,16 +196,16 @@ func launchInteractiveLoginBrowser(ctx context.Context, cfg config.LocalBrowserC
 	}
 	l = applyInteractiveLauncherPolicy(l, cfg)
 
-	controlURL, err := l.Launch()
-	if err != nil {
-		return nil, err
-	}
+	controlURL, err := launchBrowser(l)
 	connection := newBrowserConnection(nil, nil, l, true, profileDir, 0)
-	b := rod.New().ControlURL(controlURL).Context(ctx).Timeout(time.Duration(cfg.TotalTimeoutSec) * time.Second)
-	if err := b.Connect(); err != nil {
+	if err != nil {
 		return connection, err
 	}
-	connection.browser = b
+	b, transport, err := connectCDPBrowser(setupCtx, controlURL, time.Duration(cfg.TotalTimeoutSec)*time.Second)
+	if err != nil {
+		return connection, err
+	}
+	connection = newBrowserConnection(b, transport, l, true, profileDir, 0)
 	return connection, nil
 }
 

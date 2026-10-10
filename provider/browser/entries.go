@@ -110,15 +110,22 @@ func BrowseEntry(configDomains []string, artStore artifact.Store, runtimeConfigs
 			if !isCollect && in.IncludeOCR {
 				returnMedia = true
 			}
+			metadataScript := ""
+			if returnMedia || ocrPolicy.requested || retainProviderImages {
+				metadataScript = browserImageMetadataScript()
+			}
 			resp, err := browsePage(ctx, &browser.BrowserBrowseRequest{
 				URL: in.URL, Action: in.Action, CaptureScreenshot: in.IncludeScreenshot, Mode: in.Mode, TabID: in.TabID,
 				WaitSelector: in.WaitSelector, ContentSelector: contentSelector,
-				UseCookieDomain: in.UseCookieDomain, MetadataScript: browserImageMetadataScript(),
+				UseCookieDomain: in.UseCookieDomain, MetadataScript: metadataScript,
 			})
 			if err != nil {
 				return nil, nil, err
 			}
-			out := map[string]any{"source_url": resp.URL, "title": resp.Title}
+			if err := validateCallURL(resp.URL, call, configDomains); err != nil {
+				return nil, nil, err
+			}
+			out := map[string]any{"source_url": resp.URL, "title": resp.Title, "browser_diagnostics": resp.Diagnostics}
 			if resp.Text != "" {
 				out["text"] = resp.Text
 			}
@@ -130,6 +137,9 @@ func BrowseEntry(configDomains []string, artStore artifact.Store, runtimeConfigs
 			}
 			if resp.Summary != "" {
 				out["summary"] = resp.Summary
+			}
+			if strings.EqualFold(strings.TrimSpace(in.Mode), "snapshot") {
+				out["elements"] = append([]browser.AXNode{}, resp.Elements...)
 			}
 			if returnMedia || ocrPolicy.requested || retainProviderImages {
 				if media := browserImageMedia(resp.Metadata); len(media) > 0 {
@@ -257,6 +267,9 @@ func SnapshotEntry(configDomains []string) registry.Entry {
 			}
 			resp, err := browser.BrowserSnapshot(ctx, &in)
 			if err != nil {
+				return nil, nil, err
+			}
+			if err := validateCallURL(resp.URL, call, configDomains); err != nil {
 				return nil, nil, err
 			}
 			return map[string]any{

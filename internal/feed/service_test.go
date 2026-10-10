@@ -2,8 +2,10 @@ package feed
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -64,5 +66,43 @@ func TestReadFallsBackToSitemapXML(t *testing.T) {
 	}
 	if len(doc.Entries) != 1 || doc.Entries[0].URL != "https://example.com/a" {
 		t.Fatalf("unexpected sitemap doc: %+v", doc)
+	}
+}
+
+func TestFeedSourceIsConfirmedAcrossReadPaths(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/redirect/") {
+			http.Redirect(w, r, "/actual/"+strings.TrimPrefix(r.URL.Path, "/redirect/"), http.StatusFound)
+			return
+		}
+		if strings.HasSuffix(r.URL.Path, "sitemap.xml") {
+			fmt.Fprint(w, `<urlset><url><loc>https://item.example/article</loc></url></urlset>`)
+			return
+		}
+		fmt.Fprint(w, `<rss><channel><title>Feed</title><item><title>Item</title><link>https://item.example/article</link></item></channel></rss>`)
+	}))
+	defer server.Close()
+	svc := Service{Client: server.Client()}
+	for _, sitemap := range []bool{false, true} {
+		name := "feed.xml"
+		if sitemap {
+			name = "sitemap.xml"
+		}
+		start := server.URL + "/redirect/" + name
+		final := server.URL + "/actual/" + name
+		var doc *Document
+		var err error
+		if sitemap {
+			doc, err = svc.ReadSitemap(context.Background(), start)
+		} else {
+			doc, err = svc.Read(context.Background(), start)
+		}
+		if err != nil || doc.URL != final {
+			t.Fatalf("doc=%+v err=%v", doc, err)
+		}
+		content := ToContent(doc, start)
+		if content.SourceURL != start || content.CanonicalURL != final || content.PlatformMetadata["final_url"] != final {
+			t.Fatalf("content=%+v", content)
+		}
 	}
 }

@@ -14,6 +14,7 @@ import (
 // and optional public caption tracks. Explicit video download is owned by the
 // provider's yt-dlp integration after this page read succeeds.
 func ReadVideo(ctx context.Context, in platform.ReadInput) (*platform.Content, error) {
+	ctx = browser.WithBrowseRetryContext(ctx)
 	norm, err := NormalizeURL(in.URL)
 	if err != nil {
 		return nil, err

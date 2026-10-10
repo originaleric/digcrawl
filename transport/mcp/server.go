@@ -446,7 +446,18 @@ func registerTools(s *mcpserver.MCPServer, rt ToolRuntime, guard *idleGuard) {
 				Input: input,
 			}
 			call.Policy.TimeoutMs = mcpTimeoutMs(rt, call)
+			progress := req.Params.Meta != nil && req.Params.Meta.ProgressToken != nil
+			if progress {
+				_ = s.SendNotificationToClient(ctx, "notifications/progress", map[string]any{"progressToken": req.Params.Meta.ProgressToken, "progress": 0, "total": 1, "message": "正在执行工具"})
+			}
 			result := rt.Execute(ctx, call)
+			if progress {
+				message := "工具执行完成"
+				if result.Status != "success" {
+					message = "工具执行失败，请查看结构化错误中的 next_actions"
+				}
+				_ = s.SendNotificationToClient(ctx, "notifications/progress", map[string]any{"progressToken": req.Params.Meta.ProgressToken, "progress": 1, "total": 1, "message": message})
+			}
 			return toolResultToMCPWithInlineLimit(ctx, result, rt.ArtifactStore(), rt.ArtifactInlineLimit())
 		})
 	}

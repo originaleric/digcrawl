@@ -1,0 +1,82 @@
+?   	github.com/originaleric/digcrawl/client	[no test files]
+?   	github.com/originaleric/digcrawl/cmd/digcollect	[no test files]
+ok  	github.com/originaleric/digcrawl/cmd/digcrawl	4.268s
+ok  	github.com/originaleric/digcrawl/collect	1.096s
+ok  	github.com/originaleric/digcrawl/collect/store	0.511s
+ok  	github.com/originaleric/digcrawl/config	0.636s
+ok  	github.com/originaleric/digcrawl/internal/asr	23.575s
+--- FAIL: TestPageChangeGuidanceAndDiagnosticPreserveReason (0.00s)
+panic: assignment to entry in nil map [recovered, repanicked]
+
+goroutine 145 [running]:
+testing.tRunner.func1.2({0x1014cd3a0, 0x10161bd60})
+	/Users/dig/.gvm/gos/go1.26.1/src/testing/testing.go:1974 +0x1a0
+testing.tRunner.func1()
+	/Users/dig/.gvm/gos/go1.26.1/src/testing/testing.go:1977 +0x318
+panic({0x1014cd3a0?, 0x10161bd60?})
+	/Users/dig/.gvm/gos/go1.26.1/src/runtime/panic.go:860 +0x12c
+github.com/originaleric/digcrawl/internal/browser.TestPageChangeGuidanceAndDiagnosticPreserveReason(0x1dc0c07998c8)
+	/Users/dig/Documents/文稿 - XinYe的MacBook Pro (5)/Projects/go-app/DigCrawl/internal/browser/browser_browse_test.go:162 +0xa0
+testing.tRunner(0x1dc0c07998c8, 0x1015aadd0)
+	/Users/dig/.gvm/gos/go1.26.1/src/testing/testing.go:2036 +0xc4
+created by testing.(*T).Run in goroutine 1
+	/Users/dig/.gvm/gos/go1.26.1/src/testing/testing.go:2101 +0x3a8
+FAIL	github.com/originaleric/digcrawl/internal/browser	4.481s
+ok  	github.com/originaleric/digcrawl/internal/feed	2.111s
+ok  	github.com/originaleric/digcrawl/internal/media	2.741s
+ok  	github.com/originaleric/digcrawl/internal/notify	0.373s
+ok  	github.com/originaleric/digcrawl/internal/ocr	3.435s
+ok  	github.com/originaleric/digcrawl/internal/platform	0.433s
+ok  	github.com/originaleric/digcrawl/internal/platform/bilibili	0.319s
+ok  	github.com/originaleric/digcrawl/internal/platform/douyin	0.333s
+?   	github.com/originaleric/digcrawl/internal/platform/healthcheck	[no test files]
+ok  	github.com/originaleric/digcrawl/internal/platform/instagram	0.309s
+ok  	github.com/originaleric/digcrawl/internal/platform/kuaishou	0.746s
+ok  	github.com/originaleric/digcrawl/internal/platform/reddit	0.311s
+?   	github.com/originaleric/digcrawl/internal/platform/session	[no test files]
+ok  	github.com/originaleric/digcrawl/internal/platform/threads	0.320s
+ok  	github.com/originaleric/digcrawl/internal/platform/toutiao	4.435s
+ok  	github.com/originaleric/digcrawl/internal/platform/wechat	0.319s
+ok  	github.com/originaleric/digcrawl/internal/platform/weibo	0.326s
+ok  	github.com/originaleric/digcrawl/internal/platform/x	0.326s
+ok  	github.com/originaleric/digcrawl/internal/platform/xiaohongshu	0.468s
+ok  	github.com/originaleric/digcrawl/internal/platform/youtube	5.897s
+ok  	github.com/originaleric/digcrawl/internal/platform/zhihu	0.404s
+ok  	github.com/originaleric/digcrawl/internal/source	0.334s
+ok  	github.com/originaleric/digcrawl/internal/summary	0.759s
+?   	github.com/originaleric/digcrawl/internal/testutil	[no test files]
+?   	github.com/originaleric/digcrawl/internal/testutil/fakeffmpeg	[no test files]
+ok  	github.com/originaleric/digcrawl/internal/video	0.355s
+ok  	github.com/originaleric/digcrawl/internal/watchlist	1.080s
+ok  	github.com/originaleric/digcrawl/internal/watchlist/service	9.146s
+ok  	github.com/originaleric/digcrawl/protocol	0.304s
+?   	github.com/originaleric/digcrawl/provider	[no test files]
+ok  	github.com/originaleric/digcrawl/provider/asr	1.605s
+ok  	github.com/originaleric/digcrawl/provider/browser	0.249s
+?   	github.com/originaleric/digcrawl/provider/example	[no test files]
+--- FAIL: TestPlatformReadHandlerRejectsNonVideoArtifactForProviderRetention (0.00s)
+    ocr_test.go:322: err=INVALID_INPUT: only http/https URLs are supported
+2026/10/10 21:45:23 [platform-read] platform=wechat channel=http source=html api_ms=0 feed_ms=0 browser_ms=0 retries=0
+2026/10/10 21:45:23 [platform-read] platform=wechat channel=http source=html api_ms=0 feed_ms=0 browser_ms=0 retries=0
+2026/10/10 21:45:23 [platform-read] platform=wechat channel=http source=html api_ms=0 feed_ms=0 browser_ms=0 retries=0
+2026/10/10 21:45:23 [platform-read] platform=wechat channel=http source=html api_ms=0 feed_ms=0 browser_ms=0 retries=0
+FAIL
+FAIL	github.com/originaleric/digcrawl/provider/platform	1.460s
+?   	github.com/originaleric/digcrawl/provider/stub	[no test files]
+ok  	github.com/originaleric/digcrawl/runtime	0.756s
+ok  	github.com/originaleric/digcrawl/runtime/artifact	0.383s
+?   	github.com/originaleric/digcrawl/runtime/audit	[no test files]
+ok  	github.com/originaleric/digcrawl/runtime/executor	0.294s
+ok  	github.com/originaleric/digcrawl/runtime/policy	0.300s
+?   	github.com/originaleric/digcrawl/runtime/registry	[no test files]
+?   	github.com/originaleric/digcrawl/runtime/version	[no test files]
+ok  	github.com/originaleric/digcrawl/skill	1.641s
+?   	github.com/originaleric/digcrawl/tests/2026-07-10/toutiao-digflow-round-2/runner	[no test files]
+ok  	github.com/originaleric/digcrawl/transport/bridge	4.524s
+ok  	github.com/originaleric/digcrawl/transport/collector	0.716s
+ok  	github.com/originaleric/digcrawl/transport/devhost	0.718s
+?   	github.com/originaleric/digcrawl/transport/host	[no test files]
+ok  	github.com/originaleric/digcrawl/transport/http	0.349s
+ok  	github.com/originaleric/digcrawl/transport/mcp	1.552s
+ok  	github.com/originaleric/digcrawl/transport/stdio	0.321s
+FAIL

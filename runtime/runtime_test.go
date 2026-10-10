@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/originaleric/digcrawl/config"
+	"github.com/originaleric/digcrawl/internal/browser"
 	"github.com/originaleric/digcrawl/protocol"
 	browserprov "github.com/originaleric/digcrawl/provider/browser"
 	platformprov "github.com/originaleric/digcrawl/provider/platform"
@@ -399,5 +400,13 @@ func TestDefaultRegistryIncludesASRTranscribe(t *testing.T) {
 	}
 	if _, ok := reg.Get("asr.transcribe"); !ok {
 		t.Fatalf("asr.transcribe not registered")
+	}
+}
+
+func TestMapBrowserFailureRetainsRecoveryInstructions(t *testing.T) {
+	e := &browser.BrowseError{Code: browser.ErrorBrowserTimeout, Stage: "acquire", Cause: context.DeadlineExceeded, Diagnostics: map[string]any{"operation": "send_queue", "retry_count": 0, "diagnostic_id": "read-1", "next_actions": []string{"wait"}}}
+	out := mapError(e)
+	if out.Code != browser.ErrorBrowserTimeout || out.Details["operation"] != "send_queue" || out.Details["diagnostic_id"] != "read-1" || out.Details["next_actions"] == nil {
+		t.Fatalf("recovery instruction lost: %+v", out)
 	}
 }

@@ -16,12 +16,13 @@ var articleAPIPaths = []string{
 	"/group/article_info/?group_id=%s",
 }
 
-const articleAPITotalTimeout = 4 * time.Second
-
 var articleFetchJSON = session.FetchJSON
 
 // FetchArticleViaAPI 尝试通过浏览器上下文调用头条文章 detail API。
 func FetchArticleViaAPI(ctx context.Context, norm *platform.NormalizedURL, cookieDomain string) (map[string]any, *platform.APIAttempt, int64, error) {
+	// Both API endpoints and the reader's DOM fallback use the existing browser
+	// invocation budget. A probe deadline must not cut off Chrome setup/warming.
+	ctx = browser.WithBrowseRetryContext(ctx)
 	if norm == nil || strings.TrimSpace(norm.PlatformID) == "" {
 		return nil, &platform.APIAttempt{FallbackBrowser: true, Message: "missing article id"},
 			0, platform.NewAPIFallbackError("missing article id")
@@ -32,20 +33,15 @@ func FetchArticleViaAPI(ctx context.Context, norm *platform.NormalizedURL, cooki
 		browseURL = fmt.Sprintf("https://www.toutiao.com/article/%s/", norm.PlatformID)
 	}
 
-	apiCtx, cancel := context.WithTimeout(ctx, articleAPITotalTimeout)
-	defer cancel()
-
 	var lastAttempt *platform.APIAttempt
 	var lastErr error
 	start := time.Now()
 	for _, pathTpl := range articleAPIPaths {
-		if apiCtx.Err() != nil {
-			lastErr = apiCtx.Err()
-			lastAttempt = toutiaoAPIFallbackAttempt(0, "", "", "", "", "API 探测超时，回落 Browser")
-			break
+		if ctx.Err() != nil {
+			return nil, &platform.APIAttempt{Fatal: true, Message: "请求已取消或时间预算耗尽"}, time.Since(start).Milliseconds(), ctx.Err()
 		}
 		fetchURL := "https://www.toutiao.com" + fmt.Sprintf(pathTpl, norm.PlatformID)
-		result, err := articleFetchJSON(apiCtx, &browser.PageFetchRequest{
+		result, err := articleFetchJSON(ctx, &browser.PageFetchRequest{
 			WarmURL:         browseURL,
 			FetchURL:        fetchURL,
 			Method:          "GET",
@@ -54,6 +50,9 @@ func FetchArticleViaAPI(ctx context.Context, norm *platform.NormalizedURL, cooki
 		})
 		latency := time.Since(start).Milliseconds()
 		if err != nil {
+			if stopErr, stop := platform.ShouldStopStrategy(err); stop {
+				return nil, &platform.APIAttempt{Fatal: true, Message: stopErr.Error()}, latency, stopErr
+			}
 			lastErr = err
 			lastAttempt = toutiaoAPIFallbackAttempt(0, fetchURL, "", "", "", err.Error())
 			continue
@@ -63,6 +62,9 @@ func FetchArticleViaAPI(ctx context.Context, norm *platform.NormalizedURL, cooki
 		attempt.Meta["api_signature_mode"] = "page_runtime"
 		if attempt.OK {
 			return result.ParsedJSON, attempt, latency, nil
+		}
+		if stopErr, stop := platform.ShouldStopStrategy(attempt.Error()); stop {
+			return nil, attempt, latency, stopErr
 		}
 		lastAttempt = attempt
 		lastErr = attempt.Error()
@@ -79,15 +81,18 @@ func classifyToutiaoAPIResult(fetchURL string, result *browser.PageFetchResult) 
 	}
 	body := strings.TrimSpace(result.Body)
 	contentType := strings.TrimSpace(result.ContentType)
-	if result.ParsedJSON == nil {
-		responseType := classifyAPIResponseType(contentType, body)
-		msg := fmt.Sprintf("API 返回非 JSON 响应: %s", responseType)
-		return toutiaoAPIFallbackAttempt(result.Status, fetchURL, contentType, responseType, bodyPrefix(body), msg)
-	}
 	attempt := platform.ClassifyAPIResponse(PlatformName, result.Status, result.ParsedJSON, toutiaoAPIEmpty)
+	responseType := "json"
+	if result.ParsedJSON == nil {
+		responseType = classifyAPIResponseType(contentType, body)
+		if !attempt.Fatal {
+			msg := fmt.Sprintf("API 返回非 JSON 响应: %s", responseType)
+			return toutiaoAPIFallbackAttempt(result.Status, fetchURL, contentType, responseType, bodyPrefix(body), msg)
+		}
+	}
 	attempt.Meta["api_endpoint"] = fetchURL
 	attempt.Meta["api_content_type"] = contentType
-	attempt.Meta["api_response_type"] = "json"
+	attempt.Meta["api_response_type"] = responseType
 	attempt.Meta["api_body_prefix"] = bodyPrefix(body)
 	return attempt
 }

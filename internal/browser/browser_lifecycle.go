@@ -2,11 +2,13 @@ package browser
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"os"
 	"path/filepath"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/go-rod/rod"
@@ -24,22 +26,26 @@ const (
 // attached (the CDP service owns it). Leases prevent an in-flight crawl from
 // being torn down by another crawl's recovery path.
 type browserConnection struct {
-	browser    *rod.Browser
-	transport  *cdp.WebSocket
-	launcher   *launcher.Launcher
-	owned      bool
-	profileDir string
-	cdpPort    int
+	browser       *rod.Browser
+	transport     *cdp.WebSocket
+	launcher      *launcher.Launcher
+	owned         bool
+	profileDir    string
+	cdpPort       int
+	profileLock   *ProfileLock
+	ownerIdentity string
 
 	probeFn   func(context.Context) error
 	closeFn   func(context.Context) error
 	releaseFn func(context.Context) error
 
-	leases   int
-	retired  bool
-	stopping bool
-	stopped  chan struct{}
-	stopErr  error
+	leases     int
+	retired    bool
+	stopping   bool
+	stopped    chan struct{}
+	stopErr    error
+	cleanupMu  sync.Mutex
+	cleanupErr error // unresolved targets on an attached CDP service
 }
 
 func newBrowserConnection(browser *rod.Browser, transport *cdp.WebSocket, started *launcher.Launcher, owned bool, profileDir string, cdpPort int) *browserConnection {
@@ -51,6 +57,11 @@ func newBrowserConnection(browser *rod.Browser, transport *cdp.WebSocket, starte
 		profileDir: profileDir,
 		cdpPort:    cdpPort,
 		stopped:    make(chan struct{}),
+	}
+	if started != nil && started.PID() > 0 {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		c.ownerIdentity, _ = ownedProcessIdentity(ctx, started.PID())
+		cancel()
 	}
 	c.probeFn = func(ctx context.Context) error {
 		if browser == nil {
@@ -77,7 +88,7 @@ func (c *browserConnection) closeResources(ctx context.Context) error {
 	}
 	if !c.owned {
 		safeCloseCDPTransport(c.transport)
-		return nil
+		return c.externalCleanupError()
 	}
 
 	var closeErr error
@@ -95,7 +106,9 @@ func (c *browserConnection) closeResources(ctx context.Context) error {
 	// launcher-owned process holding a profile or fixed CDP port. Kill it before
 	// entering the common release barrier.
 	if c.browser == nil && c.launcher != nil {
-		c.launcher.Kill()
+		if err := killVerifiedLauncher(c); err != nil {
+			return err
+		}
 	}
 
 	// Browser.close is the graceful path. If it stalls, or if the persistent
@@ -103,11 +116,15 @@ func (c *browserConnection) closeResources(ctx context.Context) error {
 	// this process to reclaim only our own process group. Attached CDP browsers
 	// never enter this branch.
 	if closeErr != nil && c.launcher != nil {
-		c.launcher.Kill()
+		if err := killVerifiedLauncher(c); err != nil {
+			return err
+		}
 	}
 	if err := c.waitForOwnedResourceRelease(ctx); err != nil {
 		if c.launcher != nil {
-			c.launcher.Kill()
+			if err := killVerifiedLauncher(c); err != nil {
+				return err
+			}
 		}
 		// The graceful wait may have consumed the shutdown context. Give the
 		// forced kill a short, independent window to release the resources it
@@ -130,10 +147,20 @@ func (c *browserConnection) closeResources(ctx context.Context) error {
 // waitForOwnedResourceRelease verifies every resource whose reuse can make a
 // replacement attach to, or conflict with, an old owned Chromium process.
 func (c *browserConnection) waitForOwnedResourceRelease(ctx context.Context) error {
-	if c == nil || !c.owned {
+	if c == nil {
 		return nil
 	}
-	return waitForBrowserResourceRelease(ctx, c.profileDir, c.cdpPort)
+	if !c.owned {
+		return c.externalCleanupError()
+	}
+	if err := waitForOwnedProcessRelease(ctx, c); err != nil {
+		return err
+	}
+	err := waitForBrowserResourceRelease(ctx, c.profileDir, c.cdpPort)
+	if err == nil && c.profileLock != nil {
+		return c.profileLock.Close()
+	}
+	return err
 }
 
 func waitForBrowserResourceRelease(ctx context.Context, profileDir string, cdpPort int) error {
@@ -166,6 +193,11 @@ func waitForProfileUnlock(ctx context.Context, profileDir string) error {
 	if !locked() {
 		return nil
 	}
+	if _, err := prepareInteractiveLoginProfile(profileDir, nil); err == nil {
+		return nil
+	} else if !errors.Is(err, errInteractiveLoginInProgress) {
+		return err
+	}
 	ticker := time.NewTicker(50 * time.Millisecond)
 	defer ticker.Stop()
 	for {
@@ -175,6 +207,11 @@ func waitForProfileUnlock(ctx context.Context, profileDir string) error {
 		case <-ticker.C:
 			if !locked() {
 				return nil
+			}
+			if _, err := prepareInteractiveLoginProfile(profileDir, nil); err == nil {
+				return nil
+			} else if !errors.Is(err, errInteractiveLoginInProgress) {
+				return err
 			}
 		}
 	}
@@ -219,85 +256,126 @@ func waitForLocalTCPPortRelease(ctx context.Context, port int) error {
 // callers cannot race a new launch with teardown of the previous owner.
 func (m *browserManager) acquireConnection(ctx context.Context) (*browserConnection, error) {
 	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		m.mu.Lock()
+		select {
+		case <-m.stopCh:
+			m.mu.Unlock()
+			return nil, fmt.Errorf("browser manager stopped")
+		default:
+		}
 		if conn := m.active; conn != nil {
 			conn.leases++
 			m.mu.Unlock()
-			probeCtx, cancel := browserOperationContext(ctx, time.Duration(m.cfg.TotalTimeoutSec)*time.Second)
+			probeCtx, cancel := browserOperationContext(ctx, 2*time.Second)
+			start := time.Now()
 			err := conn.probe(probeCtx)
+			recordBrowserStage(ctx, "health_probe", conn, time.Since(start), err)
 			cancel()
-			if err == nil {
+			if err == nil && ctx.Err() == nil {
 				return conn, nil
+			}
+			if isLocalBrowserFailure(ctx.Err(), err) {
+				m.releaseConnection(conn)
+				if ctx.Err() != nil {
+					return nil, ctx.Err()
+				}
+				return nil, err
 			}
 			m.retireConnection(conn)
 			m.releaseConnection(conn)
-			continue
+			// Recovery and replay belong to BrowserBrowse, not an acquire loop.
+			return nil, fmt.Errorf("health_probe: %w", err)
 		}
 		if retiring := m.retiring; retiring != nil {
 			stopped := retiring.stopped
 			m.mu.Unlock()
 			select {
 			case <-stopped:
-				if retiring.stopErr != nil {
-					if retiring.releaseFn == nil {
-						return nil, fmt.Errorf("previous browser teardown failed: %w", retiring.stopErr)
-					}
-					if err := retiring.releaseFn(ctx); err != nil {
-						return nil, fmt.Errorf("previous browser teardown failed and resources remain unavailable: %w", err)
-					}
-					m.mu.Lock()
-					if m.retiring == retiring {
-						m.retiring = nil
-					}
-					m.mu.Unlock()
+			case <-ctx.Done():
+				return nil, fmt.Errorf("wait_retirement: %w", ctx.Err())
+			}
+			if retiring.stopErr != nil {
+				if retiring.releaseFn == nil {
+					return nil, fmt.Errorf("previous browser teardown failed: %w", retiring.stopErr)
 				}
-			case <-ctx.Done():
-				return nil, ctx.Err()
+				checkCtx, cancel := browserOperationContext(ctx, 2*time.Second)
+				err := retiring.releaseFn(checkCtx)
+				cancel()
+				if err != nil {
+					return nil, fmt.Errorf("previous browser teardown failed and resources remain unavailable: %w", err)
+				}
+				m.mu.Lock()
+				if m.retiring == retiring {
+					m.retiring = nil
+				}
+				m.mu.Unlock()
 			}
 			continue
 		}
-		if opening := m.opening; opening != nil {
-			m.mu.Unlock()
-			select {
-			case <-opening:
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			}
-			continue
-		}
-
-		opening := make(chan struct{})
-		m.opening = opening
-		m.mu.Unlock()
-		open := m.openFn
-		if open == nil {
-			open = m.openBrowserConnection
-		}
-		conn, err := open(ctx)
-
-		m.mu.Lock()
-		m.opening = nil
-		close(opening)
-		if err == nil && conn == nil {
-			err = fmt.Errorf("browser opener returned nil connection")
-		}
-		if err == nil {
-			conn.leases = 1
-			m.active = conn
-		} else if conn != nil {
-			// A launch can fail after Chromium has created its profile or bound a
-			// fixed CDP port. Quarantine that partially initialized owner through
-			// the same barrier used by normal retirement before any retry launches.
-			conn.retired = true
-			m.retiring = conn
-			m.startConnectionStopLocked(conn)
+		opening := m.opening
+		result := m.openingErr
+		if opening == nil {
+			opening = make(chan struct{})
+			m.opening = opening
+			result = new(error)
+			m.openingErr = result
+			setupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			m.openingCancel = cancel
+			go m.finishOpening(setupCtx, cancel, opening, result)
 		}
 		m.mu.Unlock()
-		if err != nil {
-			return nil, err
+		select {
+		case <-opening:
+		case <-ctx.Done():
+			return nil, fmt.Errorf("wait_opening: %w", ctx.Err())
 		}
-		return conn, nil
+		if result != nil && *result != nil {
+			return nil, *result
+		}
 	}
+}
+
+func (m *browserManager) finishOpening(ctx context.Context, cancel context.CancelFunc, opening chan struct{}, result *error) {
+	defer cancel()
+	open := m.openFn
+	if open == nil {
+		open = m.openBrowserConnection
+	}
+	start := time.Now()
+	conn, err := open(ctx)
+	recordBrowserStage(ctx, "setup", conn, time.Since(start), err)
+	if err == nil && conn == nil {
+		err = fmt.Errorf("browser opener returned nil connection")
+	}
+	if err == nil {
+		err = ctx.Err()
+	}
+	m.mu.Lock()
+	select {
+	case <-m.stopCh:
+		err = fmt.Errorf("browser manager stopped during setup")
+	default:
+	}
+	if m.opening != opening {
+		err = fmt.Errorf("browser opening replaced")
+	}
+	if err == nil {
+		// Shared setup owns no caller lease. Each live waiter acquires its own.
+		conn.leases = 0
+		m.active = conn
+	} else if conn != nil {
+		conn.retired = true
+		m.retiring = conn
+		m.startConnectionStopLocked(conn)
+	}
+	*result = err
+	m.opening = nil
+	m.openingCancel = nil
+	close(opening)
+	m.mu.Unlock()
 }
 
 func (m *browserManager) retireConnection(conn *browserConnection) {
@@ -338,6 +416,7 @@ func (m *browserManager) startConnectionStopLocked(conn *browserConnection) {
 	}
 	conn.stopping = true
 	go func() {
+		start := time.Now()
 		ctx, cancel := context.WithTimeout(context.Background(), browserShutdownTimeout)
 		var err error
 		if conn.closeFn == nil {
@@ -346,6 +425,7 @@ func (m *browserManager) startConnectionStopLocked(conn *browserConnection) {
 			err = conn.closeFn(ctx)
 		}
 		cancel()
+		recordBrowserStage(context.Background(), "retirement", conn, time.Since(start), err)
 
 		m.mu.Lock()
 		conn.stopErr = err
@@ -359,79 +439,53 @@ func (m *browserManager) startConnectionStopLocked(conn *browserConnection) {
 	}()
 }
 
-func (m *browserManager) shutdown(ctx context.Context) error {
-	if m == nil {
-		return nil
-	}
-	m.stopOnce.Do(func() { close(m.stopCh) })
-	m.mu.Lock()
-	conn := m.active
-	if conn != nil && !conn.retired {
-		m.active = nil
-		m.retiring = conn
-		conn.retired = true
-	}
-	if conn == nil {
-		conn = m.retiring
-	}
-	if conn != nil && conn.leases == 0 {
-		m.startConnectionStopLocked(conn)
-	}
-	var stopped <-chan struct{}
-	if conn != nil {
-		stopped = conn.stopped
-	}
-	m.mu.Unlock()
-	if stopped == nil {
-		return nil
-	}
-	select {
-	case <-stopped:
-		m.mu.Lock()
-		err := conn.stopErr
-		m.mu.Unlock()
-		return err
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-}
+func (m *browserManager) shutdown(ctx context.Context) error            { return m.stop(ctx, false) }
+func (m *browserManager) shutdownImmediately(ctx context.Context) error { return m.stop(ctx, true) }
 
-// shutdownImmediately is the explicit-restart counterpart to shutdown. The
-// normal path protects a live caller's lease; the Bridge has already closed
-// its HTTP listener before calling this path, so it must reclaim its owned
-// Chrome instead of waiting for a cancelled request to cooperate.
-func (m *browserManager) shutdownImmediately(ctx context.Context) error {
+func (m *browserManager) stop(ctx context.Context, immediate bool) error {
 	if m == nil {
 		return nil
 	}
+	m.mu.Lock()
+	if m.stopCh == nil {
+		m.stopCh = make(chan struct{})
+	}
 	m.stopOnce.Do(func() { close(m.stopCh) })
+	if m.openingCancel != nil {
+		m.openingCancel()
+	}
+	opening := m.opening
+	m.mu.Unlock()
+	if opening != nil {
+		select {
+		case <-opening:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
 	m.mu.Lock()
 	conn := m.active
-	if conn != nil && !conn.retired {
+	if conn != nil {
 		m.active = nil
 		m.retiring = conn
 		conn.retired = true
-	}
-	if conn == nil {
+	} else {
 		conn = m.retiring
 	}
 	if conn != nil {
-		// A forceful Bridge stop has already cancelled the caller. Future
-		// release calls tolerate a zero count, so dropping these leases makes
-		// the connection immediately eligible for owner-only cleanup.
-		conn.leases = 0
-		m.startConnectionStopLocked(conn)
-	}
-	var stopped <-chan struct{}
-	if conn != nil {
-		stopped = conn.stopped
+		if immediate && conn.owned {
+			conn.leases = 0
+		}
+		if conn.leases == 0 {
+			m.startConnectionStopLocked(conn)
+		}
 	}
 	m.mu.Unlock()
-	if stopped == nil {
+	if conn == nil {
 		return nil
 	}
 	select {
-	case <-stopped:
+	case <-conn.stopped:
 		m.mu.Lock()
 		err := conn.stopErr
 		m.mu.Unlock()
@@ -446,4 +500,26 @@ func (m *browserManager) shutdownImmediately(ctx context.Context) error {
 // newBrowserConnection above.
 func newLifecycleTestConnection(probe func(context.Context) error, closeFn func(context.Context) error) *browserConnection {
 	return &browserConnection{probeFn: probe, closeFn: closeFn, stopped: make(chan struct{})}
+}
+
+// Attached services survive transport retirement. If an owned target cannot
+// be proved closed, keep the existing retirement barrier closed until the
+// operator cleans/restarts that service and restarts DigCrawl.
+func (c *browserConnection) externalCleanupError() error {
+	if c == nil || c.owned {
+		return nil
+	}
+	c.cleanupMu.Lock()
+	defer c.cleanupMu.Unlock()
+	return c.cleanupErr
+}
+func (c *browserConnection) rememberUnreleasedTarget(err error) {
+	if c == nil || c.owned || err == nil {
+		return
+	}
+	c.cleanupMu.Lock()
+	defer c.cleanupMu.Unlock()
+	if c.cleanupErr == nil {
+		c.cleanupErr = fmt.Errorf("external target cleanup required: %w", err)
+	}
 }

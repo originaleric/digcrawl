@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/originaleric/digcrawl/config"
+	"github.com/originaleric/digcrawl/internal/browser"
 	iplatform "github.com/originaleric/digcrawl/internal/platform"
 	"github.com/originaleric/digcrawl/internal/platform/reddit"
 	"github.com/originaleric/digcrawl/protocol"
@@ -145,5 +146,43 @@ func TestRedditPostReadHandlerFailsWithoutScreenshotStore(t *testing.T) {
 	})
 	if err == nil || out["screenshot_artifact_id"] != nil || len(artifacts) != 0 {
 		t.Fatalf("must not return an unusable screenshot artifact: out=%+v artifacts=%+v err=%v", out, artifacts, err)
+	}
+}
+
+func TestRedditProviderSharesBrowserDiagnosticsWithReaderAndPartialOutput(t *testing.T) {
+	for _, partial := range []bool{false, true} {
+		input, _ := json.Marshal(redditPostReadInput{URL: "https://www.reddit.com/r/golang/comments/abc123/post/", IncludeScreenshot: partial})
+		var id any
+		h := redditPostReadHandler(nil, nil, func(ctx context.Context, in reddit.ReadInput) (*iplatform.Content, error) {
+			if browser.BrowseDiagnostics(ctx) == nil {
+				t.Fatal("provider did not establish invocation mark")
+			}
+			id = browser.BrowseDiagnostics(ctx)["diagnostic_id"]
+			// Validation terminates before acquiring Chrome, while using the public
+			// page-fetch entry and its attempt accounting on the reader's context.
+			_, _ = browser.PageFetchJSON(ctx, nil)
+			c := &iplatform.Content{SourceURL: in.URL, Text: "post body"}
+			if partial {
+				c.ScreenshotBase64 = "image"
+			}
+			return c, nil
+		}, &config.Config{})
+		out, _, err := h(context.Background(), &protocol.ToolCall{Input: input})
+		if (err != nil) != partial {
+			t.Fatalf("partial=%v error=%v", partial, err)
+		}
+		d, ok := out["browser_diagnostics"].(map[string]any)
+		if !ok || d["diagnostic_id"] != id || d["attempts"] != 1 {
+			t.Fatalf("partial=%v diagnostics=%v", partial, out)
+		}
+	}
+}
+func TestRedditProviderPreservesTypedBrowserFailure(t *testing.T) {
+	input, _ := json.Marshal(redditPostReadInput{URL: "https://www.reddit.com/r/golang/comments/abc123/post/"})
+	failure := &browser.BrowseError{Code: browser.ErrorBrowserTimeout, Stage: "acquire", Cause: context.DeadlineExceeded, Diagnostics: map[string]any{"operation": "send_queue", "retry_count": 0, "diagnostic_id": "test-id", "next_actions": []string{"wait"}}}
+	h := redditPostReadHandler(nil, nil, func(context.Context, reddit.ReadInput) (*iplatform.Content, error) { return nil, failure }, &config.Config{})
+	_, _, err := h(context.Background(), &protocol.ToolCall{Input: input})
+	if err != failure {
+		t.Fatalf("typed failure was replaced: %v", err)
 	}
 }

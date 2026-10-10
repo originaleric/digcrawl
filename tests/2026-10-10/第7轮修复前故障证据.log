@@ -1,0 +1,41 @@
+=== RUN   TestReviewSnapshotRedirectSourcePolicy
+=== RUN   TestReviewSnapshotRedirectSourcePolicy/allow_redirect=false
+    entries_test.go:274: start=http://localhost:49387/redirect final=http://127.0.0.1:49387/final out=map[elements:[{Ref:e1 Role:button Name:Final source button Value: Depth:3 Disabled:false Focused:false NodeID:7}] source_url:http://localhost:49387/redirect title:Final source] artifacts=0 err=<nil>
+    entries_test.go:275: blocked final source returned as success
+=== RUN   TestReviewSnapshotRedirectSourcePolicy/allow_redirect=true
+    entries_test.go:274: start=http://localhost:49387/redirect final=http://127.0.0.1:49387/final out=map[elements:[{Ref:e1 Role:button Name:Final source button Value: Depth:3 Disabled:false Focused:false NodeID:7}] source_url:http://localhost:49387/redirect title:Final source] artifacts=0 err=<nil>
+    entries_test.go:276: snapshot did not report actual source
+--- FAIL: TestReviewSnapshotRedirectSourcePolicy (0.74s)
+    --- FAIL: TestReviewSnapshotRedirectSourcePolicy/allow_redirect=false (0.48s)
+    --- FAIL: TestReviewSnapshotRedirectSourcePolicy/allow_redirect=true (0.12s)
+FAIL
+FAIL	github.com/originaleric/digcrawl/provider/browser	1.055s
+=== RUN   TestReviewRedditRSSRedirectPolicy
+=== RUN   TestReviewRedditRSSRedirectPolicy/allowed=[]
+2026/10/10 22:44:59 [platform-read] platform=reddit channel=rss source=rss api_ms=0 feed_ms=0 browser_ms=0 retries=0
+    source_policy_test.go:255: out=map[canonical_url:https://www.reddit.com/r/golang/comments/abc123/ captured_at:2026-10-10T22:44:59+08:00 content_type:post markdown:# Outside source
+        
+        ## Post
+        
+        Body from outside domain platform:reddit platform_metadata:map[api_endpoint: api_error_code:api_disabled api_error_message:Reddit API disabled extraction_source:rss fullname:t3_abc123 platform:reddit platform_id:abc123 read_channel:rss rss_url:https://www.reddit.com/r/golang/comments/abc123/.rss] source_url:https://www.reddit.com/r/golang/comments/abc123/post/ text:Body from outside domain title:Outside source] artifacts=0 err=<nil>
+    source_policy_test.go:256: RSS source outside policy returned as success
+=== RUN   TestReviewRedditRSSRedirectPolicy/allowed=[www.reddit.com]
+2026/10/10 22:44:59 [platform-read] platform=reddit channel=rss source=rss api_ms=0 feed_ms=0 browser_ms=0 retries=0
+    source_policy_test.go:255: out=map[canonical_url:https://www.reddit.com/r/golang/comments/abc123/ captured_at:2026-10-10T22:44:59+08:00 content_type:post markdown:# Outside source
+        
+        ## Post
+        
+        Body from outside domain platform:reddit platform_metadata:map[api_endpoint: api_error_code:api_disabled api_error_message:Reddit API disabled extraction_source:rss fullname:t3_abc123 platform:reddit platform_id:abc123 read_channel:rss rss_url:https://www.reddit.com/r/golang/comments/abc123/.rss] source_url:https://www.reddit.com/r/golang/comments/abc123/post/ text:Body from outside domain title:Outside source] artifacts=0 err=<nil>
+    source_policy_test.go:256: RSS source outside policy returned as success
+--- FAIL: TestReviewRedditRSSRedirectPolicy (0.00s)
+    --- FAIL: TestReviewRedditRSSRedirectPolicy/allowed=[] (0.00s)
+    --- FAIL: TestReviewRedditRSSRedirectPolicy/allowed=[www.reddit.com] (0.00s)
+FAIL
+FAIL	github.com/originaleric/digcrawl/provider/platform	0.874s
+=== RUN   TestReviewMergedBrowserVideoRetainsSource
+    mapper_test.go:121: merged source=https://www.bilibili.com/video/BV1xx411c7mD meta=map[aid:0 api_code:0 cid:0 extraction_source:api page_kind:bv platform_id:BV1xx411c7mD video_id:BV1xx411c7mD] media=[{video https://cdn.example/video.mp4 }]
+    mapper_test.go:123: browser source discarded while browser media was merged
+--- FAIL: TestReviewMergedBrowserVideoRetainsSource (0.00s)
+FAIL
+FAIL	github.com/originaleric/digcrawl/internal/platform/bilibili	0.591s
+FAIL

@@ -39,6 +39,7 @@ func mapPostRSS(in ReadInput, norm *platform.NormalizedURL, doc *feed.Document, 
 	}
 	comments := commentsFromFeedEntries(doc.Entries[1:], opts)
 	meta := map[string]any{
+		"final_url":         doc.URL,
 		"extraction_source": "rss",
 		"platform_id":       norm.PlatformID,
 		"fullname":          "t3_" + norm.PlatformID,
@@ -122,6 +123,7 @@ func listingFromFeedDocument(doc *feed.Document, source string, limit int) *List
 	if doc == nil {
 		return res
 	}
+	res.SourceURL = doc.URL
 	for _, entry := range doc.Entries {
 		if limit > 0 && len(res.Items) >= limit {
 			break

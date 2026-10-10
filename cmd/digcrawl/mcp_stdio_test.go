@@ -219,7 +219,7 @@ func TestBridgeRestartReplacesRunningBridge(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	startCtx, cancelStart := context.WithTimeout(context.Background(), 5*time.Second)
+	startCtx, cancelStart := context.WithTimeout(context.Background(), bridgeStartTimeout)
 	defer cancelStart()
 	if _, err := bridge.NewExecutor(startCtx, writeMCPBridgeExecutable(t), profilePath, cfg); err != nil {
 		t.Fatalf("start production-shape bridge: %v", err)

@@ -421,7 +421,9 @@ func collectSessionCookies(page interface {
 	Cookies(urls []string) ([]*proto.NetworkCookie, error)
 }, canonical string, targetURL *url.URL) ([]*proto.NetworkCookieParam, error) {
 	if rodPage, ok := page.(*rod.Page); ok {
-		allCookies, err := rodPage.Browser().GetCookies()
+		// Attachment setup may already be cancelled. Cookie collection belongs
+		// to the current interactive login, just like other page operations.
+		allCookies, err := rodPage.Browser().Context(rodPage.GetContext()).GetCookies()
 		if err != nil {
 			return nil, fmt.Errorf("读取浏览器 cookie session 失败: %w", err)
 		}

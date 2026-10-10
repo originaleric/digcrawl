@@ -70,6 +70,15 @@ func recordedBridgeOwnerIsCurrent(ctx context.Context, socket string, owner brid
 	if bridgePID(string(output), socket) != owner.pid {
 		return false, nil
 	}
+	if owner.identity != "" {
+		identity, err := bridgeProcessIdentity(ctx, owner.pid)
+		if err != nil {
+			return false, err
+		}
+		if identity != owner.identity {
+			return false, nil
+		}
+	}
 	pgid, err := bridgeProcessGroup(owner.pid)
 	if errors.Is(err, syscall.ESRCH) {
 		return false, nil
@@ -195,4 +204,50 @@ func hasSocketArgument(command, needle string) bool {
 		}
 		offset = end
 	}
+}
+
+// Called under the lifecycle lock, including when old workers predate that
+// lock. Enumerate every exact socket candidate, not only the first PID.
+func stopLegacyBridgeCandidates(ctx context.Context, socket string) (bool, error) {
+	output, err := exec.CommandContext(ctx, "ps", "-ax", "-o", "pid=,command=").Output()
+	if err != nil {
+		return false, err
+	}
+	stopped := false
+	for _, line := range strings.Split(string(output), "\n") {
+		pid := bridgePID(line, socket)
+		if pid == 0 || pid == os.Getpid() {
+			continue
+		}
+		// Recheck after enumeration so an exited/replaced PID is not trusted.
+		owner := bridgeOwner{pid: pid}
+		current, err := exec.CommandContext(ctx, "ps", "-p", strconv.Itoa(owner.pid), "-o", "pid=,command=").Output()
+		if err != nil {
+			if _, gone := err.(*exec.ExitError); gone {
+				continue
+			}
+			return stopped, err
+		}
+		if bridgePID(string(current), socket) != pid {
+			continue
+		}
+		pgid, err := bridgeProcessGroup(pid)
+		if errors.Is(err, syscall.ESRCH) {
+			continue
+		}
+		if err != nil {
+			return stopped, err
+		}
+		signalled, err := terminateExactBridgeProcess(pid)
+		if err != nil {
+			return stopped, err
+		}
+		stopped = stopped || signalled
+		if pgid == pid {
+			if err := waitForBridgeGroupRelease(ctx, pgid); err != nil {
+				return stopped, err
+			}
+		}
+	}
+	return stopped, nil
 }

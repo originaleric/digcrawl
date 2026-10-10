@@ -19,8 +19,6 @@ import (
 	"github.com/originaleric/digcrawl/runtime/policy"
 )
 
-type browserBrowseRetryContextKey struct{}
-
 type browserSessionRunner func(context.Context, *BrowserBrowseRequest, *browserSession) (*BrowserBrowseResponse, error)
 
 // BrowserBrowseRequest 本地浏览器抓取请求
@@ -38,6 +36,9 @@ type BrowserBrowseRequest struct {
 	CaptureMedia bool `json:"capture_media,omitempty" jsonschema:"description=是否探测页面播放媒体资源，仅视频读取链路按需启用"`
 	// MetadataScript 可选：页面加载后执行的 JS 表达式，应返回可 JSON 序列化的对象（平台结构化字段提取）。
 	MetadataScript string `json:"metadata_script,omitempty" jsonschema:"description=可选 JS 表达式，返回 JSON 对象作为 metadata"`
+	// Internal options preserve browser.snapshot's existing filter/depth contract.
+	snapshotFilter   string
+	snapshotMaxDepth int
 }
 
 // BrowserBrowseResponse 本地浏览器抓取响应
@@ -51,7 +52,9 @@ type BrowserBrowseResponse struct {
 	Elements       []AXNode       `json:"elements,omitempty" jsonschema:"description=可交互元素列表（mode=snapshot时返回）"`
 	Summary        string         `json:"summary,omitempty" jsonschema:"description=页面摘要（mode=summary时返回）"`
 	Metadata       map[string]any `json:"metadata,omitempty" jsonschema:"description=MetadataScript 提取的结构化字段"`
+	Diagnostics    map[string]any `json:"browser_diagnostics,omitempty"`
 	MediaURLs      []string       `json:"media_urls,omitempty" jsonschema:"description=浏览器探测到的 HTTP 媒体资源地址"`
+	snapshotRefs   map[string]int64
 }
 
 // BrowserBrowse 使用本地 go-rod 浏览器读取动态页面或截图
@@ -62,7 +65,42 @@ func BrowserBrowse(ctx context.Context, req *BrowserBrowseRequest) (resp *Browse
 // browserBrowseWithSessionRunner holds the request-level recovery boundary.
 // The optional runner is only used by focused lifecycle tests; production
 // executes the page operations below with the singleton manager.
-func browserBrowseWithSessionRunner(ctx context.Context, req *BrowserBrowseRequest, managerProvider func() *browserManager, runner browserSessionRunner) (resp *BrowserBrowseResponse, retErr error) {
+func browserBrowseWithSessionRunner(ctx context.Context, req *BrowserBrowseRequest, managerProvider func() *browserManager, runner browserSessionRunner) (*BrowserBrowseResponse, error) {
+	ctx, state, cancel := browseInvocationContext(ctx)
+	defer cancel()
+	replaying := false
+	for {
+		state.beginAttempt(replaying)
+		resp, err := browserBrowseAttempt(ctx, req, managerProvider, runner)
+		// Cleanup is independently bounded and can outlive the request. Do not
+		// publish a success if cancellation happened during that final step.
+		if err == nil && ctx.Err() != nil {
+			err = newBrowseError(ErrorBrowserTimeout, "read_page", "浏览器读取已取消或时间预算耗尽", ctx.Err(), false)
+		}
+		if err == nil {
+			state.succeeded()
+			if resp != nil {
+				resp.Diagnostics = BrowseDiagnostics(ctx)
+			}
+			recordBrowseDiagnostic(ctx, err)
+			return resp, nil
+		}
+		retry := state.claimRetry(ctx, err, replaying)
+		if !retry {
+			err = finishBrowseError(ctx, err)
+			recordBrowseDiagnostic(ctx, err)
+			return nil, err
+		}
+		replaying = true
+		if !state.waitRetry(ctx) {
+			err = finishBrowseError(ctx, err)
+			recordBrowseDiagnostic(ctx, err)
+			return nil, err
+		}
+	}
+}
+
+func browserBrowseAttempt(ctx context.Context, req *BrowserBrowseRequest, managerProvider func() *browserManager, runner browserSessionRunner) (resp *BrowserBrowseResponse, retErr error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -72,6 +110,11 @@ func browserBrowseWithSessionRunner(ctx context.Context, req *BrowserBrowseReque
 
 	rootCfg := config.Get()
 	cfg := normalizeLocalBrowserConfig(rootCfg.LocalBrowser)
+	sourceDomains := rootCfg.Gateway.AllowedDomains
+	if req.snapshotFilter != "" {
+		// Preserve the dedicated snapshot API's existing local-browser policy.
+		sourceDomains = cfg.AllowedDomains
+	}
 	action := strings.ToLower(strings.TrimSpace(req.Action))
 	if action == "" {
 		action = "read"
@@ -92,7 +135,7 @@ func browserBrowseWithSessionRunner(ctx context.Context, req *BrowserBrowseReque
 	if err != nil {
 		return nil, err
 	}
-	if err := policy.ValidateURLDomain(targetURL.String(), rootCfg.Gateway.AllowedDomains, nil); err != nil {
+	if err := policy.ValidateURLDomain(targetURL.String(), sourceDomains, nil); err != nil {
 		return nil, err
 	}
 	ctx, cancel := context.WithTimeout(ctx, time.Duration(cfg.TotalTimeoutSec)*time.Second)
@@ -105,22 +148,24 @@ func browserBrowseWithSessionRunner(ctx context.Context, req *BrowserBrowseReque
 	if manager == nil {
 		return nil, fmt.Errorf("browser manager is unavailable")
 	}
+	acquireStart := time.Now()
 	session, err := manager.acquireSession(ctx)
+	var connection *browserConnection
+	if session != nil {
+		connection = session.conn
+	}
+	recordBrowserStage(ctx, "acquire", connection, time.Since(acquireStart), err)
 	if err != nil {
 		return nil, newBrowseError(ErrorBrowserUnavailable, "acquire", "无法启动或连接本地浏览器", err, false)
 	}
 	defer func() {
-		if shouldRecoverBrowserConnection(ctx, retErr) {
-			// The failing session is the only holder of this connection lease.
-			// Retire it before releasing so the next attempt waits for owner-only
-			// teardown and cannot race a stale Chrome/profile process.
+		if isConnectionFailure(retErr) {
 			manager.retireConnection(session.conn)
-			manager.releaseSession(session)
-			retryCtx := context.WithValue(ctx, browserBrowseRetryContextKey{}, true)
-			resp, retErr = browserBrowseWithSessionRunner(retryCtx, req, managerProvider, runner)
-			return
 		}
-		manager.releaseSession(session)
+		if err := manager.releaseSession(session); err != nil && (retErr == nil || browseCauseReason(err) == "external_target_cleanup_required") {
+			resp = nil
+			retErr = newBrowseError(ErrorBrowserUnavailable, "close_page", "浏览器页面清理失败", err, false)
+		}
 	}()
 
 	if runner != nil {
@@ -134,7 +179,10 @@ func browserBrowseWithSessionRunner(ctx context.Context, req *BrowserBrowseReque
 	page := session.page.Context(ctx).Timeout(time.Duration(cfg.TotalTimeoutSec) * time.Second)
 	var finishMediaCapture func() []string
 	if req.CaptureMedia {
-		finishMediaCapture = startMediaResponseCapture(ctx, page)
+		finishMediaCapture, err = startMediaResponseCapture(ctx, page)
+		if err != nil {
+			return nil, newBrowseError(ErrorBrowserContentNotFound, "capture_media", "初始化媒体探测失败", err, false)
+		}
 		defer func() {
 			if finishMediaCapture != nil {
 				finishMediaCapture()
@@ -143,7 +191,7 @@ func browserBrowseWithSessionRunner(ctx context.Context, req *BrowserBrowseReque
 	}
 
 	if req.UseCookieDomain != "" {
-		if err := policy.ValidateURLDomain("https://"+req.UseCookieDomain, rootCfg.Gateway.AllowedDomains, nil); err != nil {
+		if err := policy.ValidateURLDomain("https://"+req.UseCookieDomain, sourceDomains, nil); err != nil {
 			return nil, fmt.Errorf("cookie 域名不在白名单: %w", err)
 		}
 		if err := loadDomainCookies(page, req.UseCookieDomain, cfg.CookieStoreDir, targetURL); err != nil {
@@ -151,49 +199,91 @@ func browserBrowseWithSessionRunner(ctx context.Context, req *BrowserBrowseReque
 		}
 	}
 
+	navigateStart := time.Now()
 	if err := page.Timeout(time.Duration(cfg.NavigateTimeoutSec) * time.Second).Navigate(targetURL.String()); err != nil {
+		recordBrowserStage(ctx, "navigate", session.conn, time.Since(navigateStart), err)
 		return nil, newBrowseError(ErrorBrowserNavigationFailed, "navigate", "页面导航失败", err, true)
 	}
-	if err := page.WaitLoad(); err != nil {
+	recordBrowserStage(ctx, "navigate", session.conn, time.Since(navigateStart), nil)
+	loadStart := time.Now()
+	loadErr := page.WaitLoad()
+	recordBrowserStage(ctx, "wait_load", session.conn, time.Since(loadStart), loadErr)
+	if loadErr != nil && (isLocalBrowserFailure(ctx.Err(), loadErr) || isConnectionFailure(loadErr)) {
+		return nil, newBrowseError(ErrorBrowserPageLoadFailed, "wait_load", "页面加载失败", loadErr, true)
+	}
+	if err := loadErr; err != nil {
 		// Modern video and SPA pages can replace the initial document while the
 		// load event is pending. If CDP can still inspect the page, let the
 		// platform-specific selector wait decide DOM readiness instead of
 		// discarding a usable page solely because the load event was interrupted.
-		if _, infoErr := page.Info(); infoErr != nil {
-			return nil, newBrowseError(ErrorBrowserPageLoadFailed, "wait_load", "页面加载失败", err, true)
+		if _, infoErr := (proto.TargetGetTargetInfo{TargetID: page.TargetID}).Call(page.Browser().Context(ctx)); infoErr != nil {
+			return nil, newBrowseError(ErrorBrowserPageLoadFailed, "wait_load", "无法确认加载中断后的页面状态", infoErr, true)
 		}
-		log.Printf("[browser] load event interrupted; page remains inspectable, continuing with DOM readiness check: %v", err)
+		log.Printf("[browser] load event interrupted; page remains inspectable, continuing with DOM readiness check: %s", browseCauseReason(err))
 	}
 	if req.WaitSelector != "" {
-		if _, err := page.Timeout(time.Duration(cfg.WaitSelectorTimeoutSec) * time.Second).Element(req.WaitSelector); err != nil {
+		selectorStart := time.Now()
+		_, err := page.Timeout(time.Duration(cfg.WaitSelectorTimeoutSec) * time.Second).Element(req.WaitSelector)
+		recordBrowserStage(ctx, "wait_selector", session.conn, time.Since(selectorStart), err)
+		if err != nil {
 			return nil, newBrowseError(ErrorBrowserSelectorTimeout, "wait_selector", "等待页面内容选择器失败", err, true)
 		}
 	}
 
-	finalURL := targetURL.String()
-	if info, err := page.Info(); err == nil && strings.TrimSpace(info.URL) != "" {
-		finalURL = strings.TrimSpace(info.URL)
+	// Rod's Page.Info uses the browser context retained during attachment.
+	// That setup context has ended; browser-level calls need the read context.
+	info, infoErr := (proto.TargetGetTargetInfo{TargetID: page.TargetID}).Call(page.Browser().Context(ctx))
+	if infoErr != nil {
+		return nil, newBrowseError(ErrorBrowserUnavailable, "read_page", "获取页面信息失败", infoErr, false)
 	}
-	if err := policy.ValidateURLDomain(finalURL, rootCfg.Gateway.AllowedDomains, nil); err != nil {
+	if info.TargetInfo == nil || strings.TrimSpace(info.TargetInfo.URL) == "" {
+		return nil, newBrowseError(ErrorBrowserContentNotFound, "read_page", "无法确认页面实际地址", fmt.Errorf("target info has no URL"), false)
+	}
+	finalURL := strings.TrimSpace(info.TargetInfo.URL)
+	if err := policy.ValidateURLDomain(finalURL, sourceDomains, nil); err != nil {
 		return nil, err
 	}
-	title, _ := pageTitle(page)
+	// Keep the main document identity local to this attempt. URL comparison
+	// detects SPA navigation; the loader also detects a reload at the same URL.
+	frame, frameErr := (proto.PageGetFrameTree{}).Call(page)
+	if frameErr != nil {
+		return nil, newBrowseError(ErrorBrowserUnavailable, "read_page", "确认页面文档失败", frameErr, false)
+	}
+	if frame.FrameTree == nil || frame.FrameTree.Frame == nil || frame.FrameTree.Frame.LoaderID == "" {
+		return nil, newBrowseError(ErrorBrowserContentNotFound, "read_page", "无法确认页面文档", nil, false)
+	}
+	title := strings.TrimSpace(info.TargetInfo.Title)
 	resp = &BrowserBrowseResponse{
 		URL:   finalURL,
 		Title: title,
 	}
+	readStart := time.Now()
+	defer func() { recordBrowserStage(ctx, "read_page", session.conn, time.Since(readStart), retErr) }()
 
 	if action != "screenshot" {
 		// 根据 mode 选择不同的提取方式
 		switch mode {
 		case "snapshot":
 			// 快照模式：仅返回可交互元素
-			elements, _, err := FetchAXTree(ctx, page)
+			elements, refs, err := FetchAXTree(ctx, page)
 			if err != nil {
 				return nil, newBrowseError(ErrorBrowserContentNotFound, "snapshot", "获取页面快照失败", err, false)
 			}
-			// 过滤仅可交互元素
-			resp.Elements = filterElements(elements, FilterInteractive)
+			filter := req.snapshotFilter
+			if filter == "" {
+				filter = FilterInteractive
+			}
+			resp.Elements = filterElements(elements, filter)
+			if req.snapshotMaxDepth > 0 {
+				filtered := make([]AXNode, 0, len(resp.Elements))
+				for _, node := range resp.Elements {
+					if node.Depth <= req.snapshotMaxDepth {
+						filtered = append(filtered, node)
+					}
+				}
+				resp.Elements = filtered
+			}
+			resp.snapshotRefs = refs
 		case "summary":
 			// 摘要模式：提取关键信息
 			summary, err := extractSummary(page, cfg.WaitSelectorTimeoutSec)
@@ -233,17 +323,25 @@ func browserBrowseWithSessionRunner(ctx context.Context, req *BrowserBrowseReque
 	}
 
 	if script := strings.TrimSpace(req.MetadataScript); script != "" {
-		if meta, err := evalPageMetadata(page, script); err == nil && len(meta) > 0 {
-			resp.Metadata = meta
-		} else if err != nil {
-			resp.Metadata = map[string]any{"_metadata_error": err.Error()}
+		meta, err := evalPageMetadata(page, script)
+		if err == nil && meta == nil {
+			err = fmt.Errorf("metadata script returned null instead of an object")
 		}
+		if err != nil {
+			// Platform scripts also detect login/captcha states; missing metadata
+			// cannot safely be treated as a complete read of the extracted body.
+			return nil, newBrowseError(ErrorBrowserContentNotFound, "metadata", "提取页面结构化信息失败", err, false)
+		}
+		resp.Metadata = meta
 	}
 	if req.CaptureMedia {
 		// Keep navigation-time Media responses as a fallback. Some players fetch
 		// their primary stream before their video element is attached, so resetting
 		// here would discard the only playable URL.
-		captured := captureMediaURLs(page)
+		captured, err := captureMediaURLs(page)
+		if err != nil {
+			return nil, newBrowseError(ErrorBrowserContentNotFound, "capture_media", "探测页面媒体失败", err, false)
+		}
 		if finishMediaCapture != nil {
 			captured = append(captured, finishMediaCapture()...)
 			finishMediaCapture = nil
@@ -251,32 +349,38 @@ func browserBrowseWithSessionRunner(ctx context.Context, req *BrowserBrowseReque
 		resp.MediaURLs = uniqueMediaURLs(captured)
 	}
 
+	// Extraction and requested enrichment can trigger another SPA navigation.
+	// Revalidate the actual source before publishing the completed read.
+	info, infoErr = (proto.TargetGetTargetInfo{TargetID: page.TargetID}).Call(page.Browser().Context(ctx))
+	if infoErr != nil {
+		return nil, newBrowseError(ErrorBrowserUnavailable, "read_page", "确认页面最终地址失败", infoErr, false)
+	}
+	if info.TargetInfo == nil || strings.TrimSpace(info.TargetInfo.URL) == "" {
+		return nil, newBrowseError(ErrorBrowserContentNotFound, "read_page", "无法确认页面最终地址", fmt.Errorf("target info has no URL"), false)
+	}
+	if err := policy.ValidateURLDomain(info.TargetInfo.URL, sourceDomains, nil); err != nil {
+		return nil, err
+	}
+	finalFrame, frameErr := (proto.PageGetFrameTree{}).Call(page)
+	if frameErr != nil {
+		return nil, newBrowseError(ErrorBrowserUnavailable, "read_page", "确认页面最终文档失败", frameErr, false)
+	}
+	if finalFrame.FrameTree == nil || finalFrame.FrameTree.Frame == nil || finalFrame.FrameTree.Frame.LoaderID == "" {
+		return nil, newBrowseError(ErrorBrowserContentNotFound, "read_page", "无法确认页面最终文档", nil, false)
+	}
+	if strings.TrimSpace(info.TargetInfo.URL) != finalURL ||
+		frame.FrameTree.Frame.URL+frame.FrameTree.Frame.URLFragment != finalURL ||
+		finalFrame.FrameTree.Frame.URL+finalFrame.FrameTree.Frame.URLFragment != finalURL ||
+		frame.FrameTree.Frame.ID != finalFrame.FrameTree.Frame.ID ||
+		frame.FrameTree.Frame.LoaderID != finalFrame.FrameTree.Frame.LoaderID ||
+		frame.FrameTree.Frame.URL != finalFrame.FrameTree.Frame.URL ||
+		frame.FrameTree.Frame.URLFragment != finalFrame.FrameTree.Frame.URLFragment {
+		e := newBrowseError(ErrorBrowserContentNotFound, "read_page", "读取期间页面已切换，请等待页面稳定后重新读取", nil, false).(*BrowseError)
+		e.Diagnostics = map[string]any{"operation": "read_page", "reason": "page_changed"}
+		return nil, e
+	}
+	resp.Title = strings.TrimSpace(info.TargetInfo.Title)
 	return resp, nil
-}
-
-// shouldRecoverBrowserConnection allows exactly one replay for the only
-// failure class that means the shared Bridge-owned browser died underneath an
-// otherwise idempotent read. Page-specific failures, content errors, and
-// timeouts retain their original result rather than being hidden by retries.
-// The original request deadline is preserved by passing the existing context
-// into the replay.
-func shouldRecoverBrowserConnection(ctx context.Context, err error) bool {
-	if err == nil || ctx == nil || ctx.Err() != nil {
-		return false
-	}
-	if retried, _ := ctx.Value(browserBrowseRetryContextKey{}).(bool); retried {
-		return false
-	}
-	var browseErr *BrowseError
-	if !errors.As(err, &browseErr) || browseErr.Cause == nil {
-		return false
-	}
-	switch browseCauseReason(browseErr.Cause) {
-	case "browser_connection_closed", "cdp_endpoint_unavailable":
-		return true
-	default:
-		return false
-	}
 }
 
 const mediaResourceProbeScript = `async () => {
@@ -335,34 +439,40 @@ const mediaResourceProbeScript = `async () => {
   return [];
 }`
 
-func captureMediaURLs(page *rod.Page) []string {
+func captureMediaURLs(page *rod.Page) ([]string, error) {
 	if page == nil {
-		return nil
+		return nil, fmt.Errorf("media probe page is nil")
 	}
 	result, err := page.Eval(mediaResourceProbeScript)
-	if err != nil || result == nil {
-		return nil
+	if err != nil {
+		return nil, err
+	}
+	if result == nil {
+		return nil, fmt.Errorf("media probe returned nil")
 	}
 	raw, err := page.ObjectToJSON(result)
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	var urls []string
 	if err := json.Unmarshal([]byte(raw.Str()), &urls); err != nil {
-		return nil
+		return nil, fmt.Errorf("invalid media probe result: %w", err)
 	}
-	return urls
+	if urls == nil {
+		return nil, fmt.Errorf("media probe returned null instead of an array")
+	}
+	return urls, nil
 }
 
-func startMediaResponseCapture(ctx context.Context, page *rod.Page) func() []string {
+func startMediaResponseCapture(ctx context.Context, page *rod.Page) (func() []string, error) {
 	if page == nil {
-		return func() []string { return nil }
+		return nil, fmt.Errorf("media capture page is nil")
 	}
 	probeCtx, cancel := context.WithCancel(ctx)
 	probePage := page.Context(probeCtx)
 	if err := (proto.NetworkEnable{}).Call(probePage); err != nil {
 		cancel()
-		return func() []string { return nil }
+		return nil, err
 	}
 	seen := make(map[string]struct{})
 	var urls []string
@@ -395,7 +505,7 @@ func startMediaResponseCapture(ctx context.Context, page *rod.Page) func() []str
 		defer mu.Unlock()
 		return append([]string(nil), urls...)
 	}
-	return finish
+	return finish, nil
 }
 
 func isVideoMediaResponse(event *proto.NetworkResponseReceived) bool {
@@ -440,7 +550,7 @@ func evalPageMetadata(page *rod.Page, script string) (map[string]any, error) {
 			if err := json.Unmarshal([]byte(strings.TrimSpace(rawString)), &meta); err == nil {
 				return meta, nil
 			}
-			return nil, fmt.Errorf("metadata value string is not a JSON object: %s", truncateForError(rawString, 120))
+			return nil, fmt.Errorf("metadata value string is not a JSON object")
 		}
 		if rawBytes, ok := rawValue.([]byte); ok {
 			var meta map[string]any
@@ -455,7 +565,7 @@ func evalPageMetadata(page *rod.Page, script string) (map[string]any, error) {
 		}
 		var meta map[string]any
 		if err := json.Unmarshal(data, &meta); err != nil {
-			return nil, fmt.Errorf("metadata value is not a JSON object: type=%T value=%s err=%w", rawValue, truncateForError(string(data), 120), err)
+			return nil, fmt.Errorf("metadata value is not a JSON object: type=%T err=%w", rawValue, err)
 		}
 		return meta, nil
 	}
@@ -472,14 +582,6 @@ func evalPageMetadata(page *rod.Page, script string) (map[string]any, error) {
 		return nil, fmt.Errorf("metadata is not a JSON object: %w", err)
 	}
 	return meta, nil
-}
-
-func truncateForError(value string, limit int) string {
-	value = strings.TrimSpace(value)
-	if limit <= 0 || len(value) <= limit {
-		return value
-	}
-	return value[:limit] + "..."
 }
 
 func validateURL(rawURL string) (*url.URL, error) {
@@ -527,32 +629,27 @@ func pageTitle(page *rod.Page) (string, error) {
 func extractMainContent(page *rod.Page, waitSelectorTimeoutSec int) (string, string, error) {
 	selectors := []string{"#js_content", "article", "main", "[role='main']", "body"}
 	timeout := time.Duration(waitSelectorTimeoutSec) * time.Second
-	// A missing candidate selector is normal during fallback extraction. Only
-	// retain errors from reading an element that was actually found; otherwise a
-	// timeout for an earlier optional selector would mislabel an empty final body
-	// as a browser timeout.
-	var lastReadErr error
+	// A live parent's optional selector timeout is a normal miss. Transport,
+	// queue and cancellation failures must stop before trying another selector.
 	for _, selector := range selectors {
 		el, err := page.Timeout(timeout).Element(selector)
 		if err != nil {
-			// Selector misses are expected, but a closed page is terminal and
-			// should retain its diagnostic instead of becoming CONTENT_NOT_FOUND.
-			if isPageClosedCause(err) {
-				lastReadErr = err
+			if page.GetContext().Err() != nil || isLocalBrowserFailure(nil, err) || isConnectionFailure(err) || (isRetryableBrowserCause(err) && !errors.Is(err, context.DeadlineExceeded)) {
+				return "", "", fmt.Errorf("未能提取页面正文: %w", err)
 			}
 			continue
 		}
 		htmlContent, err := el.HTML()
 		if err != nil {
 			if isRetryableBrowserCause(err) {
-				lastReadErr = err
+				return "", "", fmt.Errorf("读取 HTML 失败: %w", err)
 			}
 			continue
 		}
 		textContent, err := el.Text()
 		if err != nil {
 			if isRetryableBrowserCause(err) {
-				lastReadErr = err
+				return "", "", fmt.Errorf("读取文本失败: %w", err)
 			}
 			continue
 		}
@@ -560,9 +657,6 @@ func extractMainContent(page *rod.Page, waitSelectorTimeoutSec int) (string, str
 			continue
 		}
 		return htmlContent, textContent, nil
-	}
-	if lastReadErr != nil {
-		return "", "", fmt.Errorf("未能提取页面正文: %w", lastReadErr)
 	}
 	return "", "", fmt.Errorf("未能提取页面正文")
 }
@@ -590,13 +684,19 @@ func extractSummary(page *rod.Page, waitSelectorTimeoutSec int) (string, error) 
 	var summary strings.Builder
 
 	// 提取标题
-	title, err := pageTitle(page)
+	title, err := pageTitle(page.Timeout(time.Duration(waitSelectorTimeoutSec) * time.Second))
+	if err != nil && (page.GetContext().Err() != nil || isLocalBrowserFailure(nil, err) || isConnectionFailure(err) || (isRetryableBrowserCause(err) && !errors.Is(err, context.DeadlineExceeded))) {
+		return "", err
+	}
 	if err == nil && title != "" {
 		summary.WriteString(fmt.Sprintf("标题: %s\n\n", title))
 	}
 
 	// 提取 meta description
-	metaDesc, _ := page.Eval(`document.querySelector('meta[name="description"]')?.content || ''`)
+	metaDesc, err := page.Eval(`document.querySelector('meta[name="description"]')?.content || ''`)
+	if isRetryableBrowserCause(err) {
+		return "", err
+	}
 	if metaDesc != nil {
 		// 使用 ObjectToJSON 获取值
 		if jsonVal, err := page.ObjectToJSON(metaDesc); err == nil {
@@ -604,6 +704,8 @@ func extractSummary(page *rod.Page, waitSelectorTimeoutSec int) (string, error) 
 			if desc != "" {
 				summary.WriteString(fmt.Sprintf("描述: %s\n\n", desc))
 			}
+		} else if isRetryableBrowserCause(err) {
+			return "", err
 		}
 	}
 
@@ -612,6 +714,9 @@ func extractSummary(page *rod.Page, waitSelectorTimeoutSec int) (string, error) 
 	for _, selector := range selectors {
 		elements, err := page.Elements(selector)
 		if err != nil {
+			if isRetryableBrowserCause(err) {
+				return "", err
+			}
 			continue
 		}
 		count := 0
@@ -620,6 +725,9 @@ func extractSummary(page *rod.Page, waitSelectorTimeoutSec int) (string, error) 
 				break
 			}
 			text, err := el.Text()
+			if isRetryableBrowserCause(err) {
+				return "", err
+			}
 			if err == nil && strings.TrimSpace(text) != "" {
 				summary.WriteString(fmt.Sprintf("- %s\n", strings.TrimSpace(text)))
 				count++

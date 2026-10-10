@@ -1,0 +1,10 @@
+{
+  "time": "2026-10-10T06:24:24.670909+00:00",
+  "running_bridge_count": 1,
+  "running_bridge_pids": [
+    3562
+  ],
+  "installed_build_id": "sha256:d0a2d6722d423ccfe7db9cc19653f2b545a4424cabdc080dbf312c418fbd3eca",
+  "running_build_id": "sha256:d0a2d6722d423ccfe7db9cc19653f2b545a4424cabdc080dbf312c418fbd3eca",
+  "build_matches": true
+}

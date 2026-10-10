@@ -1346,7 +1346,7 @@ var absoluteURLRe = regexp.MustCompile(`(?i)https?://[^"'<>\\\s]+`)
 var relativeContentPathRe = regexp.MustCompile(`(?i)/(?:article|group|video|w)/[0-9]+/?|/[A-Za-z0-9_]{1,32}/status/[0-9]+/?|/video/(?:BV[0-9A-Za-z]+|av[0-9]+)/?|/(?:detail|status)/[0-9A-Za-z]+/?|/(?:short-video|photo)/[0-9A-Za-z_-]+/?|/question/[0-9]+/answer/[0-9]+/?|/p/[0-9A-Za-z_-]+/?|/reel/[0-9A-Za-z_-]+/?|/@[A-Za-z0-9._]+/post/[0-9A-Za-z_-]+/?|/zvideo/[0-9]+/?`)
 
 func (r Service) readHTMLLinks(ctx context.Context, item Source, platformName string) ([]Item, error) {
-	data, _, err := r.feedService().Fetch(ctx, item.URL)
+	data, _, _, err := r.feedService().Fetch(ctx, item.URL)
 	base, _ := url.Parse(item.URL)
 	var staticErr error
 	if err != nil {

@@ -2,7 +2,9 @@ package reddit
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"github.com/originaleric/digcrawl/internal/browser"
 	"strings"
 	"time"
 
@@ -21,6 +23,7 @@ type ReadInput struct {
 }
 
 func ReadPost(ctx context.Context, in ReadInput) (*platform.Content, error) {
+	ctx = browser.WithBrowseRetryContext(ctx)
 	url := strings.TrimSpace(in.URL)
 	if url == "" {
 		return nil, fmt.Errorf("url is required")
@@ -81,13 +84,7 @@ func ReadPost(ctx context.Context, in ReadInput) (*platform.Content, error) {
 	}
 	content, browserLatency, err := readPostBrowser(ctx, in, norm, apiAttempt)
 	if err != nil {
-		if rssErr != nil {
-			return nil, platform.NewReadError(platform.ErrPartialContent, fmt.Sprintf("Reddit RSS fallback failed: %v; browser fallback failed: %v", rssErr, err), PlatformName, map[string]any{
-				"rss_error":     rssErr.Error(),
-				"browser_error": err.Error(),
-			})
-		}
-		return nil, err
+		return nil, postBrowserFailure(err, rssErr)
 	}
 	platform.MergeContentMetrics(content, platform.ReadMetrics{
 		Platform:         PlatformName,
@@ -232,3 +229,17 @@ const metadataScript = `(() => {
     extraction_source: 'browser'
   };
 })()`
+
+func postBrowserFailure(err, rssErr error) error {
+	var browseErr *browser.BrowseError
+	if errors.As(err, &browseErr) {
+		return err
+	}
+	if rssErr != nil {
+		return platform.NewReadError(platform.ErrPartialContent, fmt.Sprintf("Reddit RSS fallback failed: %v; browser fallback failed: %v", rssErr, err), PlatformName, map[string]any{
+			"rss_error":     rssErr.Error(),
+			"browser_error": err.Error(),
+		})
+	}
+	return err
+}

@@ -1,0 +1,71 @@
+=== RUN   TestChromeDedicatedSnapshotAcceptance
+=== RUN   TestChromeDedicatedSnapshotAcceptance/page_changed
+=== RUN   TestChromeDedicatedSnapshotAcceptance/send_queue
+=== RUN   TestChromeDedicatedSnapshotAcceptance/cancelled
+=== RUN   TestChromeDedicatedSnapshotAcceptance/local_domain_restriction
+--- PASS: TestChromeDedicatedSnapshotAcceptance (2.10s)
+    --- PASS: TestChromeDedicatedSnapshotAcceptance/page_changed (0.41s)
+    --- PASS: TestChromeDedicatedSnapshotAcceptance/send_queue (0.34s)
+    --- PASS: TestChromeDedicatedSnapshotAcceptance/cancelled (0.33s)
+    --- PASS: TestChromeDedicatedSnapshotAcceptance/local_domain_restriction (0.13s)
+PASS
+ok  	github.com/originaleric/digcrawl/internal/browser	4.639s
+=== RUN   TestChromeSnapshotSourcePolicyAcceptance
+=== RUN   TestChromeSnapshotSourcePolicyAcceptance/allow_redirect=false
+    entries_test.go:287: start=http://localhost:49712/redirect final=http://127.0.0.1:49712/final out=map[] artifacts=0 err=DOMAIN_NOT_ALLOWED: target domain "127.0.0.1" is not allowed
+=== RUN   TestChromeSnapshotSourcePolicyAcceptance/allow_redirect=true
+    entries_test.go:287: start=http://localhost:49712/redirect final=http://127.0.0.1:49712/final out=map[elements:[{Ref:e1 Role:button Name:Final source button Value: Depth:3 Disabled:false Focused:false NodeID:7}] source_url:http://127.0.0.1:49712/final title:Final source] artifacts=0 err=<nil>
+--- PASS: TestChromeSnapshotSourcePolicyAcceptance (0.95s)
+    --- PASS: TestChromeSnapshotSourcePolicyAcceptance/allow_redirect=false (0.57s)
+    --- PASS: TestChromeSnapshotSourcePolicyAcceptance/allow_redirect=true (0.22s)
+PASS
+ok  	github.com/originaleric/digcrawl/provider/browser	3.702s
+=== RUN   TestChromePlatformSourcePolicyAcceptance
+=== RUN   TestChromePlatformSourcePolicyAcceptance/bilibili_merged_source
+2026/10/10 22:45:38 [platform-read] platform=bilibili channel=api source=api api_ms=0 feed_ms=0 browser_ms=179 retries=0
+2026/10/10 22:45:38 [platform-read] platform=bilibili channel=api source=api api_ms=0 feed_ms=0 browser_ms=194 retries=0
+--- PASS: TestChromePlatformSourcePolicyAcceptance (1.20s)
+    --- PASS: TestChromePlatformSourcePolicyAcceptance/bilibili_merged_source (0.37s)
+=== RUN   TestRedditRSSSourcePolicyAcrossEntries
+=== RUN   TestRedditRSSSourcePolicyAcrossEntries/reddit.post.read/default
+2026/10/10 22:45:38 [platform-read] platform=reddit channel=rss source=rss api_ms=0 feed_ms=0 browser_ms=0 retries=0
+=== RUN   TestRedditRSSSourcePolicyAcrossEntries/reddit.post.read/call_restriction
+2026/10/10 22:45:38 [platform-read] platform=reddit channel=rss source=rss api_ms=0 feed_ms=0 browser_ms=0 retries=0
+=== RUN   TestRedditRSSSourcePolicyAcrossEntries/reddit.post.read/config_restriction
+2026/10/10 22:45:38 [platform-read] platform=reddit channel=rss source=rss api_ms=0 feed_ms=0 browser_ms=0 retries=0
+=== RUN   TestRedditRSSSourcePolicyAcrossEntries/reddit.post.read/call_overrides_config
+2026/10/10 22:45:38 [platform-read] platform=reddit channel=rss source=rss api_ms=0 feed_ms=0 browser_ms=0 retries=0
+=== RUN   TestRedditRSSSourcePolicyAcrossEntries/reddit.subreddit.read/default
+=== RUN   TestRedditRSSSourcePolicyAcrossEntries/reddit.subreddit.read/call_restriction
+=== RUN   TestRedditRSSSourcePolicyAcrossEntries/reddit.subreddit.read/config_restriction
+=== RUN   TestRedditRSSSourcePolicyAcrossEntries/reddit.subreddit.read/call_overrides_config
+=== RUN   TestRedditRSSSourcePolicyAcrossEntries/reddit.user.read/default
+=== RUN   TestRedditRSSSourcePolicyAcrossEntries/reddit.user.read/call_restriction
+=== RUN   TestRedditRSSSourcePolicyAcrossEntries/reddit.user.read/config_restriction
+=== RUN   TestRedditRSSSourcePolicyAcrossEntries/reddit.user.read/call_overrides_config
+--- PASS: TestRedditRSSSourcePolicyAcrossEntries (0.00s)
+    --- PASS: TestRedditRSSSourcePolicyAcrossEntries/reddit.post.read/default (0.00s)
+    --- PASS: TestRedditRSSSourcePolicyAcrossEntries/reddit.post.read/call_restriction (0.00s)
+    --- PASS: TestRedditRSSSourcePolicyAcrossEntries/reddit.post.read/config_restriction (0.00s)
+    --- PASS: TestRedditRSSSourcePolicyAcrossEntries/reddit.post.read/call_overrides_config (0.00s)
+    --- PASS: TestRedditRSSSourcePolicyAcrossEntries/reddit.subreddit.read/default (0.00s)
+    --- PASS: TestRedditRSSSourcePolicyAcrossEntries/reddit.subreddit.read/call_restriction (0.00s)
+    --- PASS: TestRedditRSSSourcePolicyAcrossEntries/reddit.subreddit.read/config_restriction (0.00s)
+    --- PASS: TestRedditRSSSourcePolicyAcrossEntries/reddit.subreddit.read/call_overrides_config (0.00s)
+    --- PASS: TestRedditRSSSourcePolicyAcrossEntries/reddit.user.read/default (0.00s)
+    --- PASS: TestRedditRSSSourcePolicyAcrossEntries/reddit.user.read/call_restriction (0.00s)
+    --- PASS: TestRedditRSSSourcePolicyAcrossEntries/reddit.user.read/config_restriction (0.00s)
+    --- PASS: TestRedditRSSSourcePolicyAcrossEntries/reddit.user.read/call_overrides_config (0.00s)
+PASS
+ok  	github.com/originaleric/digcrawl/provider/platform	4.279s
+=== RUN   TestFeedSourceIsConfirmedAcrossReadPaths
+--- PASS: TestFeedSourceIsConfirmedAcrossReadPaths (0.00s)
+PASS
+ok  	github.com/originaleric/digcrawl/internal/feed	2.770s
+=== RUN   TestMergedBrowserVideoRetainsSource
+    mapper_test.go:130: merged source=https://www.bilibili.com/video/BV1xx411c7mD meta=map[aid:0 api_code:0 cid:0 extraction_source:api final_url:https://outside.example/video page_kind:bv platform_id:BV1xx411c7mD video_id:BV1xx411c7mD] media=[{video https://cdn.example/video.mp4 }]
+--- PASS: TestMergedBrowserVideoRetainsSource (0.00s)
+=== RUN   TestBrowserVideoWithUnknownSourceDoesNotMutateAPI
+--- PASS: TestBrowserVideoWithUnknownSourceDoesNotMutateAPI (0.00s)
+PASS
+ok  	github.com/originaleric/digcrawl/internal/platform/bilibili	3.300s

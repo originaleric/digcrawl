@@ -25,25 +25,26 @@ func stopBridgeOwner(ctx context.Context, socket string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	pid := 0
-	for _, process := range processes {
-		if process.PID <= 0 || !strings.Contains(process.Command, "bridge serve") || !windowsHasSocketArgument(process.Command, socket) {
+	stopped := false
+	for _, candidate := range processes {
+		pid := candidate.PID
+		if pid <= 0 || !strings.Contains(candidate.Command, "bridge serve") || !windowsHasSocketArgument(candidate.Command, socket) {
 			continue
 		}
-		pid = process.PID
-		break
+
+		output, err := exec.CommandContext(ctx, "taskkill", "/PID", strconv.Itoa(pid), "/T", "/F").CombinedOutput()
+		if err != nil && ctx.Err() != nil {
+			return false, ctx.Err()
+		}
+		if err != nil && !strings.Contains(strings.ToLower(string(output)), "not found") {
+			return false, fmt.Errorf("force-stop local bridge process tree: %w: %s", err, strings.TrimSpace(string(output)))
+		}
+		stopped = true
 	}
-	if pid == 0 {
+	if !stopped {
 		return false, ErrBridgeOwnerNotFound
 	}
-	output, err := exec.CommandContext(ctx, "taskkill", "/PID", strconv.Itoa(pid), "/T", "/F").CombinedOutput()
-	if err != nil && ctx.Err() != nil {
-		return false, ctx.Err()
-	}
-	if err != nil && !strings.Contains(strings.ToLower(string(output)), "not found") {
-		return false, fmt.Errorf("force-stop local bridge process tree: %w: %s", err, strings.TrimSpace(string(output)))
-	}
-	return true, nil
+	return stopped, nil
 }
 
 func listWindowsBridgeProcesses(ctx context.Context) ([]windowsBridgeProcess, error) {
@@ -79,4 +80,8 @@ func windowsHasSocketArgument(command, socket string) bool {
 		}
 	}
 	return false
+}
+
+func stopLegacyBridgeCandidates(ctx context.Context, socket string) (bool, error) {
+	return stopBridgeOwner(ctx, socket)
 }

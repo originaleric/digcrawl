@@ -310,8 +310,8 @@ func TestPlatformReadHandlerRejectsNonVideoArtifactForProviderRetention(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler := platformReadHandlerNamedWithConfig(ToolToutiaoVideoRead, []string{"8.8.8.8"}, nil, store, func(_ context.Context, _ iplatform.ReadInput) (*iplatform.Content, error) {
-		return &iplatform.Content{Platform: "toutiao", ContentType: "video", Media: []iplatform.MediaItem{{Type: "video", ArtifactID: "invalid-video"}}}, nil
+	handler := platformReadHandlerNamedWithConfig(ToolToutiaoVideoRead, []string{"8.8.8.8"}, nil, store, func(_ context.Context, in iplatform.ReadInput) (*iplatform.Content, error) {
+		return &iplatform.Content{Platform: "toutiao", ContentType: "video", SourceURL: in.URL, Media: []iplatform.MediaItem{{Type: "video", ArtifactID: "invalid-video"}}}, nil
 	}, cfg)
 	out, _, err := handler(context.Background(), &protocol.ToolCall{Type: protocol.TypeToolCall, Tool: ToolToutiaoVideoRead, Input: input})
 	if err == nil {

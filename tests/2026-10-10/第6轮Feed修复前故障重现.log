@@ -1,0 +1,7 @@
+=== RUN   TestFeedRedirectRespectsFinalSourcePolicy
+    source_policy_test.go:226: out=map[canonical_url:http://localhost:54438/redirect captured_at:2026-10-10T21:49:03+08:00 content_type:feed markdown:- [Item](https://item.example/article) platform:feed platform_metadata:map[entries:[map[id:https://item.example/article title:Item url:https://item.example/article]] entry_count:1 extraction_source:rss] source_url:http://localhost:54438/redirect text:Item
+        https://item.example/article title:Feed] err=<nil>
+--- FAIL: TestFeedRedirectRespectsFinalSourcePolicy (0.01s)
+FAIL
+FAIL	github.com/originaleric/digcrawl/provider/platform	0.356s
+FAIL

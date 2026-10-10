@@ -1,0 +1,54 @@
+=== RUN   TestChromeReadTailFailureAcceptance
+=== RUN   TestChromeReadTailFailureAcceptance/metadata_deadline
+    chrome_acceptance_test.go:291: typed failure preserved; healthy connection reused; targets/leases/slots/sessions=0
+=== RUN   TestChromeReadTailFailureAcceptance/metadata_cancel
+    chrome_acceptance_test.go:291: typed failure preserved; healthy connection reused; targets/leases/slots/sessions=0
+=== RUN   TestChromeReadTailFailureAcceptance/metadata_invalid_value
+    chrome_acceptance_test.go:291: typed failure preserved; healthy connection reused; targets/leases/slots/sessions=0
+=== RUN   TestChromeReadTailFailureAcceptance/metadata_null
+    chrome_acceptance_test.go:291: typed failure preserved; healthy connection reused; targets/leases/slots/sessions=0
+=== RUN   TestChromeReadTailFailureAcceptance/metadata_script_error
+    chrome_acceptance_test.go:291: typed failure preserved; healthy connection reused; targets/leases/slots/sessions=0
+=== RUN   TestChromeReadTailFailureAcceptance/media_deadline
+    chrome_acceptance_test.go:291: typed failure preserved; healthy connection reused; targets/leases/slots/sessions=0
+=== RUN   TestChromeReadTailFailureAcceptance/metadata_transport_disconnect
+    chrome_acceptance_test.go:315: metadata CDP failure recovered once; old process released; targets/leases/slots/sessions=0
+--- PASS: TestChromeReadTailFailureAcceptance (4.83s)
+    --- PASS: TestChromeReadTailFailureAcceptance/metadata_deadline (1.14s)
+    --- PASS: TestChromeReadTailFailureAcceptance/metadata_cancel (0.24s)
+    --- PASS: TestChromeReadTailFailureAcceptance/metadata_invalid_value (0.25s)
+    --- PASS: TestChromeReadTailFailureAcceptance/metadata_null (0.24s)
+    --- PASS: TestChromeReadTailFailureAcceptance/metadata_script_error (0.24s)
+    --- PASS: TestChromeReadTailFailureAcceptance/media_deadline (1.15s)
+    --- PASS: TestChromeReadTailFailureAcceptance/metadata_transport_disconnect (1.05s)
+=== RUN   TestChromeReadBoundaryAcceptance
+=== RUN   TestChromeReadBoundaryAcceptance/load_queue
+=== RUN   TestChromeReadBoundaryAcceptance/inspect_queue
+=== RUN   TestChromeReadBoundaryAcceptance/final_inspect_queue
+=== RUN   TestChromeReadBoundaryAcceptance/selector_queue
+=== RUN   TestChromeReadBoundaryAcceptance/html_queue
+=== RUN   TestChromeReadBoundaryAcceptance/text_queue
+=== RUN   TestChromeReadBoundaryAcceptance/summary_queue
+=== RUN   TestChromeReadBoundaryAcceptance/document_interruption
+2026/10/10 21:00:12 [browser] load event interrupted; page remains inspectable, continuing with DOM readiness check: unclassified
+=== RUN   TestChromeReadBoundaryAcceptance/redirect_allowed
+=== RUN   TestChromeReadBoundaryAcceptance/redirect_blocked
+=== RUN   TestChromeReadBoundaryAcceptance/late_redirect_blocked
+--- PASS: TestChromeReadBoundaryAcceptance (3.66s)
+    --- PASS: TestChromeReadBoundaryAcceptance/load_queue (0.31s)
+    --- PASS: TestChromeReadBoundaryAcceptance/inspect_queue (0.24s)
+    --- PASS: TestChromeReadBoundaryAcceptance/final_inspect_queue (0.23s)
+    --- PASS: TestChromeReadBoundaryAcceptance/selector_queue (1.27s)
+    --- PASS: TestChromeReadBoundaryAcceptance/html_queue (0.22s)
+    --- PASS: TestChromeReadBoundaryAcceptance/text_queue (0.24s)
+    --- PASS: TestChromeReadBoundaryAcceptance/summary_queue (0.23s)
+    --- PASS: TestChromeReadBoundaryAcceptance/document_interruption (0.12s)
+    --- PASS: TestChromeReadBoundaryAcceptance/redirect_allowed (0.13s)
+    --- PASS: TestChromeReadBoundaryAcceptance/redirect_blocked (0.11s)
+    --- PASS: TestChromeReadBoundaryAcceptance/late_redirect_blocked (0.11s)
+PASS
+ok  	github.com/originaleric/digcrawl/internal/browser	9.871s
+=== RUN   TestChromeTextOnlyProviderAcceptance
+--- PASS: TestChromeTextOnlyProviderAcceptance (0.83s)
+PASS
+ok  	github.com/originaleric/digcrawl/provider/browser	1.905s

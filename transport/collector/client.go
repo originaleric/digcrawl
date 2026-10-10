@@ -355,6 +355,9 @@ func (c *Client) executeAndReply(ctx context.Context, writeEnv envelopeWriter, c
 	defer c.limiter.Touch(key)
 
 	maxAttempts := c.opts.RetryMaxAttempts
+	if managedBrowserTool(call.Tool) {
+		maxAttempts = 1
+	}
 	if maxAttempts <= 0 {
 		maxAttempts = 1
 	}

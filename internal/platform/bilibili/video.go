@@ -3,13 +3,16 @@ package bilibili
 import (
 	"context"
 	"fmt"
+	"github.com/originaleric/digcrawl/internal/browser"
 	"strings"
 	"time"
 
 	"github.com/originaleric/digcrawl/internal/platform"
+	"github.com/originaleric/digcrawl/runtime/policy"
 )
 
 func ReadVideo(ctx context.Context, in platform.ReadInput) (*platform.Content, error) {
+	ctx = browser.WithBrowseRetryContext(ctx)
 	rawURL := strings.TrimSpace(in.URL)
 	if rawURL == "" {
 		return nil, fmt.Errorf("url 不能为空")
@@ -75,7 +78,9 @@ func ReadVideo(ctx context.Context, in platform.ReadInput) (*platform.Content, e
 		// is needed solely because that API does not expose a playable stream;
 		// never let a login shell or otherwise incomplete browser page replace
 		// already-successful title, text, author, and metadata.
-		appendBrowserVideoMedia(apiContent, content)
+		if err := appendBrowserVideoMedia(apiContent, content); err != nil {
+			return nil, err
+		}
 		apiContent.PlatformMetadata = platform.MergeAPIMeta(apiContent.PlatformMetadata, apiAttempt)
 		platform.MergeContentMetrics(apiContent, platform.ReadMetrics{
 			Platform:         PlatformName,
@@ -120,13 +125,25 @@ func hasVideoMedia(items []platform.MediaItem) bool {
 // appendBrowserVideoMedia keeps API content as the source of truth while
 // adding only browser-confirmed video references. The generic retention layer
 // will perform the bounded download and final file validation afterwards.
-func appendBrowserVideoMedia(apiContent, browserContent *platform.Content) {
+func appendBrowserVideoMedia(apiContent, browserContent *platform.Content) error {
 	if apiContent == nil || browserContent == nil {
-		return
+		return nil
 	}
+	if !hasVideoMedia(browserContent.Media) {
+		return nil
+	}
+	finalURL := platform.MetaString(browserContent.PlatformMetadata, "final_url")
+	if err := policy.ValidateURLDomain(finalURL, nil, nil); err != nil {
+		return fmt.Errorf("browser video source: %w", err)
+	}
+	// Preserve the source of accepted browser media without replacing API text
+	// or metadata. The provider validates it before downloads and delivery.
+	apiContent.PlatformMetadata = platform.EnsureMeta(apiContent.PlatformMetadata)
+	apiContent.PlatformMetadata["final_url"] = finalURL
 	for _, item := range browserContent.Media {
 		if strings.EqualFold(strings.TrimSpace(item.Type), "video") && (strings.TrimSpace(item.URL) != "" || strings.TrimSpace(item.ArtifactID) != "") {
 			apiContent.Media = append(apiContent.Media, item)
 		}
 	}
+	return nil
 }

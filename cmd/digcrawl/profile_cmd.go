@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -9,11 +11,13 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/originaleric/digcrawl/config"
 	"github.com/originaleric/digcrawl/internal/asr"
 	"github.com/originaleric/digcrawl/internal/browser"
 	"github.com/originaleric/digcrawl/runtime"
+	"github.com/originaleric/digcrawl/transport/bridge"
 	"gopkg.in/yaml.v3"
 )
 
@@ -108,7 +112,16 @@ func runConfig(args []string) {
 func runDoctor(args []string) {
 	fs := flag.NewFlagSet("doctor", flag.ExitOnError)
 	configPath := fs.String("config", "", "path to profile")
+	diagnosticID := fs.String("diagnostic-id", "", "safe local browser diagnostic ID")
 	_ = fs.Parse(args)
+	if *diagnosticID != "" {
+		records, err := browser.DiagnosticSummary(*diagnosticID)
+		if err != nil {
+			log.Fatal(err)
+		}
+		_ = json.NewEncoder(os.Stdout).Encode(records)
+		return
+	}
 	if strings.TrimSpace(*configPath) == "" {
 		log.Fatal("doctor: --config is required")
 	}
@@ -117,13 +130,19 @@ func runDoctor(args []string) {
 		log.Fatalf("doctor: %v", err)
 	}
 
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+	defer cancel()
+	_, bridgeErr := bridge.CheckBridge(ctx, *configPath)
 	checks := []doctorCheck{
 		{name: "binary", err: checkExecutable(os.Args[0])},
 		{name: "profile", err: nil},
 		{name: "artifact directory", err: checkWritableDirectory(cfg.Gateway.ArtifactDir)},
 		// MCP uses the on-demand local bridge, which owns Chrome directly. Its
 		// health must not depend on the optional legacy fixed-CDP service.
-		{name: "browser", err: browser.CheckManagedAvailable(cfg.LocalBrowser)},
+		{name: "browser dependency", err: browser.CheckManagedAvailable(cfg.LocalBrowser)},
+		{name: "Bridge transport", err: bridgeErr},
+		{name: "Bridge build", err: bridge.CheckBridgeBuild(ctx, *configPath)},
+		{name: "browser operation", err: bridge.CheckBrowserOperation(ctx, *configPath)},
 		{name: "Skill ffmpeg", err: checkSkillFFmpeg(cfg)},
 		{name: "Skill ASR provider", err: checkSkillASRProvider(cfg)},
 		{name: "mcp startup", err: checkMCPStartup(cfg)},

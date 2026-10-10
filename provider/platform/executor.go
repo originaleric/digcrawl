@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/originaleric/digcrawl/internal/browser"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -163,6 +164,7 @@ func platformReadHandlerNamedWithConfig(
 		runtimeCfg = config.Get()
 	}
 	return func(ctx context.Context, call *protocol.ToolCall) (map[string]any, []protocol.Artifact, error) {
+		ctx = browser.WithBrowseRetryContext(ctx)
 		in, err := executor.DecodeInput[platformReadInput](call)
 		if err != nil {
 			return nil, nil, err
@@ -199,8 +201,26 @@ func platformReadHandlerNamedWithConfig(
 		if err != nil {
 			var re *iplatform.ReadError
 			if errors.As(err, &re) {
-				return iplatform.ErrorOutput(re), nil, re
+				// Error metadata is also delivered data. Keep known page sources
+				// under the same policy before returning a login/partial result.
+				if err := validatePlatformURL(in.URL, call, configDomains, defaultDomains,
+					iplatform.MetaString(re.Meta, "final_url"), iplatform.MetaString(re.Meta, "resolved_url")); err != nil {
+					return nil, nil, err
+				}
+				out := iplatform.ErrorOutput(re)
+				if d := browser.BrowseDiagnostics(ctx); d != nil && d["attempts"].(int) > 0 {
+					out["browser_diagnostics"] = d
+				}
+				return out, nil, re
 			}
+			return nil, nil, err
+		}
+		if content == nil {
+			return nil, nil, fmt.Errorf("%s: platform reader returned no content", policy.CodeInvalidInput)
+		}
+		if err := validatePlatformURL(content.SourceURL, call, configDomains, defaultDomains,
+			iplatform.MetaString(content.PlatformMetadata, "final_url"),
+			iplatform.MetaString(content.PlatformMetadata, "resolved_url")); err != nil {
 			return nil, nil, err
 		}
 		var artifacts []protocol.Artifact
@@ -224,6 +244,9 @@ func platformReadHandlerNamedWithConfig(
 					content.PlatformMetadata = iplatform.EnsureMeta(content.PlatformMetadata)
 					retainErr := providerVideoDownloadFailure(content.PlatformMetadata, 1, retainedVideoFailureReason(downloadErr.Error()))
 					out := iplatform.ApplyFormats(content, in.Format)
+					if d := browser.BrowseDiagnostics(ctx); d != nil && d["attempts"].(int) > 0 {
+						out["browser_diagnostics"] = d
+					}
 					if !returnMedia && !isCollect {
 						delete(out, "media")
 					}
@@ -249,6 +272,9 @@ func platformReadHandlerNamedWithConfig(
 				if err != nil {
 					retainErr := providerVideoDownloadFailure(content.PlatformMetadata, 1, "local_storage_failed")
 					out := iplatform.ApplyFormats(content, in.Format)
+					if d := browser.BrowseDiagnostics(ctx); d != nil && d["attempts"].(int) > 0 {
+						out["browser_diagnostics"] = d
+					}
 					if !returnMedia && !isCollect {
 						delete(out, "media")
 					}
@@ -264,6 +290,9 @@ func platformReadHandlerNamedWithConfig(
 		}
 		skillEnhancement := ocrRequested || in.IncludeASR || in.IncludeSummary
 		out := iplatform.ApplyFormats(content, in.Format)
+		if d := browser.BrowseDiagnostics(ctx); d != nil && d["attempts"].(int) > 0 {
+			out["browser_diagnostics"] = d
+		}
 		if !returnMedia && !isCollect {
 			// OCR needs resolved image references as process input, but an enabled
 			// local OCR profile must not silently change a text-only MCP response.
@@ -362,12 +391,23 @@ func persistCollectedYouTubeVideo(ctx context.Context, store artifact.Store, pat
 	return store.Put(ctx, artifact.NewID(), "video/mp4", filepath.Base(path), data)
 }
 
-func validatePlatformURL(rawURL string, call *protocol.ToolCall, configDomains, defaultDomains []string) error {
+func validatePlatformURL(rawURL string, call *protocol.ToolCall, configDomains, defaultDomains []string, resolvedURLs ...string) error {
 	domains := policy.MergeDomains(&call.Policy, configDomains)
 	if len(domains) == 0 {
 		domains = defaultDomains
 	}
-	return policy.ValidateURLDomain(rawURL, domains, nil)
+	if err := policy.ValidateURLDomain(rawURL, domains, nil); err != nil {
+		return err
+	}
+	for _, resolvedURL := range resolvedURLs {
+		if strings.TrimSpace(resolvedURL) == "" {
+			continue
+		}
+		if err := policy.ValidateURLDomain(resolvedURL, domains, nil); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // activeSkillMediaRetentionConfig takes the local media settings used by a

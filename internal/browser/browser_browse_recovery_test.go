@@ -78,6 +78,42 @@ func TestBrowserBrowseRebuildsBridgeOwnedConnectionOnceAfterCDPDisconnect(t *tes
 	}
 }
 
+func TestBrowserBrowseDoesNotPublishSuccessAfterCleanupCancellation(t *testing.T) {
+	for _, reason := range []string{"cancelled", "budget_exhausted"} {
+		t.Run(reason, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			if reason == "budget_exhausted" {
+				cancel()
+				ctx, cancel = context.WithTimeout(context.Background(), 20*time.Millisecond)
+			}
+			defer cancel()
+			ctx = WithBrowseRetryContext(ctx)
+			m := fetchTestManager()
+			releases, reads := 0, 0
+			m.releaseSessionFn = func(*browserSession) error {
+				releases++
+				if reason == "cancelled" {
+					cancel()
+				} else {
+					<-ctx.Done()
+				}
+				return nil
+			}
+			resp, err := browserBrowseWithSessionRunner(ctx, &BrowserBrowseRequest{URL: "https://www.douyin.com"}, func() *browserManager { return m }, func(context.Context, *BrowserBrowseRequest, *browserSession) (*BrowserBrowseResponse, error) {
+				reads++
+				return &BrowserBrowseResponse{Text: "read before cancellation"}, nil
+			})
+			var be *BrowseError
+			if resp != nil || !errors.As(err, &be) || !errors.Is(err, ctx.Err()) || reads != 1 || releases != 1 {
+				t.Fatalf("resp=%+v err=%v reads=%d releases=%d", resp, err, reads, releases)
+			}
+			if be.ToolErrorDetails()["reason"] != reason || be.Diagnostics["retry_count"] != 0 || be.Diagnostics["next_actions"] == nil || be.Retryable {
+				t.Fatalf("invalid cancellation contract: %+v", be)
+			}
+		})
+	}
+}
+
 func TestBrowserBrowseDoesNotReplayPageSpecificFailure(t *testing.T) {
 	conn := newLifecycleTestConnection(func(context.Context) error { return nil }, func(context.Context) error { return nil })
 	conn.leases = 1
@@ -105,12 +141,30 @@ func TestBrowserBrowseDoesNotReplayPageSpecificFailure(t *testing.T) {
 	}
 }
 
-func TestShouldRecoverBrowserConnectionKeepsOriginalDeadline(t *testing.T) {
+func TestBrowserRetryDecisionKeepsOriginalDeadline(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Nanosecond)
 	defer cancel()
 	<-ctx.Done()
 	err := newBrowseError(ErrorBrowserNavigationFailed, "navigate", "页面导航失败", errors.New("websocket closed"), true)
-	if shouldRecoverBrowserConnection(ctx, err) {
+	if canRetryBrowse(ctx, err) {
 		t.Fatal("expired request must not start a replacement replay")
+	}
+}
+
+func TestCancellationDuringBackoffDoesNotCountUnexecutedRetry(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	c := newLifecycleTestConnection(func(context.Context) error { return nil }, func(context.Context) error { return nil })
+	c.leases = 1
+	m := &browserManager{active: c}
+	m.acquireSessionFn = func(context.Context) (*browserSession, error) { return &browserSession{conn: c}, nil }
+	m.releaseSessionFn = m.release
+	_, err := browserBrowseWithSessionRunner(ctx, &BrowserBrowseRequest{URL: "https://example.com"}, func() *browserManager { return m }, func(context.Context, *BrowserBrowseRequest, *browserSession) (*BrowserBrowseResponse, error) {
+		time.AfterFunc(20*time.Millisecond, cancel)
+		return nil, newBrowseError(ErrorBrowserNavigationFailed, "navigate", "navigation", errors.New("websocket closed"), true)
+	})
+	var e *BrowseError
+	if !errors.As(err, &e) || e.Diagnostics["attempts"] != 1 || e.Diagnostics["retry_count"] != 0 || e.Diagnostics["recovery_status"] != "cancelled" {
+		t.Fatalf("err=%v diagnostics=%v", err, e)
 	}
 }

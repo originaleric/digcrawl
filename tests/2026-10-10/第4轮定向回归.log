@@ -1,0 +1,92 @@
+=== RUN   TestScriptExceptionTextCannotRetireBrowserConnection
+=== RUN   TestScriptExceptionTextCannotRetireBrowserConnection/EOF
+=== RUN   TestScriptExceptionTextCannotRetireBrowserConnection/context_deadline_exceeded
+=== RUN   TestScriptExceptionTextCannotRetireBrowserConnection/dial_tcp_connection_refused
+=== RUN   TestScriptExceptionTextCannotRetireBrowserConnection/target_closed
+=== RUN   TestScriptExceptionTextCannotRetireBrowserConnection/external_target_cleanup_required
+--- PASS: TestScriptExceptionTextCannotRetireBrowserConnection (0.00s)
+    --- PASS: TestScriptExceptionTextCannotRetireBrowserConnection/EOF (0.00s)
+    --- PASS: TestScriptExceptionTextCannotRetireBrowserConnection/context_deadline_exceeded (0.00s)
+    --- PASS: TestScriptExceptionTextCannotRetireBrowserConnection/dial_tcp_connection_refused (0.00s)
+    --- PASS: TestScriptExceptionTextCannotRetireBrowserConnection/target_closed (0.00s)
+    --- PASS: TestScriptExceptionTextCannotRetireBrowserConnection/external_target_cleanup_required (0.00s)
+=== RUN   TestBrowserBrowseDoesNotPublishSuccessAfterCleanupCancellation
+=== RUN   TestBrowserBrowseDoesNotPublishSuccessAfterCleanupCancellation/cancelled
+=== RUN   TestBrowserBrowseDoesNotPublishSuccessAfterCleanupCancellation/budget_exhausted
+--- PASS: TestBrowserBrowseDoesNotPublishSuccessAfterCleanupCancellation (0.02s)
+    --- PASS: TestBrowserBrowseDoesNotPublishSuccessAfterCleanupCancellation/cancelled (0.00s)
+    --- PASS: TestBrowserBrowseDoesNotPublishSuccessAfterCleanupCancellation/budget_exhausted (0.02s)
+=== RUN   TestReadTailHelpersPreserveInfrastructureFailure
+=== RUN   TestReadTailHelpersPreserveInfrastructureFailure/browser_connection_closed
+=== RUN   TestReadTailHelpersPreserveInfrastructureFailure/cancelled
+=== RUN   TestReadTailHelpersPreserveInfrastructureFailure/send_queue
+--- PASS: TestReadTailHelpersPreserveInfrastructureFailure (0.00s)
+    --- PASS: TestReadTailHelpersPreserveInfrastructureFailure/browser_connection_closed (0.00s)
+    --- PASS: TestReadTailHelpersPreserveInfrastructureFailure/cancelled (0.00s)
+    --- PASS: TestReadTailHelpersPreserveInfrastructureFailure/send_queue (0.00s)
+=== RUN   TestPageFetchDoesNotPublishSuccessAfterCleanupCancellation
+=== RUN   TestPageFetchDoesNotPublishSuccessAfterCleanupCancellation/GET
+=== RUN   TestPageFetchDoesNotPublishSuccessAfterCleanupCancellation/POST
+--- PASS: TestPageFetchDoesNotPublishSuccessAfterCleanupCancellation (0.00s)
+    --- PASS: TestPageFetchDoesNotPublishSuccessAfterCleanupCancellation/GET (0.00s)
+    --- PASS: TestPageFetchDoesNotPublishSuccessAfterCleanupCancellation/POST (0.00s)
+PASS
+ok  	github.com/originaleric/digcrawl/internal/browser	1.287s
+=== RUN   TestFetchArticleViaAPIClassifiesNonJSONAsFallback
+--- PASS: TestFetchArticleViaAPIClassifiesNonJSONAsFallback (0.00s)
+=== RUN   TestFetchArticleStopsAfterBrowserInfrastructureFailure
+--- PASS: TestFetchArticleStopsAfterBrowserInfrastructureFailure (0.00s)
+=== RUN   TestArticleAPIStopsAfterFatalResponse
+--- PASS: TestArticleAPIStopsAfterFatalResponse (0.00s)
+=== RUN   TestArticleAPIWarmupAndEndpointsShareCallerBudget
+--- PASS: TestArticleAPIWarmupAndEndpointsShareCallerBudget (4.10s)
+=== RUN   TestArticleAPICancellationStopsEndpointChain
+--- PASS: TestArticleAPICancellationStopsEndpointChain (0.00s)
+=== RUN   TestArticleAPIFatalStatusIndependentOfResponseBody
+=== RUN   TestArticleAPIFatalStatusIndependentOfResponseBody/401/html
+=== RUN   TestArticleAPIFatalStatusIndependentOfResponseBody/401/non_json
+=== RUN   TestArticleAPIFatalStatusIndependentOfResponseBody/401/empty
+=== RUN   TestArticleAPIFatalStatusIndependentOfResponseBody/401/json
+=== RUN   TestArticleAPIFatalStatusIndependentOfResponseBody/403/html
+=== RUN   TestArticleAPIFatalStatusIndependentOfResponseBody/403/non_json
+=== RUN   TestArticleAPIFatalStatusIndependentOfResponseBody/403/empty
+=== RUN   TestArticleAPIFatalStatusIndependentOfResponseBody/403/json
+=== RUN   TestArticleAPIFatalStatusIndependentOfResponseBody/429/html
+=== RUN   TestArticleAPIFatalStatusIndependentOfResponseBody/429/non_json
+=== RUN   TestArticleAPIFatalStatusIndependentOfResponseBody/429/empty
+=== RUN   TestArticleAPIFatalStatusIndependentOfResponseBody/429/json
+=== RUN   TestArticleAPIFatalStatusIndependentOfResponseBody/461/html
+=== RUN   TestArticleAPIFatalStatusIndependentOfResponseBody/461/non_json
+=== RUN   TestArticleAPIFatalStatusIndependentOfResponseBody/461/empty
+=== RUN   TestArticleAPIFatalStatusIndependentOfResponseBody/461/json
+=== RUN   TestArticleAPIFatalStatusIndependentOfResponseBody/471/html
+=== RUN   TestArticleAPIFatalStatusIndependentOfResponseBody/471/non_json
+=== RUN   TestArticleAPIFatalStatusIndependentOfResponseBody/471/empty
+=== RUN   TestArticleAPIFatalStatusIndependentOfResponseBody/471/json
+--- PASS: TestArticleAPIFatalStatusIndependentOfResponseBody (0.00s)
+    --- PASS: TestArticleAPIFatalStatusIndependentOfResponseBody/401/html (0.00s)
+    --- PASS: TestArticleAPIFatalStatusIndependentOfResponseBody/401/non_json (0.00s)
+    --- PASS: TestArticleAPIFatalStatusIndependentOfResponseBody/401/empty (0.00s)
+    --- PASS: TestArticleAPIFatalStatusIndependentOfResponseBody/401/json (0.00s)
+    --- PASS: TestArticleAPIFatalStatusIndependentOfResponseBody/403/html (0.00s)
+    --- PASS: TestArticleAPIFatalStatusIndependentOfResponseBody/403/non_json (0.00s)
+    --- PASS: TestArticleAPIFatalStatusIndependentOfResponseBody/403/empty (0.00s)
+    --- PASS: TestArticleAPIFatalStatusIndependentOfResponseBody/403/json (0.00s)
+    --- PASS: TestArticleAPIFatalStatusIndependentOfResponseBody/429/html (0.00s)
+    --- PASS: TestArticleAPIFatalStatusIndependentOfResponseBody/429/non_json (0.00s)
+    --- PASS: TestArticleAPIFatalStatusIndependentOfResponseBody/429/empty (0.00s)
+    --- PASS: TestArticleAPIFatalStatusIndependentOfResponseBody/429/json (0.00s)
+    --- PASS: TestArticleAPIFatalStatusIndependentOfResponseBody/461/html (0.00s)
+    --- PASS: TestArticleAPIFatalStatusIndependentOfResponseBody/461/non_json (0.00s)
+    --- PASS: TestArticleAPIFatalStatusIndependentOfResponseBody/461/empty (0.00s)
+    --- PASS: TestArticleAPIFatalStatusIndependentOfResponseBody/461/json (0.00s)
+    --- PASS: TestArticleAPIFatalStatusIndependentOfResponseBody/471/html (0.00s)
+    --- PASS: TestArticleAPIFatalStatusIndependentOfResponseBody/471/non_json (0.00s)
+    --- PASS: TestArticleAPIFatalStatusIndependentOfResponseBody/471/empty (0.00s)
+    --- PASS: TestArticleAPIFatalStatusIndependentOfResponseBody/471/json (0.00s)
+PASS
+ok  	github.com/originaleric/digcrawl/internal/platform/toutiao	5.065s
+=== RUN   TestLocalProviderParsesStdoutJSON
+--- PASS: TestLocalProviderParsesStdoutJSON (0.41s)
+PASS
+ok  	github.com/originaleric/digcrawl/internal/asr	1.874s

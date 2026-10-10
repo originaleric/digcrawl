@@ -1,0 +1,5 @@
+2026/10/10 15:15:11 DigCrawl Bridge stopped for /Users/dig/.config/digcrawl/digcrawl-skill.yaml
+2026/10/10 15:15:11 DigCrawl Bridge restarted for /Users/dig/.config/digcrawl/digcrawl-skill.yaml
+2026/10/10 15:15:57 DigCrawl Bridge stopped for /Users/dig/.config/digcrawl/digcrawl-skill.yaml
+2026/10/10 15:15:57 DigCrawl Bridge restarted for /Users/dig/.config/digcrawl/digcrawl-skill.yaml
+{"pass": true, "checks": 8, "evidence": "tests/2026-10-10/第3轮MCP验收证据.json"}

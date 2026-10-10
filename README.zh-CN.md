@@ -200,6 +200,8 @@ Codex 与 Claude Code 的示例位于 [Skill 目录](./.agents/skills/digcrawl/)
 
 默认 Skill 不含密钥。页面截图与图片理解优先交给宿主 Agent 的多模态模型；可选本地 ASR 是显式能力，需要自行准备依赖和配置。
 
+浏览器读取与平台回退共用总时间预算和最多一次自动故障重试；取消、发送排队超时、登录要求与页面切换不会触发无条件重放。读取期间发生导航或文档重载时，混合结果会被丢弃；浏览器、Feed/Reddit RSS 与 B站合并媒体的实际来源会在交付、下载和保存前按调用策略校验。`BROWSER_*` 错误的 `error_details` 提供失败阶段、重试结果、`next_actions` 和 `diagnostic_id`；Agent 收到 `handled: true` 后应先完成指定前置操作，再发起新的读取。排障及升级步骤见[使用说明](./USAGE.md#浏览器超时或反复失败)。
+
 ## 本地优先与安全边界
 
 DigCrawl 在用户机器上运行，并将访问边界保持可见：
@@ -211,30 +213,6 @@ DigCrawl 在用户机器上运行，并将访问边界保持可见：
 - Artifact、审计记录与可选的保留策略均独立于采集输出管理。
 
 在可信本地环境以外暴露 Gateway 或 Collector 前，请先阅读 [Runtime 文档](./runtime/README.md)。
-
-## 最新动态
-
-| 时间 | 更新 | 对使用者的意义 |
-| --- | --- | --- |
-| 2026-09-20 | 简化单人单机 MCP Bridge 生命周期，并完成今日头条文章读取与已配置图片 OCR 验证。 | 每个 profile 只有一个按需 Bridge，可回收的只是 stdio 代理；直接停启会先释放浏览器再创建新实例，避免空闲回收导致的请求间歇失效和浏览器所有者进程累积。 |
-| 2026-09-15 | X 公开 Post 增加 Syndication 优先解析，并增加全渠道图片本地保存开关。 | 公开 X 内容可在既有 API/oEmbed/浏览器兜底前直接取得正文、图片和可用 MP4 引用；图片保存与 OCR、视频保存和 Collect `.assets` 独立，保持显式 opt-in 与本机路径隔离。 |
-| 2026-09-06 | 新增按平台显式 opt-in 的本地视频保存。 | 用户可只为支持的平台保存一个经过校验的本地视频；API 正文仍是来源真相，保存失败也不会阻止 Collect 导出已成功读取的内容。 |
-| 2026-09-04 | 统一本地 ASR 安装、配置域与健康检查。 | 发布版无需 Go 即可安装 faster-whisper；setup、转写与 `asr check` 共用 root/Skill 缓存域，自定义 runner 会明确标记为外部管理，不再误报 ready。 |
-| 2026-08-31 | 稳定浏览器登录态与 Watchlist 登录恢复。 | 规范会话不会再被后台读取覆盖；所有 Watchlist 入口都基于运行中的 executable 和已加载配置生成恢复命令。 |
-| 2026-08-30 | 新增本地文件与直链媒体的视频解析。 | `digcrawl video` 复用有边界的 ASR 与抽帧 OCR；直链默认清理，并能使用用户 Skill profile 而不削弱显式项目配置。 |
-| 2026-08-29 | 新增可选的 Watchlist 来源/条目并发与安全采集协调。 | 发现和处理可使用有界 goroutine；内容去重、输出路径、index.json 与平台请求间隔仍受保护。 |
-| 2026-08-26 | 新增显式的 Skill 视频保留偏好与安全 profile 更新。 | Agent 可在用户明确要求时保存或清理下载影片、调整上限，无需编辑 YAML；本地并发 profile 写入会串行化且可取消。 |
-| 2026-08-26 | 收口视频理解的执行隔离与外部 ID 边界。 | Skill 媒体目录每次执行独立；外部 call ID 仅关联请求，不能覆盖本地媒体或 manifest。 |
-| 2026-08-26 | 解耦 YouTube、Skill 与 Collect 的下载视频理解。 | Provider 管理下载与清理；ASR/抽帧 OCR 只接收本地视频路径并返回内容。MP4 保留必须显式 opt-in，Collect 导出保持独立交付路径。 |
-| 2026-08-25 | 新增公开视频/Shorts 的 YouTube 读取、字幕富化与 Watchlist 发现。 | URL 会归一化，且仅在播放器身份确认后接受内容；不会导出会过期的播放 URL。 |
-| 2026-08-24 | 完成 OpenAI-compatible 视觉 provider 下的视频抽帧 OCR 生产验证。 | 已下载本地视频即使没有可用语音，也可提取内嵌字幕和画面文字；无文字帧会作为正常空结果处理，不再被误报为 provider 失败。 |
-| 2026-08-17 | 重建浏览器恢复、CDP 服务管理与本地 ASR 启动的状态边界。 | 浏览器 profile 未释放前不会被重启；Playwright 缓存路径可动态发现；已有本地 ASR 模型和升级后的 runner 可跨重启继续使用。 |
-| 2026-08 | OCR 收敛为 DigCrawl 自己的 OpenAI-compatible 视觉客户端，并保持显式启用。 | 图片富化不依赖 DigFlow，也不要求仓库内置密钥；已下载的本地视频可额外显式开启有上限的抽帧 OCR，用于识别内嵌字幕。 |
-| 2026-07 | ASR 支持 API-compatible 与本地 `faster-whisper` provider。 | 视频和音频采集可按需包含本地可控的转写结果。 |
-| 2026-07 | Watchlist 增加持久化来源、任务调度、摘要和通知。 | 来源可持续监控，而非仅一次性采集。 |
-| 2026-07 | 扩展 Reddit、RSS/Atom、B站、微博、快手、知乎、Threads 和 Instagram 支持。 | 更多来源复用同一套规范化采集管线。 |
-
-完整运行细节和更新记录请参阅[使用说明](./USAGE.md)与项目文档。
 
 ## 架构与接入方式
 
@@ -276,3 +254,13 @@ DigCrawl 是本地内容工具。对每一个采集来源，使用者都有责�
 ## 许可证
 
 [MIT](./LICENSE)
+
+### 浏览器恢复与诊断
+
+浏览器故障重试统一由 `BrowserBrowse` 执行，平台 fallback 共用最多一次额外机会，并受同一总时间预算约束。平台和 Collector 的旧重试配置不再叠加浏览器读取次数；正常内容/选择器 fallback 单独计数。读取成功后的媒体保存、OCR、ASR 失败不会重放整个工具。
+
+成功结果的 `browser_diagnostics` 或错误的 `error_details` 提供尝试次数、恢复状态和下一步动作。`handled: true` 表示本次调用已完成重试决策，Agent 应先完成明确前置操作，再发起新的读取。发送排队超时应等待当前任务，不能据此重启浏览器。
+
+`digcrawl doctor --config <实际 profile>` 分开报告依赖、Bridge 传输、构建一致性和浏览器操作；操作检查在 Bridge 内创建并关闭空白测试页。首次 MCP 启动前 Bridge 不可达会显示操作未执行，doctor 不会另起浏览器。`digcrawl doctor --diagnostic-id <返回的编号>` 可查看本地安全摘要。
+
+升级时先关闭旧 DigCrawl MCP 连接，再用已安装的新二进制执行 `digcrawl bridge restart --config <实际 profile>`，随后重新连接。restart 会中断在途调用，服务不会自动切换版本。profile 占用或归属不明时明确拒绝接管，用户登录与 Cookie 数据不会被整目录删除。

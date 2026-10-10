@@ -32,10 +32,10 @@ func TestPrepareInteractiveLoginProfileRejectsLiveOwnerAndClearsStaleLock(t *tes
 	if err := os.Symlink("cookie", filepath.Join(profile, "SingletonCookie")); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Symlink("socket", filepath.Join(profile, "SingletonSocket")); err != nil {
+	if err := os.Symlink(filepath.Join(os.TempDir(), "digcrawl-stale-socket-12345"), filepath.Join(profile, "SingletonSocket")); err != nil {
 		t.Fatal(err)
 	}
-	cleared, err := prepareInteractiveLoginProfile(profile, func(pid int) bool { return pid == 12345 })
+	cleared, err := prepareInteractiveLoginProfile(profile, func(pid int) (bool, error) { return pid == 12345, nil })
 	if !errors.Is(err, errInteractiveLoginInProgress) || cleared {
 		t.Fatalf("live lock cleared=%v err=%v, want in-progress error", cleared, err)
 	}
@@ -43,7 +43,7 @@ func TestPrepareInteractiveLoginProfileRejectsLiveOwnerAndClearsStaleLock(t *tes
 		t.Fatalf("live lock was removed: %v", err)
 	}
 
-	cleared, err = prepareInteractiveLoginProfile(profile, func(int) bool { return false })
+	cleared, err = prepareInteractiveLoginProfile(profile, func(int) (bool, error) { return false, nil })
 	if err != nil || !cleared {
 		t.Fatalf("stale lock cleared=%v err=%v", cleared, err)
 	}
@@ -59,7 +59,7 @@ func TestPrepareInteractiveLoginProfileDoesNotClearUnknownOwner(t *testing.T) {
 	if err := os.Symlink("other-host-12345", filepath.Join(profile, "SingletonLock")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := prepareInteractiveLoginProfile(profile, func(int) bool { return false }); err == nil || !strings.Contains(err.Error(), "无法确认") {
+	if _, err := prepareInteractiveLoginProfile(profile, func(int) (bool, error) { return false, nil }); err == nil || !strings.Contains(err.Error(), "无法确认") {
 		t.Fatalf("unknown-owner error=%v", err)
 	}
 	if _, err := os.Lstat(filepath.Join(profile, "SingletonLock")); err != nil {

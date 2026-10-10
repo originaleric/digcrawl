@@ -1,0 +1,11 @@
+ok  	github.com/originaleric/digcrawl/internal/browser	177.891s
+ok  	github.com/originaleric/digcrawl/internal/feed	3.032s
+ok  	github.com/originaleric/digcrawl/internal/source	3.344s
+ok  	github.com/originaleric/digcrawl/internal/platform	3.877s
+ok  	github.com/originaleric/digcrawl/internal/platform/reddit	2.758s
+ok  	github.com/originaleric/digcrawl/internal/platform/bilibili	4.157s
+ok  	github.com/originaleric/digcrawl/provider/browser	5.910s
+ok  	github.com/originaleric/digcrawl/provider/platform	8.155s
+ok  	github.com/originaleric/digcrawl/runtime	4.185s
+ok  	github.com/originaleric/digcrawl/transport/bridge	8.850s
+ok  	github.com/originaleric/digcrawl/transport/collector	4.746s

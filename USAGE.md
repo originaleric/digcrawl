@@ -163,7 +163,7 @@ go install ./cmd/digcollect
 | 字段 | 说明 |
 |------|------|
 | `Enabled` | 为 `false` 时禁用浏览器及依赖它的 Provider |
-| `AllowedDomains` | 允许访问的域名列表（Collect / 平台工具均受约束） |
+| `AllowedDomains` | 独立 snapshot/action 与页面上下文 API fetch 的本地域名约束；通用 `browser.browse` 使用 `Gateway.AllowedDomains`，平台 provider 另外检查调用、配置或平台默认域名策略 |
 | `ChromePath` | 指定 Chrome/Chromium/headless shell 可执行文件路径；为空时自动发现系统浏览器或当前可用的 Playwright 缓存，不应写死版本化缓存路径 |
 | `Headless` | 是否无头模式 |
 | `CookieStoreDir` | 按域名持久化 Cookie，便于登录态采集 |
@@ -173,12 +173,15 @@ go install ./cmd/digcollect
 | `ProxyURL` | 浏览器代理地址，页面 fetch/API fallback 共用 |
 | `ExtraArgs` | 仅后台抓取使用的 Chromium 启动参数；适合配置 `--single-process`、`--no-zygote`、禁用 crashpad 等 headless 兼容参数 |
 | `InteractiveExtraArgs` | 仅 `browser login` 的可视 Chrome 使用；默认留空，不继承 `ExtraArgs`，避免 headless 进程参数影响人工输入与登录 |
+| `TotalTimeoutSec` | 同一次工具调用中浏览器获取、读取、故障重试与后续浏览器 fallback 共用的总预算；页面清理另有短时限 |
+| `NavigateTimeoutSec` | 单次导航时限，不延长总预算 |
+| `WaitSelectorTimeoutSec` | 单次选择器等待时限，不延长总预算 |
 
 ### 本机 MCP Bridge（默认）
 
 `digcrawl mcp` 首次被调用时，会为该 profile 启动一个私有 Unix socket Bridge。多个 Codex MCP stdio 子进程只转发协议，Bridge 才是唯一创建 Runtime 和 Chrome 的进程；因此没有固定 CDP 端口、没有 launchd/systemd 常驻浏览器，也不会因 MCP 重连重复争抢浏览器。配置文件的符号链接会归并到同一个 Bridge；而同一个持久化 `UserDataDir` 在任意时刻只能由一个 Bridge 使用。若确实需要两套独立配置，请给它们配置不同的 `UserDataDir`，避免权限、超时和登录态混用。Bridge 不使用空闲退出计时器：它会持续服务，直到异常退出或执行 `digcrawl bridge stop --config <profile>`；需要立即重启则用 `digcrawl bridge restart --config <profile>`。停止/重启不是平滑交接：它会立即取消在途 MCP 读取，待 Bridge 自己管理的 Chrome 已释放后才允许下一实例启动。Release 安装器使用已验证的临时新二进制，在替换安装目标前先停掉标准 Skill profile 的旧 Bridge，因此下一次 MCP 调用不会继续执行旧二进制。
 
-Bridge 默认忽略 profile 中遗留的 `CDPMode`、`CDPConnectExisting` 与 `CDPPort`，直接管理 `ChromePath`（未配置时优先发现系统 Chrome）。这样旧的 CDP 服务短暂不可用、端口被占用或返回伪 HTTP 成功，都不再决定 MCP 是否可读页面。`digcrawl doctor --config <profile>` 也检查这一条实际运行路径。
+Bridge 默认忽略 profile 中遗留的 `CDPMode`、`CDPConnectExisting` 与 `CDPPort`，直接管理 `ChromePath`（未配置时优先发现系统 Chrome）。这样旧的 CDP 服务短暂不可用、端口被占用或返回伪 HTTP 成功，都不再决定 MCP 是否可读页面。`digcrawl doctor --config <profile>` 分别检查浏览器依赖、Bridge 传输、运行构建与实际浏览器操作；实际操作通过已有 Bridge 创建并关闭测试页面，不启动第二个浏览器。首次 MCP 连接前若 Bridge 尚未运行，这项检查会明确报告未执行。
 
 Codex 的 MCP proxy 仍是 stdio 协议所必需的宿主子进程，但不会再各自拥有 Runtime 或浏览器。它在无初始化时 1 分钟回收；任意已初始化宿主都会在 15 分钟无实际调用后回收。只有 `initialize` 和 `tools/call` 会刷新计时，MCP `ping` 不会制造永不退出的残留进程。
 
@@ -198,8 +201,8 @@ Codex 的 MCP proxy 仍是 stdio 协议所必需的宿主子进程，但不会�
 
 | 字段 | 说明 |
 |------|------|
-| `BrowseRetryMaxAttempts` | Browser 兜底读取 transient 错误最大尝试次数 |
-| `BrowseRetryDelayMs` | Browser 重试间隔 |
+| `BrowseRetryMaxAttempts` | 平台内容验证 fallback 的尝试次数，上限为 2；不控制浏览器连接故障重试 |
+| `BrowseRetryDelayMs` | 平台内容验证 fallback 的等待间隔；浏览器故障由读取层在原预算内独立处理 |
 | `ReadMetricsEnabled` | 是否输出 `[platform-read]` 结构化日志 |
 | `HealthProbes` | `digcrawl browser check --trial` 的平台默认试读 URL |
 
@@ -786,6 +789,7 @@ digcrawl mcp [flags]           # MCP stdio（Cursor / Claude Desktop）
 digcrawl init --profile skill  # 创建用户级 Skill profile（已有文件须 --force）
 digcrawl config validate --config <profile> # 校验 profile YAML、路径、启用能力与边界
 digcrawl doctor --config <profile> # 检查 profile、artifact、浏览器、ffmpeg 与 MCP 初始化
+digcrawl doctor --diagnostic-id <ID> # 查询返回诊断编号对应的安全本地摘要
 digcrawl stdio [flags]         # 逐行 JSON 协议
 digcrawl dev-host [flags]      # 本地参考宿主（仅开发调试）
 digcrawl collect <url>         # 采集单个 URL
@@ -1316,7 +1320,29 @@ internal/browser/   go-rod 本地浏览器
 
 ### 浏览器工具报错「域名不在白名单」
 
-在 `config.yaml` 的 `LocalBrowser.AllowedDomains` 与 `Gateway.AllowedDomains` 中加入目标域名，或放宽策略（注意安全边界）。
+先核对所用工具与实际跳转地址。通用 `browser.browse` 受调用策略与底层 `Gateway.AllowedDomains` 约束；独立 `browser.snapshot` 还保留 `LocalBrowser.AllowedDomains` 约束。平台 provider 按调用策略、配置、平台默认域名的优先顺序校验输入与已确认的最终来源，使用浏览器的路径同时受底层浏览器约束。Feed、Reddit RSS 跳转以及 B站合并的浏览器媒体同样受最终来源检查。只有确实需要访问目标域名时才调整对应配置；canonical 链接、内容中的外链和媒体 CDN 不等同于页面来源，域名策略也不是网络隔离。
+
+### 浏览器超时或反复失败
+
+`BROWSER_*` 错误会通过 MCP 的 `error_details` 返回 `stage`、`operation`、`reason`、`handled`、`retry_count`、`recovery_status`、`next_actions` 与 `diagnostic_id`（按实际故障提供）。同一次工具调用最多进行一次浏览器故障重试，平台 fallback 共用原时间预算；Collector 与 Agent 不应在 `handled: true` 后再自动重放整项工具。
+
+- `send_queue`：等待当前读取结束，再发起新的读取；这类发送排队失败不会关闭健康连接。
+- `cancelled` / `budget_exhausted`：本次调用已结束，确认仍需读取后重新操作。
+- `page_changed`：读取期间导航或文档重载，混合结果已丢弃；等页面稳定后重新读取。
+- profile 被占用：先完成或结束占用该专用 profile 的会话，不要关闭无关 Chrome。
+- `LOCAL_BRIDGE_UNAVAILABLE` 或构建不匹配：关闭旧 DigCrawl MCP 连接，使用已安装的新二进制重启实际 profile 的 Bridge，然后重新连接宿主。中断的工具可能已执行，不要直接重放有副作用的操作。
+- 外部 CDP 页面清理未确认：清理遗留页面；无法确认时重启该外部浏览器，再重启 DigCrawl。DigCrawl 不会替用户终止外部浏览器。
+
+使用实际 MCP profile 的绝对路径排障；诊断编号摘要只包含安全分类，不输出 Cookie、原始浏览器异常或页面内容：
+
+```bash
+digcrawl doctor --config /absolute/path/to/digcrawl-skill.yaml
+digcrawl doctor --diagnostic-id <returned-ID>
+# 升级后或 next_actions 指明需重启时，先关闭旧 MCP 连接。
+digcrawl bridge restart --config /absolute/path/to/digcrawl-skill.yaml
+```
+
+MCP 返回操作前后的进度通知需要宿主随请求提供 progress token。可用工具以当前 `tools/list` 为准；默认 Skill 通过 `browser.browse` 的 `mode: "snapshot"` 读取快照，不会自动开放独立 `browser.snapshot`。
 
 ### Headless Chrome / Chromium 启动失败
 

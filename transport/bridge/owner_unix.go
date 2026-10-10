@@ -4,13 +4,16 @@ package bridge
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 )
 
 // bridgeOwner is a recovery record, not a second lock. The lifecycle lock is
@@ -18,8 +21,9 @@ import (
 // after a direct group kill: a new starter can wait for the old browser group
 // even after the killed Bridge released its flock.
 type bridgeOwner struct {
-	pid  int
-	pgid int
+	pid      int
+	pgid     int
+	identity string
 }
 
 func bridgeOwnerPath(socket string) string { return socket + ".owner" }
@@ -35,7 +39,13 @@ func writeBridgeOwner(socket string) error {
 	if pgid != pid {
 		pgid = 0
 	}
-	return writeBridgeOwnerRecord(socket, bridgeOwner{pid: pid, pgid: pgid})
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	identity, err := bridgeProcessIdentity(ctx, pid)
+	if err != nil {
+		return err
+	}
+	return writeBridgeOwnerRecord(socket, bridgeOwner{pid: pid, pgid: pgid, identity: identity})
 }
 
 func writeBridgeOwnerRecord(socket string, owner bridgeOwner) error {
@@ -50,7 +60,7 @@ func writeBridgeOwnerRecord(socket string, owner bridgeOwner) error {
 		_ = temporary.Close()
 		return fmt.Errorf("protect local bridge owner record: %w", err)
 	}
-	if _, err := fmt.Fprintf(temporary, "%d %d\n", owner.pid, owner.pgid); err != nil {
+	if _, err := fmt.Fprintf(temporary, "%d %d %s\n", owner.pid, owner.pgid, owner.identity); err != nil {
 		_ = temporary.Close()
 		return fmt.Errorf("write local bridge owner record: %w", err)
 	}
@@ -76,7 +86,7 @@ func readBridgeOwner(socket string) (bridgeOwner, bool, error) {
 		return bridgeOwner{}, false, fmt.Errorf("read local bridge owner record: %w", err)
 	}
 	fields := strings.Fields(string(data))
-	if len(fields) != 2 {
+	if len(fields) != 2 && len(fields) != 3 {
 		return bridgeOwner{}, false, fmt.Errorf("read local bridge owner record: malformed contents")
 	}
 	pid, pidErr := strconv.Atoi(fields[0])
@@ -84,7 +94,22 @@ func readBridgeOwner(socket string) (bridgeOwner, bool, error) {
 	if pidErr != nil || groupErr != nil || pid <= 0 || pgid < 0 {
 		return bridgeOwner{}, false, fmt.Errorf("read local bridge owner record: malformed process identity")
 	}
-	return bridgeOwner{pid: pid, pgid: pgid}, true, nil
+	owner := bridgeOwner{pid: pid, pgid: pgid}
+	if len(fields) == 3 {
+		owner.identity = fields[2]
+	}
+	return owner, true, nil
+}
+
+func bridgeProcessIdentity(ctx context.Context, pid int) (string, error) {
+	output, err := exec.CommandContext(ctx, "ps", "-p", strconv.Itoa(pid), "-o", "lstart=,command=").Output()
+	if err != nil {
+		return "", err
+	}
+	if len(strings.TrimSpace(string(output))) == 0 {
+		return "", fmt.Errorf("Bridge process identity unavailable")
+	}
+	return fmt.Sprintf("%x", sha256.Sum256(output)), nil
 }
 
 func readPrivateBridgeOwner(socket string) (bridgeOwner, bool, error) {

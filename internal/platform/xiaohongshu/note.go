@@ -12,6 +12,7 @@ import (
 
 // ReadNote 读取小红书笔记页（API 优先，Browser 兜底）。
 func ReadNote(ctx context.Context, in platform.ReadInput) (*platform.Content, error) {
+	ctx = browser.WithBrowseRetryContext(ctx)
 	url := strings.TrimSpace(in.URL)
 	if url == "" {
 		return nil, fmt.Errorf("url 不能为空")
@@ -65,6 +66,12 @@ func ReadNote(ctx context.Context, in platform.ReadInput) (*platform.Content, er
 }
 
 func readNoteBrowser(ctx context.Context, in platform.ReadInput, norm *platform.NormalizedURL, cookieDomain string, apiAttempt *platform.APIAttempt) (*platform.Content, error) {
+	return readNoteBrowserWithBrowse(ctx, in, norm, cookieDomain, apiAttempt, platform.BrowseWithFallbacks, platform.Browse)
+}
+
+func readNoteBrowserWithBrowse(ctx context.Context, in platform.ReadInput, norm *platform.NormalizedURL, cookieDomain string, apiAttempt *platform.APIAttempt,
+	browse func(context.Context, string, platform.ReadInput, platform.BrowseSpec, []platform.BrowseAttempt) (*browser.BrowserBrowseResponse, error),
+	screenshot func(context.Context, string, platform.ReadInput, platform.BrowseSpec) (*browser.BrowserBrowseResponse, error)) (*platform.Content, error) {
 	browseURL := norm.EffectiveBrowseURL()
 	if browseURL == "" {
 		browseURL = norm.ResolvedURL
@@ -80,15 +87,28 @@ func readNoteBrowser(ctx context.Context, in platform.ReadInput, norm *platform.
 
 	var resp *browser.BrowserBrowseResponse
 	err := platform.WithBrowseRetry(ctx, platform.BrowseRetryPolicy(), func(ctx context.Context) error {
-		r, browseErr := platform.BrowseWithFallbacks(ctx, browseURL, in, base, NoteBrowseAttempts)
+		r, browseErr := browse(ctx, browseURL, in, base, NoteBrowseAttempts)
 		if browseErr != nil {
-			if in.IncludeScreenshot {
+			if in.IncludeScreenshot && ctx.Err() == nil && browser.CanBrowseFallback(browseErr) {
 				base.Action = "screenshot"
 				base.WaitSelector = ""
-				if r2, err2 := platform.Browse(ctx, browseURL, in, base); err2 == nil {
+				screenshotInput := in
+				screenshotInput.WaitSelector = ""
+				if r2, err2 := screenshot(ctx, browseURL, screenshotInput, base); err2 == nil && r2 != nil {
+					if code := platform.MetaErrorCode(r2.Metadata); platform.IsFatalErrorCode(code) {
+						return platform.NewReadError(code, platform.MetaString(r2.Metadata, "error_message"), PlatformName, r2.Metadata)
+					}
+					// A screenshot alone does not satisfy a note read. Accept this fallback
+					// only when metadata recovered usable text, and explicitly mark it partial.
+					if strings.TrimSpace(r2.Text) == "" && strings.TrimSpace(platform.MetaString(r2.Metadata, "text")) == "" {
+						return browseErr
+					}
 					resp = r2
 					resp.Metadata = platform.AppendWarning(resp.Metadata, "browse selector failed, screenshot fallback")
+					resp.Metadata = platform.SetMetaError(resp.Metadata, platform.ErrPartialContent, "正文选择器失败，返回截图及可用的部分内容")
 					return nil
+				} else if err2 != nil {
+					return err2
 				}
 			}
 			return browseErr

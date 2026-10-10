@@ -12,6 +12,7 @@ import (
 )
 
 func ReadPost(ctx context.Context, in platform.ReadInput) (*platform.Content, error) {
+	ctx = browser.WithBrowseRetryContext(ctx)
 	norm, err := NormalizeURL(in.URL)
 	if err != nil {
 		return nil, err

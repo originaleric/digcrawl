@@ -35,7 +35,7 @@ type BrowserActionResponse struct {
 }
 
 // BrowserAction 执行浏览器操作
-func BrowserAction(ctx context.Context, req *BrowserActionRequest) (*BrowserActionResponse, error) {
+func BrowserAction(ctx context.Context, req *BrowserActionRequest) (resp *BrowserActionResponse, retErr error) {
 	if req == nil || strings.TrimSpace(req.URL) == "" {
 		return nil, fmt.Errorf("url 不能为空")
 	}
@@ -60,9 +60,18 @@ func BrowserAction(ctx context.Context, req *BrowserActionRequest) (*BrowserActi
 	if err != nil {
 		return nil, err
 	}
-	defer manager.release(session)
+	defer func() {
+		if err := manager.release(session); err != nil {
+			resp = nil
+			e := newBrowseError(ErrorBrowserUnavailable, "close_page", "浏览器页面清理失败，操作结果可能已生效", err, false).(*BrowseError)
+			e.Retryable = false
+			e.Diagnostics["handled"] = true
+			e.Diagnostics["replay_safe"] = false
+			retErr = e
+		}
+	}()
 
-	page := session.page.Timeout(time.Duration(cfg.TotalTimeoutSec) * time.Second)
+	page := session.page.Context(ctx).Timeout(time.Duration(cfg.TotalTimeoutSec) * time.Second)
 
 	// 加载Cookie（如果指定）
 	if req.UseCookieDomain != "" {
@@ -134,7 +143,7 @@ func BrowserAction(ctx context.Context, req *BrowserActionRequest) (*BrowserActi
 		}
 	}
 
-	resp := &BrowserActionResponse{
+	resp = &BrowserActionResponse{
 		Success: true,
 		Message: fmt.Sprintf("操作 %s 执行成功", action),
 		URL:     urlStr,

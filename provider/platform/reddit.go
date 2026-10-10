@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/originaleric/digcrawl/internal/browser"
 	"net/url"
 	"strings"
 
@@ -14,6 +15,7 @@ import (
 	"github.com/originaleric/digcrawl/protocol"
 	"github.com/originaleric/digcrawl/runtime/artifact"
 	"github.com/originaleric/digcrawl/runtime/executor"
+	"github.com/originaleric/digcrawl/runtime/policy"
 	"github.com/originaleric/digcrawl/runtime/registry"
 	"github.com/originaleric/digcrawl/skill"
 )
@@ -97,6 +99,7 @@ func redditPostReadHandler(configDomains []string, artStore artifact.Store, read
 		runtimeCfg = config.Get()
 	}
 	return func(ctx context.Context, call *protocol.ToolCall) (map[string]any, []protocol.Artifact, error) {
+		ctx = browser.WithBrowseRetryContext(ctx)
 		in, err := executor.DecodeInput[redditPostReadInput](call)
 		if err != nil {
 			return nil, nil, err
@@ -149,11 +152,30 @@ func redditPostReadHandler(configDomains []string, artStore artifact.Store, read
 		if err != nil {
 			var re *platform.ReadError
 			if errors.As(err, &re) {
-				return platform.ErrorOutput(re), nil, re
+				if err := validatePlatformURL(in.URL, call, configDomains, redditDefaultDomains,
+					platform.MetaString(re.Meta, "final_url"), platform.MetaString(re.Meta, "resolved_url")); err != nil {
+					return nil, nil, err
+				}
+				out := platform.ErrorOutput(re)
+				if d := browser.BrowseDiagnostics(ctx); d != nil && d["attempts"].(int) > 0 {
+					out["browser_diagnostics"] = d
+				}
+				return out, nil, re
 			}
 			return nil, nil, err
 		}
+		if content == nil {
+			return nil, nil, fmt.Errorf("%s: platform reader returned no content", policy.CodeInvalidInput)
+		}
+		if err := validatePlatformURL(content.SourceURL, call, configDomains, redditDefaultDomains,
+			platform.MetaString(content.PlatformMetadata, "final_url"),
+			platform.MetaString(content.PlatformMetadata, "resolved_url")); err != nil {
+			return nil, nil, err
+		}
 		out := platform.ApplyFormats(content, in.Format)
+		if d := browser.BrowseDiagnostics(ctx); d != nil && d["attempts"].(int) > 0 {
+			out["browser_diagnostics"] = d
+		}
 		if !returnMedia && !isCollect {
 			// Configured direct OCR consumes image references internally without
 			// widening the public text-only response contract.
@@ -217,6 +239,11 @@ func redditSubredditReadHandler(configDomains []string) func(context.Context, *p
 		if err != nil {
 			return nil, nil, err
 		}
+		if res != nil {
+			if err := validateOptionalRedditURL(res.SourceURL, call, configDomains); err != nil {
+				return nil, nil, err
+			}
+		}
 		return listingResultMap(res), nil, nil
 	}
 }
@@ -237,6 +264,11 @@ func redditUserReadHandler(configDomains []string) func(context.Context, *protoc
 		res, err := reddit.ReadUser(ctx, reddit.ListingOptions{Username: user, Where: in.Where, Limit: in.Limit, After: in.After})
 		if err != nil {
 			return nil, nil, err
+		}
+		if res != nil {
+			if err := validateOptionalRedditURL(res.SourceURL, call, configDomains); err != nil {
+				return nil, nil, err
+			}
 		}
 		return listingResultMap(res), nil, nil
 	}

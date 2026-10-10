@@ -1,0 +1,5 @@
+=== RUN   TestChromeExternalCDPOwnershipAcceptance
+    chrome_acceptance_test.go:265: external owner preserved; failed target cleanup quarantined replacement; targeted manual cleanup leaves zero targets
+--- PASS: TestChromeExternalCDPOwnershipAcceptance (1.71s)
+PASS
+ok  	github.com/originaleric/digcrawl/internal/browser	2.692s

@@ -23,6 +23,7 @@ import (
 	"github.com/originaleric/digcrawl/runtime"
 	"github.com/originaleric/digcrawl/runtime/artifact"
 	httpgw "github.com/originaleric/digcrawl/transport/http"
+	"gopkg.in/yaml.v3"
 )
 
 const (
@@ -166,7 +167,7 @@ func bridgeErrorResult(id string, err error) *protocol.ToolResult {
 		Type:   protocol.TypeToolResult,
 		ID:     id,
 		Status: "error",
-		Error:  &protocol.ToolError{Code: "LOCAL_BRIDGE_UNAVAILABLE", Message: err.Error()},
+		Error:  &protocol.ToolError{Code: "LOCAL_BRIDGE_UNAVAILABLE", Message: err.Error(), Details: map[string]any{"handled": true, "retryable": false, "next_actions": []map[string]any{{"type": "restart_bridge", "executor": "user_or_agent", "precondition": "close old MCP clients, restart with the installed binary, then reconnect"}}}},
 	}
 }
 
@@ -180,12 +181,19 @@ func (e *Executor) clientAndManifest(ctx context.Context) (*client.Client, proto
 		return nil, protocol.ToolManifest{}, errors.New("nil local bridge executor")
 	}
 	if c, manifest, err := probe(ctx, e.socket); err == nil {
+		if err := checkBuild(manifest); err != nil {
+			return nil, manifest, err
+		}
 		return c, manifest, nil
 	}
 	if err := e.startOrWait(ctx); err != nil {
 		return nil, protocol.ToolManifest{}, err
 	}
-	return waitForBridge(ctx, e.socket)
+	c, manifest, err := waitForBridge(ctx, e.socket)
+	if err == nil {
+		err = checkBuild(manifest)
+	}
+	return c, manifest, err
 }
 
 func (e *Executor) startOrWait(ctx context.Context) error {
@@ -195,11 +203,15 @@ func (e *Executor) startOrWait(ctx context.Context) error {
 	if err := ensurePrivateDir(filepath.Dir(e.socket)); err != nil {
 		return err
 	}
-	if _, _, err := probe(ctx, e.socket); err == nil {
-		return nil
+	if _, manifest, err := probe(ctx, e.socket); err == nil {
+		return checkBuild(manifest)
 	}
-	startupStatus := startupStatusFile{path: e.socket + ".startup-status"}
-	_ = os.Remove(startupStatus.path)
+	status, err := os.CreateTemp(filepath.Dir(e.socket), ".startup-status-*")
+	if err != nil {
+		return err
+	}
+	_ = status.Close()
+	startupStatus := startupStatusFile{path: status.Name()}
 	defer os.Remove(startupStatus.path)
 	// The lifecycle lock is the only start arbiter. Concurrent starters may
 	// briefly create a losing worker, but it immediately exits without owning a
@@ -252,6 +264,20 @@ func Stop(ctx context.Context, profile string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	// Read only the configured resource path; do not reload process-global
+	// runtime state while another in-process caller may still be draining.
+	var profileConfig struct {
+		LocalBrowser struct {
+			UserDataDir string `yaml:"UserDataDir"`
+		} `yaml:"LocalBrowser"`
+	}
+	data, readErr := os.ReadFile(profile)
+	if readErr != nil {
+		return false, readErr
+	}
+	if err = yaml.Unmarshal(data, &profileConfig); err != nil {
+		return false, err
+	}
 	stopped := false
 	for {
 		if err := ctx.Err(); err != nil {
@@ -267,6 +293,14 @@ func Stop(ctx context.Context, profile string) (bool, error) {
 			// unsafe state visible instead of risking an unrelated process.
 			if err := waitForRecordedBridgeGroupRelease(ctx, socket); err != nil {
 				return false, fmt.Errorf("wait for previous local bridge process group: %w", err)
+			}
+			legacyStopped, legacyErr := stopLegacyBridgeCandidates(ctx, socket)
+			if legacyErr != nil && !errors.Is(legacyErr, ErrBridgeOwnerNotFound) {
+				return false, legacyErr
+			}
+			stopped = stopped || legacyStopped
+			if err := browser.WaitProfileRelease(ctx, profileConfig.LocalBrowser.UserDataDir); err != nil {
+				return false, fmt.Errorf("previous Bridge profile remains unavailable; end the owning session before restart: %w", err)
 			}
 			removeBridgeOwner(socket)
 			if err := os.Remove(socket); err != nil && !os.IsNotExist(err) {
@@ -474,7 +508,7 @@ func Serve(ctx context.Context, cfg *config.Config, socket string) error {
 	}
 	gateway := httpgw.NewServer(rt, rt.ArtifactStore(), "")
 	server := &http.Server{
-		Handler:           gateway,
+		Handler:           privateBridgeHandler(gateway),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       120 * time.Second,
 	}
@@ -510,41 +544,18 @@ func prepareManagedConfig(cfg *config.Config) {
 // profile. The lock deliberately lives in the private cache rather than in
 // UserDataDir: Chrome owns that directory's own Singleton* files and the
 // bridge must claim ownership before it launches Chrome.
-func acquireBrowserProfileLock(cfg *config.Config) (*daemonLock, error) {
+func acquireBrowserProfileLock(cfg *config.Config) (*browser.ProfileLock, error) {
 	if cfg == nil {
 		return nil, errors.New("bridge requires configuration")
 	}
-	userDataDir := strings.TrimSpace(cfg.LocalBrowser.UserDataDir)
-	if userDataDir == "" {
-		// Chrome creates a distinct temporary profile in this mode, so there is
-		// no persistent browser identity to coordinate.
-		return nil, nil
-	}
-	identity, err := canonicalPath(userDataDir)
-	if err != nil {
-		return nil, fmt.Errorf("resolve configured Chrome profile: %w", err)
-	}
-	// Use the same identity for Chrome's launch argument. Otherwise a symlink
-	// retargeted between locking and launch could make the lock and the browser
-	// refer to different directories.
-	cfg.LocalBrowser.UserDataDir = identity
-	cache, err := os.UserCacheDir()
-	if err != nil {
-		return nil, fmt.Errorf("resolve local bridge cache directory: %w", err)
-	}
-	dir := filepath.Join(cache, "digcrawl", bridgeSocketDirName)
-	if err := ensurePrivateDir(dir); err != nil {
-		return nil, err
-	}
-	digest := sha256.Sum256([]byte(identity))
-	lock, err := acquireDaemonLock(filepath.Join(dir, fmt.Sprintf("browser-%x.lock", digest[:12])))
-	if errors.Is(err, ErrAlreadyRunning) {
+	lock, identity, err := browser.AcquireManagedProfileLock(cfg.LocalBrowser.UserDataDir)
+	if errors.Is(err, browser.ErrProfileInUse) {
 		return nil, ErrBrowserProfileInUse
 	}
-	if err != nil {
-		return nil, fmt.Errorf("lock configured Chrome profile: %w", err)
+	if err == nil && identity != "" {
+		cfg.LocalBrowser.UserDataDir = identity
 	}
-	return lock, nil
+	return lock, err
 }
 
 type remoteArtifactStore struct{ executor *Executor }

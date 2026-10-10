@@ -1,0 +1,58 @@
+?   	github.com/originaleric/digcrawl/client	[no test files]
+?   	github.com/originaleric/digcrawl/cmd/digcollect	[no test files]
+ok  	github.com/originaleric/digcrawl/cmd/digcrawl	6.138s
+ok  	github.com/originaleric/digcrawl/collect	4.098s
+ok  	github.com/originaleric/digcrawl/collect/store	0.552s
+ok  	github.com/originaleric/digcrawl/config	0.847s
+ok  	github.com/originaleric/digcrawl/internal/asr	19.553s
+ok  	github.com/originaleric/digcrawl/internal/browser	5.928s
+ok  	github.com/originaleric/digcrawl/internal/feed	0.431s
+ok  	github.com/originaleric/digcrawl/internal/media	2.631s
+ok  	github.com/originaleric/digcrawl/internal/notify	0.416s
+ok  	github.com/originaleric/digcrawl/internal/ocr	3.202s
+ok  	github.com/originaleric/digcrawl/internal/platform	0.375s
+ok  	github.com/originaleric/digcrawl/internal/platform/bilibili	0.796s
+ok  	github.com/originaleric/digcrawl/internal/platform/douyin	0.365s
+?   	github.com/originaleric/digcrawl/internal/platform/healthcheck	[no test files]
+ok  	github.com/originaleric/digcrawl/internal/platform/instagram	0.362s
+ok  	github.com/originaleric/digcrawl/internal/platform/kuaishou	0.333s
+ok  	github.com/originaleric/digcrawl/internal/platform/reddit	0.896s
+?   	github.com/originaleric/digcrawl/internal/platform/session	[no test files]
+ok  	github.com/originaleric/digcrawl/internal/platform/threads	0.351s
+ok  	github.com/originaleric/digcrawl/internal/platform/toutiao	4.432s
+ok  	github.com/originaleric/digcrawl/internal/platform/wechat	0.361s
+ok  	github.com/originaleric/digcrawl/internal/platform/weibo	0.787s
+ok  	github.com/originaleric/digcrawl/internal/platform/x	0.806s
+ok  	github.com/originaleric/digcrawl/internal/platform/xiaohongshu	0.363s
+ok  	github.com/originaleric/digcrawl/internal/platform/youtube	7.878s
+ok  	github.com/originaleric/digcrawl/internal/platform/zhihu	0.353s
+ok  	github.com/originaleric/digcrawl/internal/source	0.369s
+ok  	github.com/originaleric/digcrawl/internal/summary	0.660s
+?   	github.com/originaleric/digcrawl/internal/testutil	[no test files]
+?   	github.com/originaleric/digcrawl/internal/testutil/fakeffmpeg	[no test files]
+ok  	github.com/originaleric/digcrawl/internal/video	0.364s
+ok  	github.com/originaleric/digcrawl/internal/watchlist	0.559s
+ok  	github.com/originaleric/digcrawl/internal/watchlist/service	9.646s
+ok  	github.com/originaleric/digcrawl/protocol	0.314s
+?   	github.com/originaleric/digcrawl/provider	[no test files]
+ok  	github.com/originaleric/digcrawl/provider/asr	1.250s
+ok  	github.com/originaleric/digcrawl/provider/browser	0.293s
+?   	github.com/originaleric/digcrawl/provider/example	[no test files]
+ok  	github.com/originaleric/digcrawl/provider/platform	1.636s
+?   	github.com/originaleric/digcrawl/provider/stub	[no test files]
+ok  	github.com/originaleric/digcrawl/runtime	0.801s
+ok  	github.com/originaleric/digcrawl/runtime/artifact	0.866s
+?   	github.com/originaleric/digcrawl/runtime/audit	[no test files]
+ok  	github.com/originaleric/digcrawl/runtime/executor	0.327s
+ok  	github.com/originaleric/digcrawl/runtime/policy	0.328s
+?   	github.com/originaleric/digcrawl/runtime/registry	[no test files]
+?   	github.com/originaleric/digcrawl/runtime/version	[no test files]
+ok  	github.com/originaleric/digcrawl/skill	1.790s
+?   	github.com/originaleric/digcrawl/tests/2026-07-10/toutiao-digflow-round-2/runner	[no test files]
+ok  	github.com/originaleric/digcrawl/transport/bridge	4.341s
+ok  	github.com/originaleric/digcrawl/transport/collector	0.757s
+ok  	github.com/originaleric/digcrawl/transport/devhost	0.317s
+?   	github.com/originaleric/digcrawl/transport/host	[no test files]
+ok  	github.com/originaleric/digcrawl/transport/http	0.580s
+ok  	github.com/originaleric/digcrawl/transport/mcp	1.160s
+ok  	github.com/originaleric/digcrawl/transport/stdio	0.351s
