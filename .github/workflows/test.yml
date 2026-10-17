@@ -26,6 +26,8 @@ jobs:
           cache: npm
       - run: npm ci --ignore-scripts
       - run: npm test
+      - name: Stress ASR cache concurrency
+        run: go test ./internal/asr -run 'TestResolveLocalASRCacheDirConcurrentAdoptionConverges|TestLocalASRCacheConcurrentProcessesConverge' -count=20
       - run: go test ./...
       - if: runner.os == 'Linux' || runner.os == 'macOS'
         run: bash scripts/test-install.sh

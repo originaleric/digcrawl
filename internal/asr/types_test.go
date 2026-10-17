@@ -62,7 +62,7 @@ func TestTranscribePropagatesDynamicTimeoutToLocalProvider(t *testing.T) {
 	t.Setenv("DIGCRAWL_TEST_LOCAL_ASR_MODE", "slow-transcript-with-probe")
 
 	result, err := Transcribe(context.Background(), mediaPath, config.ASRConfig{
-		Provider:      "local",
+		Provider: "local",
 		// Keep the configured floor long enough for a cold Windows child-process
 		// launch. The fixture sleeps longer than this floor, so the test still
 		// proves that the successful duration probe raised the operation budget.
@@ -134,6 +134,7 @@ func TestTranscribeCountsDurationProbeInsideOperationBudget(t *testing.T) {
 		MaxTimeoutSec: 1800,
 		FFmpegPath:    ffmpeg,
 		LocalCommand:  localASRTestCommand(t),
+		ModelCacheDir: filepath.Join(dir, "models"),
 	}, Options{})
 	if err == nil {
 		t.Fatal("expected operation budget exhaustion after slow duration probe")
