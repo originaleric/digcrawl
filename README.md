@@ -40,20 +40,36 @@ Read and summarize this link: <URL>
 
 ## Quick Start
 
-**Install in your terminal** (macOS / Linux, no Go required):
+**Install with npx** (macOS / Linux / Windows; Node.js 20.19+):
+
+> Coming soon: requires a public repository and the npm package release.
+
+```bash
+npx digcrawl-skill install
+```
+
+Installs the program, complete Skill, and default profile. Configures Codex and installs the Claude Code Skill when detected.
+
+**Or use the install script** (macOS / Linux; no Node.js or Go required):
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/originaleric/digcrawl/main/scripts/install.sh | sh
 ```
 
-The installer verifies downloads and installs the program, complete Skill, and default profile.
+Both methods verify downloads. Restart your agent and open a new chat after installation.
 
 <details>
-<summary>Install location, other hosts, and Windows</summary>
+<summary>Choose an agent, install locations, and alternatives</summary>
+
+```bash
+npx digcrawl-skill install codex
+npx digcrawl-skill install claude-code
+npx digcrawl-skill status
+```
 
 - Configures Codex automatically and installs the Claude Code Skill when detected. See [MCP setup](./.agents/skills/digcrawl/mcp/README.md) for other hosts.
 - Installs to `~/.local/bin`; add it to `PATH` if the command is not found.
-- For Windows, download a [Release](https://github.com/originaleric/digcrawl/releases). See [installation](./USAGE.md#1-安装) for version pinning and source builds.
+- Windows users can also download a [Release](https://github.com/originaleric/digcrawl/releases). See [installation](./USAGE.md#1-安装) for version pinning and source builds.
 
 </details>
 

@@ -20,6 +20,12 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: '1.26.1'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npm test
       - run: go test ./...
       - if: runner.os == 'Linux' || runner.os == 'macOS'
         run: bash scripts/test-install.sh

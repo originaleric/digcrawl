@@ -1,0 +1,17 @@
+{
+  "name": "digcrawl-skill",
+  "version": "1.0.0",
+  "description": "Install DigCrawl, its Agent Skill, and local MCP configuration",
+  "license": "MIT",
+  "type": "module",
+  "bin": { "digcrawl-skill": "npm/cli.mjs" },
+  "files": ["npm/cli.mjs", "npm/install.mjs", "README.zh-CN.md"],
+  "engines": { "node": ">=20.19.0" },
+  "repository": { "type": "git", "url": "git+https://github.com/originaleric/digcrawl.git" },
+  "homepage": "https://github.com/originaleric/digcrawl#readme",
+  "bugs": "https://github.com/originaleric/digcrawl/issues",
+  "publishConfig": { "access": "public" },
+  "digcrawlRelease": "1.0.0",
+  "scripts": { "test": "node --test npm/installer.test.mjs" },
+  "dependencies": { "fflate": "0.8.3", "smol-toml": "1.9.1", "tar": "7.5.22" }
+}

@@ -8,6 +8,32 @@ DigCrawl 是面向任意 Agent 编排系统的**本地工具网关**：在用户
 
 ## 1. 安装
 
+### 使用 npx 安装
+
+> 发布准备中：仓库公开、`digcrawl-skill` npm 包发布后可用。
+
+已安装 Node.js 20.19+ 的用户可在 macOS、Linux 或 Windows 运行：
+
+```bash
+npx digcrawl-skill install
+```
+
+安装程序、完整 Skill 和默认 profile，自动配置 Codex；检测到 Claude Code 配置目录时安装其 Skill。也可指定宿主或仅安装程序：
+
+```bash
+npx digcrawl-skill install codex
+npx digcrawl-skill install claude-code
+npx digcrawl-skill install --all
+npx digcrawl-skill install --skip-agent-setup
+npx digcrawl-skill status
+```
+
+npm 安装器版本固定对应一个 GitHub Release（首版为 `v1.0.0`），不会在运行时自动切换到未知的新版本。升级安装器用 `npx digcrawl-skill@latest install`；指定程序版本用 `install --version vX.Y.Z`。仅支持 Release 已提供的 macOS / Linux amd64、arm64 和 Windows amd64。
+
+程序使用 `~/.local/bin/digcrawl`（Windows 为 `digcrawl.exe`），MCP 注册绝对路径，不依赖 npm 缓存或 `PATH`。安装器不修改 shell 文件；手动运行 `digcrawl` 时可将该目录加入 `PATH`。Profile 和 Skill 路径与下方脚本一致；Windows profile 默认为 `%APPDATA%\\DigCrawl\\digcrawl-skill.yaml`，也遵循 `XDG_CONFIG_HOME`。
+
+可用 `--install-dir`、`--skip-codex`，以及 `DIGCRAWL_INSTALL_DIR`、`DIGCRAWL_SKILL_DIR`、`CODEX_HOME`、`DIGCRAWL_CODEX_CONFIG`、`CLAUDE_CONFIG_DIR` 自定义路径。安装会保留已有 profile 和登录会话，更新前先停止该 profile 的 Bridge；完成后重启 Agent 并打开新对话。其他宿主使用安装器输出的 [MCP stdio 配置](./.agents/skills/digcrawl/mcp/README.md)。
+
 ### 从 Release 安装（推荐给开源用户）
 
 常规用户不需要安装 Go。Release 提供 macOS Apple Silicon / Intel、Linux x86_64 / arm64 和 Windows x86_64 二进制。

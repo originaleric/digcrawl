@@ -40,20 +40,36 @@
 
 ## 快速开始
 
-**在终端安装**（macOS / Linux，不需要 Go）：
+**使用 npx 安装**（macOS / Linux / Windows，需要 Node.js 20.19+）：
+
+> 发布准备中：仓库公开、npm 包发布后可用。
+
+```bash
+npx digcrawl-skill install
+```
+
+自动安装程序、完整 Skill 与默认配置，并配置 Codex；检测到 Claude Code 时安装其 Skill。
+
+**或使用安装脚本**（macOS / Linux，不需要 Node.js 或 Go）：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/originaleric/digcrawl/main/scripts/install.sh | sh
 ```
 
-脚本会校验下载文件，安装程序、完整 Skill 与默认配置。
+两种方式都会校验下载文件。安装后重启 Agent，并打开新对话。
 
 <details>
-<summary>安装位置、其他宿主与 Windows</summary>
+<summary>指定 Agent、安装位置与其他方式</summary>
+
+```bash
+npx digcrawl-skill install codex
+npx digcrawl-skill install claude-code
+npx digcrawl-skill status
+```
 
 - 自动配置 Codex；检测到 Claude Code 时安装其 Skill。其他宿主见 [MCP 接入](./.agents/skills/digcrawl/mcp/README.md)。
 - 程序安装到 `~/.local/bin`；如提示找不到命令，请将该目录加入 `PATH`。
-- Windows 下载 [Release](https://github.com/originaleric/digcrawl/releases)；指定版本与源码构建见[安装说明](./USAGE.md#1-安装)。
+- Windows 也可下载 [Release](https://github.com/originaleric/digcrawl/releases)。指定版本与源码构建见[安装说明](./USAGE.md#1-安装)。
 
 </details>
 
