@@ -1,0 +1,83 @@
+[
+  {
+    "check": "running_build",
+    "pass": true,
+    "build_id": "sha256:d0a2d6722d423ccfe7db9cc19653f2b545a4424cabdc080dbf312c418fbd3eca"
+  },
+  {
+    "check": "local_mcp_read",
+    "pass": true,
+    "diagnostics": {
+      "attempts": 1,
+      "diagnostic_id": "7b0dbd6daf3abf15acaff491",
+      "fallback_count": 0,
+      "first_failure": null,
+      "handled": true,
+      "max_retries": 1,
+      "recovery_action": "none",
+      "recovery_status": "not_attempted",
+      "retry_count": 0
+    }
+  },
+  {
+    "check": "local_mcp_read",
+    "pass": true,
+    "diagnostics": {
+      "attempts": 1,
+      "diagnostic_id": "d1bd0da643939913a5a28d37",
+      "fallback_count": 0,
+      "first_failure": null,
+      "handled": true,
+      "max_retries": 1,
+      "recovery_action": "none",
+      "recovery_status": "not_attempted",
+      "retry_count": 0
+    }
+  },
+  {
+    "check": "original_github_url",
+    "pass": true,
+    "title": "GitHub - WyattBlue/auto-editor: Effort free video editing! · GitHub",
+    "text_characters": 5282,
+    "diagnostics": {
+      "attempts": 1,
+      "diagnostic_id": "bad25b91dabae1605901d504",
+      "fallback_count": 0,
+      "first_failure": null,
+      "handled": true,
+      "max_retries": 1,
+      "recovery_action": "none",
+      "recovery_status": "not_attempted",
+      "retry_count": 0
+    }
+  },
+  {
+    "check": "doctor_same_owner",
+    "pass": true,
+    "summary": [
+      "OK   binary",
+      "OK   profile",
+      "OK   artifact directory",
+      "OK   browser dependency",
+      "OK   Bridge transport",
+      "OK   Bridge build",
+      "OK   browser operation",
+      "OK   Skill ffmpeg",
+      "OK   Skill ASR provider",
+      "OK   mcp startup"
+    ]
+  },
+  {
+    "check": "safe_diagnostic_summary",
+    "pass": true,
+    "records": 7
+  },
+  {
+    "check": "mcp_progress",
+    "pass": true
+  },
+  {
+    "check": "explicit_restart_and_reconnect",
+    "pass": true
+  }
+]

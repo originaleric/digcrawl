@@ -1,0 +1,43 @@
+{
+  "id": "xiaohongshu",
+  "tool": "xiaohongshu.note.read",
+  "kind": "image_note",
+  "url": "https://www.xiaohongshu.com/explore/6ac20976000000001c00ca12",
+  "name": "小红书",
+  "name_en": "Xiaohongshu",
+  "topic": "Agent 新物种地图",
+  "topic_en": "An agent landscape map",
+  "prompt": "读取这篇 Agent 图文笔记，提取文字和图片。",
+  "prompt_en": "Read this agent image note and extract its text and images.",
+  "note_zh": "使用本机授权登录，取得正文和 2 条图片引用。",
+  "note_en": "Used an authorized local session to retrieve the note text and 2 image references.",
+  "status": "success",
+  "response_sha256": "5999fd07b770a9b10f17f1f004975599672a4bd628958f467ef391e112d415a5",
+  "title": "2026 Agent新物种地图｜20款近期高热 Agent",
+  "author": "略懂AI的Asher",
+  "published_at": null,
+  "captured_at": "2026-10-17T14:31:14+08:00",
+  "markdown_characters": 1215,
+  "media_references": {
+    "image": 2
+  },
+  "read_channel": "browser",
+  "error": null,
+  "excerpt": "能力范式转向；组织形态重组；负责周期跨越",
+  "image_observation": {
+    "categories": [
+      "Personal",
+      "Coding",
+      "Workflow",
+      "Research",
+      "Creative"
+    ],
+    "basis": "Host inspected the returned page screenshot; source claims are not independently endorsed."
+  },
+  "original": {
+    "kind": "screenshot",
+    "path": "examples/originals/xiaohongshu.jpg",
+    "captured_on": "2026-10-17",
+    "source_url": "https://www.xiaohongshu.com/explore/6ac20976000000001c00ca12"
+  }
+}

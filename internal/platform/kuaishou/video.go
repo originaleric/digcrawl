@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/originaleric/digcrawl/internal/browser"
 	"strings"
 	"time"
 
@@ -11,6 +12,7 @@ import (
 )
 
 func ReadVideo(ctx context.Context, in platform.ReadInput) (*platform.Content, error) {
+	ctx = browser.WithBrowseRetryContext(ctx)
 	rawURL := strings.TrimSpace(in.URL)
 	if rawURL == "" {
 		return nil, fmt.Errorf("url 不能为空")

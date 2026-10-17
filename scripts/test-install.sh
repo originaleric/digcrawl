@@ -136,6 +136,7 @@ grep -F 'model = "gpt-test"' "$codex_config" >/dev/null || fail "global Codex co
 grep -F 'command = "/usr/local/bin/keep"' "$codex_config" >/dev/null || fail "other MCP server was not preserved"
 grep -F 'command = "/usr/local/bin/digcrawl-helper"' "$codex_config" >/dev/null || fail "similarly named MCP server was not preserved"
 grep -F "command = \"$install_dir/digcrawl\"" "$codex_config" >/dev/null || fail "DigCrawl command did not use installed binary"
+grep -F 'args = ["mcp", "--idle-timeout", "15m", "--config",' "$codex_config" >/dev/null || fail "DigCrawl Codex adapter did not enable bounded idle recovery"
 grep -F "\"$profile\"" "$codex_config" >/dev/null || fail "DigCrawl args did not use the generated Skill profile"
 if grep -F '/private/tmp/digcrawl-deleted/digcrawl' "$codex_config" >/dev/null || grep -F 'OLD_VALUE' "$codex_config" >/dev/null; then
   fail "stale DigCrawl MCP configuration survived repair"

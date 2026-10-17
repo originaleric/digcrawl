@@ -14,6 +14,7 @@ import (
 	"github.com/originaleric/digcrawl/internal/platform/threads"
 	"github.com/originaleric/digcrawl/internal/platform/toutiao"
 	"github.com/originaleric/digcrawl/internal/platform/xiaohongshu"
+	"github.com/originaleric/digcrawl/internal/platform/youtube"
 )
 
 // Options 健康检查参数。
@@ -73,6 +74,8 @@ func Check(ctx context.Context, opts Options) error {
 		content, err = threads.ReadPost(ctx, in)
 	case "instagram":
 		content, err = instagram.ReadContent(ctx, in)
+	case "youtube":
+		content, err = youtube.ReadVideo(ctx, in)
 	default:
 		return fmt.Errorf("不支持试读平台 %q", platformName)
 	}

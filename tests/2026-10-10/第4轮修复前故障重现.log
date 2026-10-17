@@ -1,0 +1,98 @@
+=== RUN   TestScriptExceptionTextCannotRetireBrowserConnection
+=== RUN   TestScriptExceptionTextCannotRetireBrowserConnection/EOF
+    browse_error_test.go:104: script exception mistaken for browser failure: 提取页面结构化信息失败: 浏览器连接已关闭
+=== RUN   TestScriptExceptionTextCannotRetireBrowserConnection/context_deadline_exceeded
+    browse_error_test.go:104: script exception mistaken for browser failure: 提取页面结构化信息失败: 浏览器操作超时
+=== RUN   TestScriptExceptionTextCannotRetireBrowserConnection/dial_tcp_connection_refused
+    browse_error_test.go:104: script exception mistaken for browser failure: 提取页面结构化信息失败: 本地 CDP 浏览器不可用
+=== RUN   TestScriptExceptionTextCannotRetireBrowserConnection/target_closed
+    browse_error_test.go:104: script exception mistaken for browser failure: 提取页面结构化信息失败: 页面已关闭或被替换
+=== RUN   TestScriptExceptionTextCannotRetireBrowserConnection/external_target_cleanup_required
+    browse_error_test.go:104: script exception mistaken for browser failure: 提取页面结构化信息失败: 外部 CDP 页面清理未确认；请清理或重启外部浏览器，再重启 DigCrawl 后读取
+--- FAIL: TestScriptExceptionTextCannotRetireBrowserConnection (0.00s)
+    --- FAIL: TestScriptExceptionTextCannotRetireBrowserConnection/EOF (0.00s)
+    --- FAIL: TestScriptExceptionTextCannotRetireBrowserConnection/context_deadline_exceeded (0.00s)
+    --- FAIL: TestScriptExceptionTextCannotRetireBrowserConnection/dial_tcp_connection_refused (0.00s)
+    --- FAIL: TestScriptExceptionTextCannotRetireBrowserConnection/target_closed (0.00s)
+    --- FAIL: TestScriptExceptionTextCannotRetireBrowserConnection/external_target_cleanup_required (0.00s)
+=== RUN   TestBrowserBrowseDoesNotPublishSuccessAfterCleanupCancellation
+=== RUN   TestBrowserBrowseDoesNotPublishSuccessAfterCleanupCancellation/cancelled
+    browser_browse_recovery_test.go:108: resp=&{URL: Title: TabID: Text:read before cancellation Markdown: ScreenshotBase: Elements:[] Summary: Metadata:map[] Diagnostics:map[attempts:1 diagnostic_id:486c3274e261556d9c76e64b fallback_count:0 first_failure:map[] handled:true max_retries:1 recovery_action:none recovery_status:not_attempted retry_count:0] MediaURLs:[]} err=<nil> reads=1 releases=1
+=== RUN   TestBrowserBrowseDoesNotPublishSuccessAfterCleanupCancellation/budget_exhausted
+    browser_browse_recovery_test.go:108: resp=&{URL: Title: TabID: Text:read before cancellation Markdown: ScreenshotBase: Elements:[] Summary: Metadata:map[] Diagnostics:map[attempts:1 diagnostic_id:f7bcd6700be0faf7ad0d5bc8 fallback_count:0 first_failure:map[] handled:true max_retries:1 recovery_action:none recovery_status:not_attempted retry_count:0] MediaURLs:[]} err=<nil> reads=1 releases=1
+--- FAIL: TestBrowserBrowseDoesNotPublishSuccessAfterCleanupCancellation (0.02s)
+    --- FAIL: TestBrowserBrowseDoesNotPublishSuccessAfterCleanupCancellation/cancelled (0.00s)
+    --- FAIL: TestBrowserBrowseDoesNotPublishSuccessAfterCleanupCancellation/budget_exhausted (0.02s)
+=== RUN   TestPageFetchDoesNotPublishSuccessAfterCleanupCancellation
+=== RUN   TestPageFetchDoesNotPublishSuccessAfterCleanupCancellation/GET
+    page_fetch_recovery_test.go:119: result=&{Status:200 Body: ContentType: ParsedJSON:map[] Diagnostics:map[attempts:1 diagnostic_id:7140ad182ba992fcbf80fc0f fallback_count:0 first_failure:map[] handled:true max_retries:1 recovery_action:none recovery_status:not_attempted retry_count:0]} err=<nil> calls=1 releases=1
+=== RUN   TestPageFetchDoesNotPublishSuccessAfterCleanupCancellation/POST
+    page_fetch_recovery_test.go:119: result=&{Status:200 Body: ContentType: ParsedJSON:map[] Diagnostics:map[attempts:1 diagnostic_id:e67c587f83565b7d90968a9d fallback_count:0 first_failure:map[] handled:true max_retries:1 recovery_action:none recovery_status:not_attempted retry_count:0]} err=<nil> calls=1 releases=1
+--- FAIL: TestPageFetchDoesNotPublishSuccessAfterCleanupCancellation (0.00s)
+    --- FAIL: TestPageFetchDoesNotPublishSuccessAfterCleanupCancellation/GET (0.00s)
+    --- FAIL: TestPageFetchDoesNotPublishSuccessAfterCleanupCancellation/POST (0.00s)
+FAIL
+FAIL	github.com/originaleric/digcrawl/internal/browser	4.042s
+=== RUN   TestArticleAPIWarmupAndEndpointsShareCallerBudget
+    api_client_test.go:92: API shortened caller deadline: got=2026-10-10 15:42:41.184601 +0800 CST m=+4.008223251 want=2026-10-10 15:42:47.184598 +0800 CST m=+10.008220459
+--- FAIL: TestArticleAPIWarmupAndEndpointsShareCallerBudget (0.00s)
+=== RUN   TestArticleAPIFatalStatusIndependentOfResponseBody
+=== RUN   TestArticleAPIFatalStatusIndependentOfResponseBody/401/html
+    api_client_test.go:168: fatal status continued: calls=2 attempt=&{OK:false FallbackBrowser:true Fatal:false ErrorCode: Message:API 返回非 JSON 响应: html HTTPStatus:401 Meta:map[api_body_prefix:<html>access denied</html> api_content_type:text/html api_endpoint:https://www.toutiao.com/group/article_info/?group_id=123456 api_fetch_mode:browser_context_fetch api_http_status:401 api_response_type:html api_signature_mode:page_runtime platform:toutiao]} err=API 返回非 JSON 响应: html
+=== RUN   TestArticleAPIFatalStatusIndependentOfResponseBody/401/non_json
+    api_client_test.go:168: fatal status continued: calls=2 attempt=&{OK:false FallbackBrowser:true Fatal:false ErrorCode: Message:API 返回非 JSON 响应: non_json HTTPStatus:401 Meta:map[api_body_prefix:access denied api_content_type:text/plain api_endpoint:https://www.toutiao.com/group/article_info/?group_id=123456 api_fetch_mode:browser_context_fetch api_http_status:401 api_response_type:non_json api_signature_mode:page_runtime platform:toutiao]} err=API 返回非 JSON 响应: non_json
+=== RUN   TestArticleAPIFatalStatusIndependentOfResponseBody/401/empty
+    api_client_test.go:168: fatal status continued: calls=2 attempt=&{OK:false FallbackBrowser:true Fatal:false ErrorCode: Message:API 返回非 JSON 响应: empty HTTPStatus:401 Meta:map[api_content_type: api_endpoint:https://www.toutiao.com/group/article_info/?group_id=123456 api_fetch_mode:browser_context_fetch api_http_status:401 api_response_type:empty api_signature_mode:page_runtime platform:toutiao]} err=API 返回非 JSON 响应: empty
+=== RUN   TestArticleAPIFatalStatusIndependentOfResponseBody/401/json
+=== RUN   TestArticleAPIFatalStatusIndependentOfResponseBody/403/html
+    api_client_test.go:168: fatal status continued: calls=2 attempt=&{OK:false FallbackBrowser:true Fatal:false ErrorCode: Message:API 返回非 JSON 响应: html HTTPStatus:403 Meta:map[api_body_prefix:<html>access denied</html> api_content_type:text/html api_endpoint:https://www.toutiao.com/group/article_info/?group_id=123456 api_fetch_mode:browser_context_fetch api_http_status:403 api_response_type:html api_signature_mode:page_runtime platform:toutiao]} err=API 返回非 JSON 响应: html
+=== RUN   TestArticleAPIFatalStatusIndependentOfResponseBody/403/non_json
+    api_client_test.go:168: fatal status continued: calls=2 attempt=&{OK:false FallbackBrowser:true Fatal:false ErrorCode: Message:API 返回非 JSON 响应: non_json HTTPStatus:403 Meta:map[api_body_prefix:access denied api_content_type:text/plain api_endpoint:https://www.toutiao.com/group/article_info/?group_id=123456 api_fetch_mode:browser_context_fetch api_http_status:403 api_response_type:non_json api_signature_mode:page_runtime platform:toutiao]} err=API 返回非 JSON 响应: non_json
+=== RUN   TestArticleAPIFatalStatusIndependentOfResponseBody/403/empty
+    api_client_test.go:168: fatal status continued: calls=2 attempt=&{OK:false FallbackBrowser:true Fatal:false ErrorCode: Message:API 返回非 JSON 响应: empty HTTPStatus:403 Meta:map[api_content_type: api_endpoint:https://www.toutiao.com/group/article_info/?group_id=123456 api_fetch_mode:browser_context_fetch api_http_status:403 api_response_type:empty api_signature_mode:page_runtime platform:toutiao]} err=API 返回非 JSON 响应: empty
+=== RUN   TestArticleAPIFatalStatusIndependentOfResponseBody/403/json
+=== RUN   TestArticleAPIFatalStatusIndependentOfResponseBody/429/html
+    api_client_test.go:168: fatal status continued: calls=2 attempt=&{OK:false FallbackBrowser:true Fatal:false ErrorCode: Message:API 返回非 JSON 响应: html HTTPStatus:429 Meta:map[api_body_prefix:<html>access denied</html> api_content_type:text/html api_endpoint:https://www.toutiao.com/group/article_info/?group_id=123456 api_fetch_mode:browser_context_fetch api_http_status:429 api_response_type:html api_signature_mode:page_runtime platform:toutiao]} err=API 返回非 JSON 响应: html
+=== RUN   TestArticleAPIFatalStatusIndependentOfResponseBody/429/non_json
+    api_client_test.go:168: fatal status continued: calls=2 attempt=&{OK:false FallbackBrowser:true Fatal:false ErrorCode: Message:API 返回非 JSON 响应: non_json HTTPStatus:429 Meta:map[api_body_prefix:access denied api_content_type:text/plain api_endpoint:https://www.toutiao.com/group/article_info/?group_id=123456 api_fetch_mode:browser_context_fetch api_http_status:429 api_response_type:non_json api_signature_mode:page_runtime platform:toutiao]} err=API 返回非 JSON 响应: non_json
+=== RUN   TestArticleAPIFatalStatusIndependentOfResponseBody/429/empty
+    api_client_test.go:168: fatal status continued: calls=2 attempt=&{OK:false FallbackBrowser:true Fatal:false ErrorCode: Message:API 返回非 JSON 响应: empty HTTPStatus:429 Meta:map[api_content_type: api_endpoint:https://www.toutiao.com/group/article_info/?group_id=123456 api_fetch_mode:browser_context_fetch api_http_status:429 api_response_type:empty api_signature_mode:page_runtime platform:toutiao]} err=API 返回非 JSON 响应: empty
+=== RUN   TestArticleAPIFatalStatusIndependentOfResponseBody/429/json
+=== RUN   TestArticleAPIFatalStatusIndependentOfResponseBody/461/html
+    api_client_test.go:168: fatal status continued: calls=2 attempt=&{OK:false FallbackBrowser:true Fatal:false ErrorCode: Message:API 返回非 JSON 响应: html HTTPStatus:461 Meta:map[api_body_prefix:<html>access denied</html> api_content_type:text/html api_endpoint:https://www.toutiao.com/group/article_info/?group_id=123456 api_fetch_mode:browser_context_fetch api_http_status:461 api_response_type:html api_signature_mode:page_runtime platform:toutiao]} err=API 返回非 JSON 响应: html
+=== RUN   TestArticleAPIFatalStatusIndependentOfResponseBody/461/non_json
+    api_client_test.go:168: fatal status continued: calls=2 attempt=&{OK:false FallbackBrowser:true Fatal:false ErrorCode: Message:API 返回非 JSON 响应: non_json HTTPStatus:461 Meta:map[api_body_prefix:access denied api_content_type:text/plain api_endpoint:https://www.toutiao.com/group/article_info/?group_id=123456 api_fetch_mode:browser_context_fetch api_http_status:461 api_response_type:non_json api_signature_mode:page_runtime platform:toutiao]} err=API 返回非 JSON 响应: non_json
+=== RUN   TestArticleAPIFatalStatusIndependentOfResponseBody/461/empty
+    api_client_test.go:168: fatal status continued: calls=2 attempt=&{OK:false FallbackBrowser:true Fatal:false ErrorCode: Message:API 返回非 JSON 响应: empty HTTPStatus:461 Meta:map[api_content_type: api_endpoint:https://www.toutiao.com/group/article_info/?group_id=123456 api_fetch_mode:browser_context_fetch api_http_status:461 api_response_type:empty api_signature_mode:page_runtime platform:toutiao]} err=API 返回非 JSON 响应: empty
+=== RUN   TestArticleAPIFatalStatusIndependentOfResponseBody/461/json
+=== RUN   TestArticleAPIFatalStatusIndependentOfResponseBody/471/html
+    api_client_test.go:168: fatal status continued: calls=2 attempt=&{OK:false FallbackBrowser:true Fatal:false ErrorCode: Message:API 返回非 JSON 响应: html HTTPStatus:471 Meta:map[api_body_prefix:<html>access denied</html> api_content_type:text/html api_endpoint:https://www.toutiao.com/group/article_info/?group_id=123456 api_fetch_mode:browser_context_fetch api_http_status:471 api_response_type:html api_signature_mode:page_runtime platform:toutiao]} err=API 返回非 JSON 响应: html
+=== RUN   TestArticleAPIFatalStatusIndependentOfResponseBody/471/non_json
+    api_client_test.go:168: fatal status continued: calls=2 attempt=&{OK:false FallbackBrowser:true Fatal:false ErrorCode: Message:API 返回非 JSON 响应: non_json HTTPStatus:471 Meta:map[api_body_prefix:access denied api_content_type:text/plain api_endpoint:https://www.toutiao.com/group/article_info/?group_id=123456 api_fetch_mode:browser_context_fetch api_http_status:471 api_response_type:non_json api_signature_mode:page_runtime platform:toutiao]} err=API 返回非 JSON 响应: non_json
+=== RUN   TestArticleAPIFatalStatusIndependentOfResponseBody/471/empty
+    api_client_test.go:168: fatal status continued: calls=2 attempt=&{OK:false FallbackBrowser:true Fatal:false ErrorCode: Message:API 返回非 JSON 响应: empty HTTPStatus:471 Meta:map[api_content_type: api_endpoint:https://www.toutiao.com/group/article_info/?group_id=123456 api_fetch_mode:browser_context_fetch api_http_status:471 api_response_type:empty api_signature_mode:page_runtime platform:toutiao]} err=API 返回非 JSON 响应: empty
+=== RUN   TestArticleAPIFatalStatusIndependentOfResponseBody/471/json
+--- FAIL: TestArticleAPIFatalStatusIndependentOfResponseBody (0.00s)
+    --- FAIL: TestArticleAPIFatalStatusIndependentOfResponseBody/401/html (0.00s)
+    --- FAIL: TestArticleAPIFatalStatusIndependentOfResponseBody/401/non_json (0.00s)
+    --- FAIL: TestArticleAPIFatalStatusIndependentOfResponseBody/401/empty (0.00s)
+    --- PASS: TestArticleAPIFatalStatusIndependentOfResponseBody/401/json (0.00s)
+    --- FAIL: TestArticleAPIFatalStatusIndependentOfResponseBody/403/html (0.00s)
+    --- FAIL: TestArticleAPIFatalStatusIndependentOfResponseBody/403/non_json (0.00s)
+    --- FAIL: TestArticleAPIFatalStatusIndependentOfResponseBody/403/empty (0.00s)
+    --- PASS: TestArticleAPIFatalStatusIndependentOfResponseBody/403/json (0.00s)
+    --- FAIL: TestArticleAPIFatalStatusIndependentOfResponseBody/429/html (0.00s)
+    --- FAIL: TestArticleAPIFatalStatusIndependentOfResponseBody/429/non_json (0.00s)
+    --- FAIL: TestArticleAPIFatalStatusIndependentOfResponseBody/429/empty (0.00s)
+    --- PASS: TestArticleAPIFatalStatusIndependentOfResponseBody/429/json (0.00s)
+    --- FAIL: TestArticleAPIFatalStatusIndependentOfResponseBody/461/html (0.00s)
+    --- FAIL: TestArticleAPIFatalStatusIndependentOfResponseBody/461/non_json (0.00s)
+    --- FAIL: TestArticleAPIFatalStatusIndependentOfResponseBody/461/empty (0.00s)
+    --- PASS: TestArticleAPIFatalStatusIndependentOfResponseBody/461/json (0.00s)
+    --- FAIL: TestArticleAPIFatalStatusIndependentOfResponseBody/471/html (0.00s)
+    --- FAIL: TestArticleAPIFatalStatusIndependentOfResponseBody/471/non_json (0.00s)
+    --- FAIL: TestArticleAPIFatalStatusIndependentOfResponseBody/471/empty (0.00s)
+    --- PASS: TestArticleAPIFatalStatusIndependentOfResponseBody/471/json (0.00s)
+FAIL
+FAIL	github.com/originaleric/digcrawl/internal/platform/toutiao	4.304s
+FAIL

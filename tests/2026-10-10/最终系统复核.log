@@ -1,0 +1,32 @@
+ok  	github.com/originaleric/digcrawl/internal/browser	9.189s
+ok  	github.com/originaleric/digcrawl/transport/bridge	16.428s
+ok  	github.com/originaleric/digcrawl/transport/mcp	(cached)
+?   	github.com/originaleric/digcrawl/provider	[no test files]
+ok  	github.com/originaleric/digcrawl/provider/asr	(cached)
+ok  	github.com/originaleric/digcrawl/provider/browser	6.488s
+?   	github.com/originaleric/digcrawl/provider/example	[no test files]
+ok  	github.com/originaleric/digcrawl/provider/platform	(cached)
+?   	github.com/originaleric/digcrawl/provider/stub	[no test files]
+ok  	github.com/originaleric/digcrawl/internal/platform	6.786s
+ok  	github.com/originaleric/digcrawl/internal/platform/bilibili	8.426s
+ok  	github.com/originaleric/digcrawl/internal/platform/douyin	6.144s
+?   	github.com/originaleric/digcrawl/internal/platform/healthcheck	[no test files]
+ok  	github.com/originaleric/digcrawl/internal/platform/instagram	7.105s
+ok  	github.com/originaleric/digcrawl/internal/platform/kuaishou	7.835s
+ok  	github.com/originaleric/digcrawl/internal/platform/reddit	7.410s
+?   	github.com/originaleric/digcrawl/internal/platform/session	[no test files]
+ok  	github.com/originaleric/digcrawl/internal/platform/threads	8.742s
+ok  	github.com/originaleric/digcrawl/internal/platform/toutiao	9.047s
+ok  	github.com/originaleric/digcrawl/internal/platform/wechat	9.187s
+ok  	github.com/originaleric/digcrawl/internal/platform/weibo	7.268s
+ok  	github.com/originaleric/digcrawl/internal/platform/x	7.574s
+ok  	github.com/originaleric/digcrawl/internal/platform/xiaohongshu	7.611s
+ok  	github.com/originaleric/digcrawl/internal/platform/youtube	17.094s
+ok  	github.com/originaleric/digcrawl/internal/platform/zhihu	8.183s
+ok  	github.com/originaleric/digcrawl/transport/collector	(cached)
+ok  	github.com/originaleric/digcrawl/runtime	8.086s
+ok  	github.com/originaleric/digcrawl/cmd/digcrawl	16.874s
+
+Final command-entry race verification after test-only startup budget alignment:
+go test -race ./cmd/digcrawl
+ok  github.com/originaleric/digcrawl/cmd/digcrawl  7.606s

@@ -74,7 +74,7 @@ const FilterAll = "all"
 // 返回节点列表和引用到NodeID的映射
 func FetchAXTree(ctx context.Context, page *rod.Page) ([]AXNode, map[string]int64, error) {
 	// 启用无障碍域
-	_, err := page.Call(ctx, "", "Accessibility.enable", nil)
+	_, err := page.Call(ctx, string(page.SessionID), "Accessibility.enable", nil)
 	if err != nil {
 		return nil, nil, fmt.Errorf("启用无障碍域失败: %w", err)
 	}
@@ -83,7 +83,7 @@ func FetchAXTree(ctx context.Context, page *rod.Page) ([]AXNode, map[string]int6
 	var result struct {
 		Nodes json.RawMessage `json:"nodes"`
 	}
-	res, err := page.Call(ctx, "", "Accessibility.getFullAXTree", nil)
+	res, err := page.Call(ctx, string(page.SessionID), "Accessibility.getFullAXTree", nil)
 	if err != nil {
 		return nil, nil, fmt.Errorf("获取无障碍树失败: %w", err)
 	}

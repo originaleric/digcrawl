@@ -118,6 +118,39 @@ func TestConfigureSkillMediaUpdatesOnlyDefaultUserProfileAndActiveConfig(t *test
 	}
 }
 
+func TestConfigureSkillMediaUpdatesImageRetentionWithoutEnablingOCR(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	path := config.DefaultSkillProfilePath()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("Skill:\n  Media:\n    DownloadMedia: false\nOCR:\n  Enabled: false\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := config.Load(path); err != nil {
+		t.Fatal(err)
+	}
+	imageDir := filepath.Join(filepath.Dir(path), "retained-images")
+	input, err := json.Marshal(map[string]any{"image_download_providers": map[string]bool{"x": true}, "image_download_dir": imageDir, "image_download_max_bytes": 4096, "image_download_max_items": 2, "image_download_timeout_sec": 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, _, err := ConfigureSkillMediaEntry().Handler(context.Background(), &protocol.ToolCall{Input: input})
+	if err != nil {
+		t.Fatalf("configure image retention: %v", err)
+	}
+	if out["image_download_dir"] != imageDir || out["image_download_max_items"] != 2 || !config.Get().ImageDownload.EnabledFor("x") {
+		t.Fatalf("output/config=%+v / %+v", out, config.Get().ImageDownload)
+	}
+	if config.Get().Skill.OCR.EnabledOrDefault() {
+		t.Fatal("image retention must not enable OCR")
+	}
+	persisted, err := config.Validate(path)
+	if err != nil || !persisted.ImageDownload.EnabledFor("x") || persisted.ImageDownload.MaxItems != 2 {
+		t.Fatalf("persisted=%+v err=%v", persisted.ImageDownload, err)
+	}
+}
+
 func TestConfigureSkillMediaRejectsInvalidInputWithoutWriting(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	path := config.DefaultSkillProfilePath()

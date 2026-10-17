@@ -1,0 +1,62 @@
+?   	github.com/originaleric/digcrawl/client	[no test files]
+?   	github.com/originaleric/digcrawl/cmd/digcollect	[no test files]
+ok  	github.com/originaleric/digcrawl/cmd/digcrawl	21.989s
+ok  	github.com/originaleric/digcrawl/collect	10.479s
+ok  	github.com/originaleric/digcrawl/collect/store	2.039s
+ok  	github.com/originaleric/digcrawl/config	2.928s
+--- FAIL: TestLocalProviderParsesStdoutJSON (5.19s)
+    local_provider_test.go:98: local ASR timed out after its operation budget; adjust ASR.TimeoutSec, ASR.MaxTimeoutSec, or --timeout for this transcription
+FAIL
+FAIL	github.com/originaleric/digcrawl/internal/asr	38.300s
+ok  	github.com/originaleric/digcrawl/internal/browser	6.047s
+ok  	github.com/originaleric/digcrawl/internal/feed	3.445s
+ok  	github.com/originaleric/digcrawl/internal/media	19.047s
+ok  	github.com/originaleric/digcrawl/internal/notify	1.255s
+ok  	github.com/originaleric/digcrawl/internal/ocr	15.382s
+ok  	github.com/originaleric/digcrawl/internal/platform	3.734s
+ok  	github.com/originaleric/digcrawl/internal/platform/bilibili	4.020s
+ok  	github.com/originaleric/digcrawl/internal/platform/douyin	7.420s
+?   	github.com/originaleric/digcrawl/internal/platform/healthcheck	[no test files]
+ok  	github.com/originaleric/digcrawl/internal/platform/instagram	7.192s
+ok  	github.com/originaleric/digcrawl/internal/platform/kuaishou	6.869s
+ok  	github.com/originaleric/digcrawl/internal/platform/reddit	6.835s
+?   	github.com/originaleric/digcrawl/internal/platform/session	[no test files]
+ok  	github.com/originaleric/digcrawl/internal/platform/threads	7.038s
+ok  	github.com/originaleric/digcrawl/internal/platform/toutiao	11.065s
+ok  	github.com/originaleric/digcrawl/internal/platform/wechat	5.518s
+ok  	github.com/originaleric/digcrawl/internal/platform/weibo	5.135s
+ok  	github.com/originaleric/digcrawl/internal/platform/x	5.080s
+ok  	github.com/originaleric/digcrawl/internal/platform/xiaohongshu	4.994s
+ok  	github.com/originaleric/digcrawl/internal/platform/youtube	18.674s
+ok  	github.com/originaleric/digcrawl/internal/platform/zhihu	5.400s
+ok  	github.com/originaleric/digcrawl/internal/source	5.420s
+ok  	github.com/originaleric/digcrawl/internal/summary	4.932s
+?   	github.com/originaleric/digcrawl/internal/testutil	[no test files]
+?   	github.com/originaleric/digcrawl/internal/testutil/fakeffmpeg	[no test files]
+ok  	github.com/originaleric/digcrawl/internal/video	3.654s
+ok  	github.com/originaleric/digcrawl/internal/watchlist	3.696s
+ok  	github.com/originaleric/digcrawl/internal/watchlist/service	12.355s
+ok  	github.com/originaleric/digcrawl/protocol	3.460s
+?   	github.com/originaleric/digcrawl/provider	[no test files]
+ok  	github.com/originaleric/digcrawl/provider/asr	3.983s
+ok  	github.com/originaleric/digcrawl/provider/browser	3.661s
+?   	github.com/originaleric/digcrawl/provider/example	[no test files]
+ok  	github.com/originaleric/digcrawl/provider/platform	9.242s
+?   	github.com/originaleric/digcrawl/provider/stub	[no test files]
+ok  	github.com/originaleric/digcrawl/runtime	3.634s
+ok  	github.com/originaleric/digcrawl/runtime/artifact	3.600s
+?   	github.com/originaleric/digcrawl/runtime/audit	[no test files]
+ok  	github.com/originaleric/digcrawl/runtime/executor	3.502s
+ok  	github.com/originaleric/digcrawl/runtime/policy	3.453s
+?   	github.com/originaleric/digcrawl/runtime/registry	[no test files]
+?   	github.com/originaleric/digcrawl/runtime/version	[no test files]
+ok  	github.com/originaleric/digcrawl/skill	8.070s
+?   	github.com/originaleric/digcrawl/tests/2026-07-10/toutiao-digflow-round-2/runner	[no test files]
+ok  	github.com/originaleric/digcrawl/transport/bridge	7.851s
+ok  	github.com/originaleric/digcrawl/transport/collector	3.538s
+ok  	github.com/originaleric/digcrawl/transport/devhost	3.430s
+?   	github.com/originaleric/digcrawl/transport/host	[no test files]
+ok  	github.com/originaleric/digcrawl/transport/http	3.219s
+ok  	github.com/originaleric/digcrawl/transport/mcp	3.820s
+ok  	github.com/originaleric/digcrawl/transport/stdio	2.849s
+FAIL

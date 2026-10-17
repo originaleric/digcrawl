@@ -1,0 +1,34 @@
+{
+  "id": "youtube",
+  "tool": "youtube.video.read",
+  "kind": "video",
+  "url": "https://www.youtube.com/watch?v=LP5OCa20Zpg",
+  "name": "YouTube",
+  "name_en": "YouTube",
+  "topic": "Tips for building AI agents",
+  "topic_en": "Tips for building AI agents",
+  "prompt": "读取这个 Agent 视频，提取可用字幕。",
+  "prompt_en": "Read this agent video and extract any available captions.",
+  "note_zh": "当前环境要求登录验证，尚未取得正文或字幕。",
+  "note_en": "This environment requires sign-in verification; no video text or captions were retrieved.",
+  "status": "error",
+  "response_sha256": "64a0e556192fd1cfe06f9e1353e611a0ae5388311bbf01ce9c0f0912493ae93d",
+  "title": null,
+  "author": null,
+  "published_at": null,
+  "captured_at": null,
+  "markdown_characters": 0,
+  "media_references": {},
+  "read_channel": null,
+  "error": {
+    "code": "LOGIN_REQUIRED",
+    "message": "Sign in to confirm you’re not a bot"
+  },
+  "excerpt": null,
+  "original": {
+    "kind": "screenshot",
+    "path": "examples/originals/youtube.jpg",
+    "captured_on": "2026-10-17",
+    "source_url": "https://www.youtube.com/watch?v=LP5OCa20Zpg"
+  }
+}

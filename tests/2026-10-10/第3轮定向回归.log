@@ -1,0 +1,25 @@
+ok  	github.com/originaleric/digcrawl/internal/browser	6.183s
+ok  	github.com/originaleric/digcrawl/internal/platform	(cached)
+ok  	github.com/originaleric/digcrawl/internal/platform/bilibili	(cached)
+ok  	github.com/originaleric/digcrawl/internal/platform/douyin	(cached)
+?   	github.com/originaleric/digcrawl/internal/platform/healthcheck	[no test files]
+ok  	github.com/originaleric/digcrawl/internal/platform/instagram	(cached)
+ok  	github.com/originaleric/digcrawl/internal/platform/kuaishou	(cached)
+ok  	github.com/originaleric/digcrawl/internal/platform/reddit	(cached)
+?   	github.com/originaleric/digcrawl/internal/platform/session	[no test files]
+ok  	github.com/originaleric/digcrawl/internal/platform/threads	(cached)
+ok  	github.com/originaleric/digcrawl/internal/platform/toutiao	(cached)
+ok  	github.com/originaleric/digcrawl/internal/platform/wechat	(cached)
+ok  	github.com/originaleric/digcrawl/internal/platform/weibo	(cached)
+ok  	github.com/originaleric/digcrawl/internal/platform/x	(cached)
+ok  	github.com/originaleric/digcrawl/internal/platform/xiaohongshu	(cached)
+ok  	github.com/originaleric/digcrawl/internal/platform/youtube	(cached)
+ok  	github.com/originaleric/digcrawl/internal/platform/zhihu	(cached)
+ok  	github.com/originaleric/digcrawl/provider/platform	1.704s
+ok  	github.com/originaleric/digcrawl/runtime	0.592s
+ok  	github.com/originaleric/digcrawl/runtime/artifact	(cached)
+?   	github.com/originaleric/digcrawl/runtime/audit	[no test files]
+ok  	github.com/originaleric/digcrawl/runtime/executor	(cached)
+ok  	github.com/originaleric/digcrawl/runtime/policy	(cached)
+?   	github.com/originaleric/digcrawl/runtime/registry	[no test files]
+?   	github.com/originaleric/digcrawl/runtime/version	[no test files]

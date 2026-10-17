@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/originaleric/digcrawl/internal/browser"
 	"net/url"
 	"strings"
 
@@ -14,6 +15,7 @@ import (
 	"github.com/originaleric/digcrawl/protocol"
 	"github.com/originaleric/digcrawl/runtime/artifact"
 	"github.com/originaleric/digcrawl/runtime/executor"
+	"github.com/originaleric/digcrawl/runtime/policy"
 	"github.com/originaleric/digcrawl/runtime/registry"
 	"github.com/originaleric/digcrawl/skill"
 )
@@ -49,7 +51,7 @@ type redditListingInput struct {
 	After     string `json:"after,omitempty"`
 }
 
-func RedditPostReadEntry(configDomains []string, artStore artifact.Store) registry.Entry {
+func RedditPostReadEntry(configDomains []string, artStore artifact.Store, runtimeCfg ...*config.Config) registry.Entry {
 	return registry.Entry{
 		Descriptor: protocol.ToolDescriptor{
 			Name:         ToolRedditPostRead,
@@ -59,7 +61,7 @@ func RedditPostReadEntry(configDomains []string, artStore artifact.Store) regist
 			Capabilities: []string{"reddit", "platform.read", "browser"},
 			Risk:         "network",
 		},
-		Handler: redditPostReadHandler(configDomains, artStore, reddit.ReadPost),
+		Handler: redditPostReadHandler(configDomains, artStore, reddit.ReadPost, runtimeCfg...),
 	}
 }
 
@@ -91,8 +93,13 @@ func RedditUserReadEntry(configDomains []string) registry.Entry {
 	}
 }
 
-func redditPostReadHandler(configDomains []string, artStore artifact.Store, read func(context.Context, reddit.ReadInput) (*platform.Content, error)) func(context.Context, *protocol.ToolCall) (map[string]any, []protocol.Artifact, error) {
+func redditPostReadHandler(configDomains []string, artStore artifact.Store, read func(context.Context, reddit.ReadInput) (*platform.Content, error), runtimeConfigs ...*config.Config) func(context.Context, *protocol.ToolCall) (map[string]any, []protocol.Artifact, error) {
+	runtimeCfg := optionalRuntimeConfig(runtimeConfigs)
+	if runtimeCfg == nil {
+		runtimeCfg = config.Get()
+	}
 	return func(ctx context.Context, call *protocol.ToolCall) (map[string]any, []protocol.Artifact, error) {
+		ctx = browser.WithBrowseRetryContext(ctx)
 		in, err := executor.DecodeInput[redditPostReadInput](call)
 		if err != nil {
 			return nil, nil, err
@@ -103,6 +110,21 @@ func redditPostReadHandler(configDomains []string, artStore artifact.Store, read
 		if err := executor.ValidateCookieDomain(in.UseCookieDomain, call, configDomains); err != nil {
 			return nil, nil, err
 		}
+		var skillCfg config.SkillConfig
+		var imageDownloadCfg config.ImageDownloadConfig
+		if runtimeCfg == config.Get() {
+			skillCfg, imageDownloadCfg = config.SkillImageDownload()
+		} else {
+			skillCfg, imageDownloadCfg = runtimeCfg.Skill, runtimeCfg.ImageDownload
+		}
+		isCollect := executor.IsCollectExecution(ctx)
+		ocrRequested := skill.DirectReadOCRRequested(ctx, skillCfg, in.IncludeOCR)
+		retainProviderImages := shouldRetainProviderImages(imageDownloadCfg, ToolRedditPostRead)
+		returnMedia := in.IncludeMedia || in.IncludeASR || in.IncludeSummary
+		if !isCollect && in.IncludeOCR {
+			returnMedia = true
+		}
+		readIncludeMedia := returnMedia || ocrRequested || retainProviderImages
 		includeComments := true
 		if in.IncludeComments != nil {
 			includeComments = *in.IncludeComments
@@ -115,7 +137,7 @@ func redditPostReadHandler(configDomains []string, artStore artifact.Store, read
 			ReadInput: platform.ReadInput{
 				URL:               in.URL,
 				Format:            in.Format,
-				IncludeMedia:      in.IncludeMedia || in.IncludeOCR || in.IncludeASR || in.IncludeSummary,
+				IncludeMedia:      readIncludeMedia,
 				IncludeScreenshot: in.IncludeScreenshot,
 				WaitSelector:      in.WaitSelector,
 				UseCookieDomain:   in.UseCookieDomain,
@@ -130,18 +152,58 @@ func redditPostReadHandler(configDomains []string, artStore artifact.Store, read
 		if err != nil {
 			var re *platform.ReadError
 			if errors.As(err, &re) {
-				return platform.ErrorOutput(re), nil, re
+				if err := validatePlatformURL(in.URL, call, configDomains, redditDefaultDomains,
+					platform.MetaString(re.Meta, "final_url"), platform.MetaString(re.Meta, "resolved_url")); err != nil {
+					return nil, nil, err
+				}
+				out := platform.ErrorOutput(re)
+				if d := browser.BrowseDiagnostics(ctx); d != nil && d["attempts"].(int) > 0 {
+					out["browser_diagnostics"] = d
+				}
+				return out, nil, re
 			}
 			return nil, nil, err
 		}
+		if content == nil {
+			return nil, nil, fmt.Errorf("%s: platform reader returned no content", policy.CodeInvalidInput)
+		}
+		if err := validatePlatformURL(content.SourceURL, call, configDomains, redditDefaultDomains,
+			platform.MetaString(content.PlatformMetadata, "final_url"),
+			platform.MetaString(content.PlatformMetadata, "resolved_url")); err != nil {
+			return nil, nil, err
+		}
 		out := platform.ApplyFormats(content, in.Format)
-		if !executor.IsCollectExecution(ctx) && (in.IncludeOCR || in.IncludeASR || in.IncludeSummary) {
-			if err := skill.Enhance(ctx, out, config.Skill(), skill.EnhanceOptions{
-				IncludeOCR: in.IncludeOCR, IncludeASR: in.IncludeASR,
-				IncludeSummary: in.IncludeSummary, SourceText: content.Text, ScreenshotBase64: content.ScreenshotBase64, ArtifactStore: artStore,
+		if d := browser.BrowseDiagnostics(ctx); d != nil && d["attempts"].(int) > 0 {
+			out["browser_diagnostics"] = d
+		}
+		if !returnMedia && !isCollect {
+			// Configured direct OCR consumes image references internally without
+			// widening the public text-only response contract.
+			defer delete(out, "media")
+		}
+		var localImages []skill.LocalImageInput
+		if retainProviderImages {
+			inputs, retainErr := RetainResolvedProviderImages(ctx, out, imageDownloadCfg, artStore)
+			if retainErr != nil {
+				if !returnMedia && !isCollect {
+					delete(out, "media")
+				}
+				return out, nil, retainErr
+			}
+			if !isCollect {
+				localImages = inputs
+			}
+		}
+		if !isCollect && (ocrRequested || in.IncludeASR || in.IncludeSummary) {
+			if err := skill.Enhance(ctx, out, skillCfg, skill.EnhanceOptions{
+				IncludeOCR: ocrRequested, IncludeASR: in.IncludeASR,
+				IncludeSummary: in.IncludeSummary, SourceText: content.Text, ScreenshotBase64: content.ScreenshotBase64, ArtifactStore: artStore, LocalImages: localImages,
 			}); err != nil {
 				return out, nil, err
 			}
+		}
+		if retainProviderImages && !returnMedia && !isCollect {
+			delete(out, "media")
 		}
 		var artifacts []protocol.Artifact
 		if content.ScreenshotBase64 != "" {
@@ -149,7 +211,7 @@ func redditPostReadHandler(configDomains []string, artStore artifact.Store, read
 			if artStore == nil {
 				return out, nil, fmt.Errorf("screenshot artifact store is unavailable")
 			}
-			art, err := artifact.PutBase64PNG(ctx, artStore, artID, content.ScreenshotBase64, config.Get().Gateway.ArtifactMaxInlineBytes)
+			art, err := artifact.PutBase64PNG(ctx, artStore, artID, content.ScreenshotBase64, runtimeCfg.Gateway.ArtifactMaxInlineBytes)
 			if err != nil {
 				return out, nil, fmt.Errorf("persist screenshot artifact: %w", err)
 			}
@@ -177,6 +239,11 @@ func redditSubredditReadHandler(configDomains []string) func(context.Context, *p
 		if err != nil {
 			return nil, nil, err
 		}
+		if res != nil {
+			if err := validateOptionalRedditURL(res.SourceURL, call, configDomains); err != nil {
+				return nil, nil, err
+			}
+		}
 		return listingResultMap(res), nil, nil
 	}
 }
@@ -197,6 +264,11 @@ func redditUserReadHandler(configDomains []string) func(context.Context, *protoc
 		res, err := reddit.ReadUser(ctx, reddit.ListingOptions{Username: user, Where: in.Where, Limit: in.Limit, After: in.After})
 		if err != nil {
 			return nil, nil, err
+		}
+		if res != nil {
+			if err := validateOptionalRedditURL(res.SourceURL, call, configDomains); err != nil {
+				return nil, nil, err
+			}
 		}
 		return listingResultMap(res), nil, nil
 	}

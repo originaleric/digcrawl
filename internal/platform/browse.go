@@ -25,7 +25,7 @@ func Browse(ctx context.Context, url string, in ReadInput, spec BrowseSpec) (*br
 	if waitSelector == "" {
 		waitSelector = spec.WaitSelector
 	}
-	return browser.BrowserBrowse(ctx, &browser.BrowserBrowseRequest{
+	resp, err := browser.BrowserBrowse(ctx, &browser.BrowserBrowseRequest{
 		URL:               url,
 		Action:            action,
 		CaptureScreenshot: in.IncludeScreenshot,
@@ -36,4 +36,12 @@ func Browse(ctx context.Context, url string, in ReadInput, spec BrowseSpec) (*br
 		MetadataScript:    spec.MetadataScript,
 		CaptureMedia:      spec.CaptureMedia,
 	})
+	if err != nil {
+		return nil, err
+	}
+	// Many adapters keep the original link in SourceURL. Preserve the browser's
+	// confirmed source in the existing metadata field for provider policy checks.
+	resp.Metadata = EnsureMeta(resp.Metadata)
+	resp.Metadata["final_url"] = resp.URL
+	return resp, nil
 }

@@ -26,7 +26,7 @@ var NoteBrowseAttempts = []platform.BrowseAttempt{
 
 // MetadataScript 页面状态探测 + hydration/meta/DOM 三层提取。
 func MetadataScript() string {
-	return platform.ParseCountJS + `(() => {
+	return platform.WithParseCountJS(`() => {
   const warnings = [];
   const pick = (sels) => {
     for (const s of sels) {
@@ -175,5 +175,5 @@ func MetadataScript() string {
     merged.warnings = [...(merged.warnings || []), 'text empty, media only'];
   }
   return merged;
-})()`
+}`)
 }

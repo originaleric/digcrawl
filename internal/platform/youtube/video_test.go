@@ -10,6 +10,48 @@ import (
 	"github.com/originaleric/digcrawl/internal/platform"
 )
 
+func TestReadVideoSelectsSavedYouTubeSession(t *testing.T) {
+	t.Parallel()
+	for _, override := range []string{"", "youtube.com"} {
+		t.Run("cookie_domain="+override, func(t *testing.T) {
+			calls := 0
+			content, err := readVideoWithBrowse(context.Background(), platform.ReadInput{
+				URL: "https://youtu.be/dQw4w9WgXcQ", UseCookieDomain: override,
+			}, func(_ context.Context, rawURL string, in platform.ReadInput, spec platform.BrowseSpec) (*browser.BrowserBrowseResponse, error) {
+				calls++
+				if rawURL != "https://www.youtube.com/watch?v=dQw4w9WgXcQ" || spec.CookieDomain != "www.youtube.com" {
+					t.Fatalf("reader did not select the saved YouTube session: url=%s domain=%s", rawURL, spec.CookieDomain)
+				}
+				if in.UseCookieDomain != override {
+					t.Fatalf("explicit cookie-domain override was lost: %q", in.UseCookieDomain)
+				}
+				return &browser.BrowserBrowseResponse{URL: rawURL, Metadata: map[string]any{
+					"video_id": "dQw4w9WgXcQ", "title": "Authenticated video", "description": "Retrieved description",
+				}}, nil
+			})
+			if err != nil || calls != 1 || content == nil || content.Text != "Retrieved description" {
+				t.Fatalf("read result: calls=%d content=%+v err=%v", calls, content, err)
+			}
+		})
+	}
+}
+
+func TestReadVideoPreservesLoginRequiredWithoutRetrying(t *testing.T) {
+	t.Parallel()
+	calls := 0
+	content, err := readVideoWithBrowse(context.Background(), platform.ReadInput{URL: "https://youtu.be/dQw4w9WgXcQ"},
+		func(context.Context, string, platform.ReadInput, platform.BrowseSpec) (*browser.BrowserBrowseResponse, error) {
+			calls++
+			return &browser.BrowserBrowseResponse{Metadata: map[string]any{
+				"error_code": platform.ErrLoginRequired, "error_message": "Sign in to confirm you’re not a bot",
+			}}, nil
+		})
+	var readErr *platform.ReadError
+	if content != nil || !errors.As(err, &readErr) || readErr.Code != platform.ErrLoginRequired || calls != 1 {
+		t.Fatalf("login failure must remain explicit without replay: calls=%d content=%+v err=%v", calls, content, err)
+	}
+}
+
 func TestNormalizeVideoUsesDescriptionAndCoverWithoutPlaybackURL(t *testing.T) {
 	t.Parallel()
 	content := normalizeVideo(context.Background(), platform.ReadInput{IncludeMedia: true}, &platform.NormalizedURL{

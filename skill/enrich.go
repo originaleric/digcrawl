@@ -18,6 +18,7 @@ import (
 	internalasr "github.com/originaleric/digcrawl/internal/asr"
 	"github.com/originaleric/digcrawl/internal/ocr"
 	"github.com/originaleric/digcrawl/runtime/artifact"
+	"github.com/originaleric/digcrawl/runtime/executor"
 )
 
 // EnhanceOptions describes explicit enrichments requested through the Skill.
@@ -36,6 +37,34 @@ type EnhanceOptions struct {
 	// reads them for ASR/frame OCR and returns only extracted content; ownership
 	// and cleanup remain with the provider.
 	LocalVideoPaths []string
+	// LocalImages are successfully retained remote image inputs for this call.
+	// They are OCR-only process inputs: their absolute paths never leave this
+	// package in output metadata or result payloads.
+	LocalImages []LocalImageInput
+}
+
+// LocalImageInput associates one retained local image with the remote source
+// URL that remains the public OCR result identity.
+type LocalImageInput struct {
+	Path      string
+	SourceURL string
+	Type      string
+}
+
+// OCRRequested is the direct-read OCR policy for a Skill profile. Enabling
+// Skill.OCR is an operator opt-in to process page images by default; the
+// per-call flag remains available for callers that need an explicit request.
+// The default profile keeps OCR disabled, so ordinary keyless reads do not
+// download images or send them to an OCR provider.
+func OCRRequested(cfg config.SkillConfig, explicitlyRequested bool) bool {
+	return explicitlyRequested || cfg.OCR.EnabledOrDefault()
+}
+
+// DirectReadOCRRequested centralizes the Skill OCR boundary used by every
+// direct provider. Collect owns a separate root-level export/OCR pipeline, so
+// a Collect context must never turn a Skill default into hidden media work.
+func DirectReadOCRRequested(ctx context.Context, cfg config.SkillConfig, explicitlyRequested bool) bool {
+	return !executor.IsCollectExecution(ctx) && OCRRequested(cfg, explicitlyRequested)
 }
 
 // Enhance applies the Skill-owned media/OCR/ASR/video-summary pipeline.
@@ -60,8 +89,9 @@ func Enhance(ctx context.Context, out map[string]any, cfg config.SkillConfig, op
 	var downloaded []map[string]any
 	var ocrDownloaded []map[string]any
 	localDownloaded := localVideoEntries(opts.LocalVideoPaths)
+	localImageRefs := localImageOCRRefs(opts.LocalImages)
 	asrAttempted := false
-	if assetsDir != "" && opts.IncludeOCR {
+	if assetsDir != "" && opts.IncludeOCR && !localImagesCoverAllOCRMedia(out, opts.LocalImages) {
 		downloadOpts := AssetDownloadOptions{
 			MaxBytes:      cfg.Media.MaxBytes,
 			TimeoutSec:    cfg.Media.TimeoutSec,
@@ -112,7 +142,7 @@ func Enhance(ctx context.Context, out map[string]any, cfg config.SkillConfig, op
 			}
 			out["platform_metadata"] = meta
 		}
-		ocrOpts := ocr.EnrichOptions{Downloaded: downloaded, ExtraImages: videoFrameRefs}
+		ocrOpts := ocr.EnrichOptions{Downloaded: downloaded, ExtraImages: append(localImageRefs, videoFrameRefs...)}
 		if assetsDir != "" {
 			ocrOpts.AssetsDir = assetsDir
 		}
@@ -120,9 +150,7 @@ func Enhance(ctx context.Context, out map[string]any, cfg config.SkillConfig, op
 			ocrOpts.ExtraImages = append(ocrOpts.ExtraImages, ocr.PNGDataURLImageRef("screenshot", opts.ScreenshotBase64))
 		}
 		ocr.EnrichMap(ctx, out, cfg.OCR, ocrOpts)
-		if err := ocr.RequestedFailure(out); err != nil {
-			return err
-		}
+		markOCROutcome(out)
 	}
 
 	if requiresASR && !asrAttempted {
@@ -137,6 +165,82 @@ func Enhance(ctx context.Context, out map[string]any, cfg config.SkillConfig, op
 		}
 	}
 	return nil
+}
+
+// markOCROutcome keeps OCR observable without allowing an auxiliary provider
+// failure to discard page content that the reader has already obtained. OCR is
+// deliberately enrichment: callers receive the original text/Markdown plus a
+// stable status that lets them decide whether a later retry is worthwhile.
+// The detailed OCR result remains where the OCR package already records it;
+// this boundary exposes no new provider error text.
+func markOCROutcome(out map[string]any) {
+	meta := platformMetadata(out)
+	if err := ocr.RequestedFailure(out); err != nil {
+		meta["ocr_status"] = "degraded"
+		meta["ocr_failure_reason"] = "provider_unavailable"
+	} else if strings.TrimSpace(stringValue(meta["ocr_video_frames_error"])) != "" {
+		meta["ocr_status"] = "degraded"
+		meta["ocr_failure_reason"] = "frame_extraction_failed"
+	} else {
+		meta["ocr_status"] = "completed"
+		delete(meta, "ocr_failure_reason")
+	}
+	out["platform_metadata"] = meta
+}
+
+func localImageOCRRefs(images []LocalImageInput) []ocr.ImageRef {
+	refs := make([]ocr.ImageRef, 0, len(images))
+	for _, image := range images {
+		path := strings.TrimSpace(image.Path)
+		if path == "" {
+			continue
+		}
+		mediaType := strings.ToLower(strings.TrimSpace(image.Type))
+		if mediaType != "image" && mediaType != "photo" {
+			continue
+		}
+		refs = append(refs, ocr.ImageRef{LocalPath: path, URL: strings.TrimSpace(image.SourceURL), Type: mediaType})
+	}
+	return refs
+}
+
+// localImagesCoverAllOCRMedia is intentionally scoped to this Enhance call.
+// Retained files only suppress the existing ImagesOnly acquisition when every
+// remote image/photo already has a matching local input; otherwise the old
+// all-image download path remains authoritative.
+func localImagesCoverAllOCRMedia(out map[string]any, images []LocalImageInput) bool {
+	if len(images) == 0 {
+		return false
+	}
+	covered := make(map[string]struct{}, len(images))
+	for _, image := range images {
+		if path, source := strings.TrimSpace(image.Path), strings.TrimSpace(image.SourceURL); path != "" && source != "" {
+			covered[source] = struct{}{}
+		}
+	}
+	candidates := 0
+	seen := map[string]struct{}{}
+	for _, item := range extractMediaItems(out) {
+		mediaType, _ := item["type"].(string)
+		mediaType = strings.ToLower(strings.TrimSpace(mediaType))
+		if mediaType != "image" && mediaType != "photo" {
+			continue
+		}
+		rawURL, _ := item["url"].(string)
+		rawURL = strings.TrimSpace(rawURL)
+		if rawURL == "" {
+			continue
+		}
+		if _, exists := seen[rawURL]; exists {
+			continue
+		}
+		seen[rawURL] = struct{}{}
+		candidates++
+		if _, ok := covered[rawURL]; !ok {
+			return false
+		}
+	}
+	return candidates > 0
 }
 
 // ValidateVideoEnhancementRequest applies the same opt-in checks as Enhance
@@ -238,7 +342,9 @@ func validateEnhancementRequest(out map[string]any, cfg config.SkillConfig, opts
 	// Provider-owned local video inputs are consumed directly by ASR and frame
 	// OCR. A Skill directory is only needed when this execution itself acquires
 	// page assets or ASR candidates.
-	needsAssetsDir := cfg.Media.DownloadMedia && (opts.IncludeOCR || (requiresASR && len(localVideoEntries(opts.LocalVideoPaths)) == 0))
+	localVideoInputs := localVideoEntries(opts.LocalVideoPaths)
+	needsOCRAssetDownload := opts.IncludeOCR && (!localImagesCoverAllOCRMedia(out, opts.LocalImages) || (videoFrameOCR && len(localVideoInputs) == 0))
+	needsAssetsDir := cfg.Media.DownloadMedia && (needsOCRAssetDownload || (requiresASR && len(localVideoInputs) == 0))
 	if needsAssetsDir {
 		if err := validateSkillAssetsRoot(cfg.Media.Dir); err != nil {
 			return false, false, err

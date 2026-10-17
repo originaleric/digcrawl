@@ -9,6 +9,9 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/originaleric/digcrawl/config"
+	"github.com/originaleric/digcrawl/internal/browser"
 )
 
 const captionTimeout = 8 * time.Second
@@ -16,12 +19,39 @@ const maxCaptionTracks = 3
 
 var youtubeHTTPClient = &http.Client{
 	Timeout: captionTimeout,
+	Transport: &captionSessionTransport{base: http.DefaultTransport, cookieHeader: func(rawURL string) (string, error) {
+		return browser.CookieHeaderForURL(config.Get().LocalBrowser.CookieStoreDir, rawURL)
+	}},
 	CheckRedirect: func(req *http.Request, _ []*http.Request) error {
 		if req.URL != nil && isYouTubeHost(strings.ToLower(req.URL.Hostname())) {
 			return nil
 		}
 		return http.ErrUseLastResponse
 	},
+}
+
+// Re-resolve cookies for every request, including redirects. Authentication
+// stays scoped to the approved HTTPS host/path instead of copying one Cookie
+// header across destinations, and it is never added to the exported metadata.
+type captionSessionTransport struct {
+	base         http.RoundTripper
+	cookieHeader func(string) (string, error)
+}
+
+func (t *captionSessionTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if req.URL == nil || !isValidCaptionURL(req.URL.String()) {
+		return nil, fmt.Errorf("caption URL is not an approved YouTube HTTPS URL")
+	}
+	cookies, err := t.cookieHeader(req.URL.String())
+	if err != nil {
+		return nil, fmt.Errorf("load YouTube caption session: %w", err)
+	}
+	cloned := req.Clone(req.Context())
+	cloned.Header.Del("Cookie")
+	if cookies != "" {
+		cloned.Header.Set("Cookie", cookies)
+	}
+	return t.base.RoundTrip(cloned)
 }
 
 type captionTrack struct {

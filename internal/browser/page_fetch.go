@@ -3,6 +3,7 @@ package browser
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"strings"
@@ -28,10 +29,58 @@ type PageFetchResult struct {
 	Body        string         `json:"body"`
 	ContentType string         `json:"content_type,omitempty"`
 	ParsedJSON  map[string]any `json:"-"`
+	Diagnostics map[string]any `json:"diagnostics,omitempty"`
 }
 
 // PageFetchJSON 打开 warm 页后在浏览器上下文执行 fetch，返回 JSON 响应体（若可解析）。
 func PageFetchJSON(ctx context.Context, req *PageFetchRequest) (*PageFetchResult, error) {
+	return pageFetchWithSessionRunner(ctx, req, getBrowserManager, nil)
+}
+
+func pageFetchWithSessionRunner(ctx context.Context, req *PageFetchRequest, managerProvider func() *browserManager, runner func(context.Context, *browserSession) (*PageFetchResult, error)) (*PageFetchResult, error) {
+	ctx, state, cancel := browseInvocationContext(ctx)
+	defer cancel()
+	replaying := false
+	for {
+		state.beginAttempt(replaying)
+		result, err := pageFetchAttempt(ctx, req, managerProvider, runner)
+		if err == nil && ctx.Err() != nil {
+			// As with DOM reads, independent target cleanup can finish after the
+			// request ends. Cancellation never turns into success or a replay.
+			err = newBrowseError(ErrorBrowserTimeout, "page_fetch", "浏览器 API 读取已取消或时间预算耗尽", ctx.Err(), false)
+			err.(*BrowseError).Diagnostics["replay_safe"] = req == nil || req.Method == "" || strings.EqualFold(req.Method, "GET") || strings.EqualFold(req.Method, "HEAD")
+			result = nil
+		}
+		if err == nil {
+			state.succeeded()
+			if result != nil {
+				result.Diagnostics = BrowseDiagnostics(ctx)
+			}
+			recordBrowseDiagnostic(ctx, nil)
+			return result, nil
+		}
+		if !state.claimRetry(ctx, err, replaying) {
+			err = finishBrowseError(ctx, err)
+			if result != nil {
+				result.Diagnostics = BrowseDiagnostics(ctx)
+			}
+			recordBrowseDiagnostic(ctx, err)
+			return result, err
+		}
+		replaying = true
+		if !state.waitRetry(ctx) {
+			err = finishBrowseError(ctx, err)
+			if result != nil {
+				result.Diagnostics = BrowseDiagnostics(ctx)
+			}
+			recordBrowseDiagnostic(ctx, err)
+			return result, err
+		}
+	}
+}
+
+func pageFetchAttempt(ctx context.Context, req *PageFetchRequest, managerProvider func() *browserManager, runner func(context.Context, *browserSession) (*PageFetchResult, error)) (result *PageFetchResult, retErr error) {
+
 	if req == nil || strings.TrimSpace(req.FetchURL) == "" {
 		return nil, fmt.Errorf("fetch url 不能为空")
 	}
@@ -55,43 +104,75 @@ func PageFetchJSON(ctx context.Context, req *PageFetchRequest) (*PageFetchResult
 		}
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, time.Duration(cfg.TotalTimeoutSec)*time.Second)
-	defer cancel()
-
-	manager := getBrowserManager()
-	session, err := manager.acquire(ctx)
-	if err != nil {
-		return nil, err
-	}
-	defer manager.release(session)
-
-	page := session.page.Timeout(time.Duration(cfg.TotalTimeoutSec) * time.Second)
-	if cookieDomain := strings.TrimSpace(req.UseCookieDomain); cookieDomain != "" {
-		if err := loadDomainCookies(page, cookieDomain, cfg.CookieStoreDir, targetWarm); err != nil {
-			return nil, err
-		}
-	}
-
-	if err := page.Timeout(time.Duration(cfg.NavigateTimeoutSec) * time.Second).Navigate(targetWarm.String()); err != nil {
-		return nil, fmt.Errorf("warm 页面导航失败: %w", err)
-	}
-	if err := page.WaitLoad(); err != nil {
-		return nil, fmt.Errorf("warm 页面加载失败: %w", err)
-	}
-
 	method := strings.ToUpper(strings.TrimSpace(req.Method))
 	if method == "" {
 		method = "GET"
 	}
+
+	manager := managerProvider()
+	session, err := manager.acquireSession(ctx)
+	if err != nil {
+		return nil, newBrowseError(ErrorBrowserUnavailable, "acquire", "无法启动或连接本地浏览器", err, false)
+	}
+	fetchStarted := false
+	defer func() {
+		var be *BrowseError
+		if errors.As(retErr, &be) && be.Stage == "page_fetch" {
+			if be.Diagnostics == nil {
+				be.Diagnostics = map[string]any{}
+			}
+			be.Diagnostics["replay_safe"] = method == "GET" || method == "HEAD"
+		}
+		if isConnectionFailure(retErr) {
+			manager.retireConnection(session.conn)
+		}
+		if err := manager.releaseSession(session); err != nil && (retErr == nil || browseCauseReason(err) == "external_target_cleanup_required") {
+			result = nil
+			retErr = newBrowseError(ErrorBrowserUnavailable, "close_page", "浏览器页面清理失败", err, false)
+		}
+		if fetchStarted && method != "GET" && method != "HEAD" && errors.As(retErr, &be) {
+			if be.Diagnostics == nil {
+				be.Diagnostics = map[string]any{}
+			}
+			be.Diagnostics["replay_safe"] = false
+		}
+	}()
+	if runner != nil {
+		fetchStarted = true
+		return runner(ctx, session)
+	}
+
+	page := session.page.Context(ctx).Timeout(time.Duration(cfg.TotalTimeoutSec) * time.Second)
+	if cookieDomain := strings.TrimSpace(req.UseCookieDomain); cookieDomain != "" {
+		if err := loadDomainCookies(page, cookieDomain, cfg.CookieStoreDir, targetWarm); err != nil {
+			return nil, newBrowseError(ErrorBrowserCookieFailed, "load_cookies", "加载 Cookie 失败", err, false)
+		}
+	}
+
+	if err := page.Timeout(time.Duration(cfg.NavigateTimeoutSec) * time.Second).Navigate(targetWarm.String()); err != nil {
+		return nil, newBrowseError(ErrorBrowserNavigationFailed, "navigate", "warm 页面导航失败", err, true)
+	}
+	if err := page.WaitLoad(); err != nil {
+		return nil, newBrowseError(ErrorBrowserPageLoadFailed, "wait_load", "warm 页面加载失败", err, true)
+	}
+
 	body := req.Body
 	referer := strings.TrimSpace(req.Referer)
 	if referer == "" {
 		referer = warmURL
 	}
 
-	result, err := pageFetchEval(page, fetchURL, method, body, referer)
+	fetchStarted = true
+	result, err = pageFetchEval(page, fetchURL, method, body, referer)
 	if err != nil {
-		return nil, err
+		// A status-zero HTTP fetch has a known JS result and is a business/API
+		// failure. A CDP failure has an unknown outcome and must retain its type.
+		if result != nil && ctx.Err() == nil && !isConnectionFailure(err) && !isLocalBrowserFailure(nil, err) {
+			return result, err
+		}
+		e := newBrowseError(ErrorBrowserUnavailable, "page_fetch", "浏览器 API 读取失败", err, false).(*BrowseError)
+		e.Diagnostics["replay_safe"] = method == "GET" || method == "HEAD"
+		return nil, e
 	}
 	return result, nil
 }

@@ -1,0 +1,7 @@
+{
+  "installed_build_id": "sha256:ae0abc79818ff3ac416f97b67ec6c60f8276095013c3090dc67a4cee8f1dac0e",
+  "previous_build_id": "sha256:7341437b28a0bbf51986cc911de1abbc00d86c10f0230e4a8a5e5f11a7effbec",
+  "rollback_binary": "/private/tmp/digcrawl.pre-round5",
+  "old_mcp_clients_closed": 2,
+  "restart_exit_code": 0
+}

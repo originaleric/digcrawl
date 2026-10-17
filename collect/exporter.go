@@ -17,11 +17,16 @@ import (
 
 // ExportOptions configures local file export.
 type ExportOptions struct {
-	OutputDir         string
-	Formats           []string
-	Now               time.Time
-	DownloadMedia     bool
+	OutputDir     string
+	Formats       []string
+	Now           time.Time
+	DownloadMedia bool
+	// IncludeMedia controls whether the exported content exposes its media
+	// field. A nil value preserves the historic direct Export behavior.
+	// DownloadMedia always uses the unfiltered execution result as its input.
+	IncludeMedia      *bool
 	SkipVideoDownload bool
+	SkipImageDownload bool
 	MaxMediaBytes     int64
 	MediaTimeoutSec   int
 	ArtifactStore     artifact.Store
@@ -73,8 +78,9 @@ func exportToPaths(ctx context.Context, out map[string]any, opts ExportOptions, 
 
 	var written []string
 
+	visibleOut := exportVisibleOutput(out, opts)
 	if containsFormat(formats, "md") {
-		body := pickMarkdownBody(out)
+		body := pickMarkdownBody(visibleOut)
 		if err := os.WriteFile(paths.Markdown, []byte(body), 0o644); err != nil {
 			return ExportResult{}, err
 		}
@@ -82,7 +88,7 @@ func exportToPaths(ctx context.Context, out map[string]any, opts ExportOptions, 
 	}
 
 	if containsFormat(formats, "html") {
-		body := pickHTMLBody(out)
+		body := pickHTMLBody(visibleOut)
 		if body != "" {
 			if err := os.WriteFile(paths.HTML, []byte(body), 0o644); err != nil {
 				return ExportResult{}, err
@@ -92,7 +98,7 @@ func exportToPaths(ctx context.Context, out map[string]any, opts ExportOptions, 
 	}
 
 	if containsFormat(formats, "json") {
-		data, err := json.MarshalIndent(out, "", "  ")
+		data, err := json.MarshalIndent(visibleOut, "", "  ")
 		if err != nil {
 			return ExportResult{}, err
 		}
@@ -105,10 +111,7 @@ func exportToPaths(ctx context.Context, out map[string]any, opts ExportOptions, 
 	var downloaded []map[string]any
 	ocrAppliedAfterWrite := false
 	if opts.DownloadMedia {
-		mediaOut := out
-		if opts.SkipVideoDownload {
-			mediaOut = withoutVideoMedia(out)
-		}
+		mediaOut := withoutRetainedMedia(out, opts.SkipVideoDownload, opts.SkipImageDownload)
 		assetFiles, err := DownloadAssets(ctx, paths.Assets, mediaOut, AssetDownloadOptions{
 			MaxBytes:      opts.MaxMediaBytes,
 			TimeoutSec:    opts.MediaTimeoutSec,
@@ -170,7 +173,7 @@ func exportToPaths(ctx context.Context, out map[string]any, opts ExportOptions, 
 	}
 
 	if ocrAppliedAfterWrite {
-		if err := rewriteTextualOutputs(out, paths, formats); err != nil {
+		if err := rewriteTextualOutputs(exportVisibleOutput(out, opts), paths, formats); err != nil {
 			return ExportResult{}, err
 		}
 	}
@@ -182,7 +185,37 @@ func exportToPaths(ctx context.Context, out map[string]any, opts ExportOptions, 
 	return ExportResult{Paths: paths, Written: written, Downloaded: downloaded}, nil
 }
 
+// exportVisibleOutput is deliberately separate from the media input given to
+// DownloadAssets. Collect may need hidden media references to complete an
+// assets download after a provider-retention failure, while its published
+// Markdown/HTML/JSON must still honor Collect.IncludeMedia.
+func exportVisibleOutput(out map[string]any, opts ExportOptions) map[string]any {
+	if opts.IncludeMedia == nil || *opts.IncludeMedia {
+		return out
+	}
+	if out == nil || out["media"] == nil {
+		return out
+	}
+	visible := make(map[string]any, len(out)-1)
+	for key, value := range out {
+		if key != "media" {
+			visible[key] = value
+		}
+	}
+	return visible
+}
+
 func withoutVideoMedia(out map[string]any) map[string]any {
+	return withoutRetainedMedia(out, true, false)
+}
+
+// withoutRetainedMedia composes the independent image/video retention flags
+// over one copied media list. Starting both filters from the original output
+// would accidentally reintroduce a media type when both flags are true.
+func withoutRetainedMedia(out map[string]any, skipVideo, skipImage bool) map[string]any {
+	if !skipVideo && !skipImage {
+		return out
+	}
 	if out == nil || out["media"] == nil {
 		return out
 	}
@@ -194,15 +227,19 @@ func withoutVideoMedia(out map[string]any) map[string]any {
 	// extractMediaItems accepts the public []any representation. Preserve it
 	// here so the filtered copy can travel through the ordinary asset exporter
 	// without changing its media contract.
-	withoutVideos := make([]any, 0, len(items))
+	filteredItems := make([]any, 0, len(items))
 	for _, item := range items {
 		mediaType, _ := item["type"].(string)
-		if strings.EqualFold(strings.TrimSpace(mediaType), "video") {
+		mediaType = strings.ToLower(strings.TrimSpace(mediaType))
+		if skipVideo && mediaType == "video" {
 			continue
 		}
-		withoutVideos = append(withoutVideos, item)
+		if skipImage && (mediaType == "image" || mediaType == "photo") {
+			continue
+		}
+		filteredItems = append(filteredItems, item)
 	}
-	filtered["media"] = withoutVideos
+	filtered["media"] = filteredItems
 	return filtered
 }
 

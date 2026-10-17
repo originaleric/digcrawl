@@ -1,0 +1,15 @@
+=== RUN   TestPlatformErrorMetadataRespectsSourcePolicy
+=== RUN   TestPlatformErrorMetadataRespectsSourcePolicy/reddit=false/allow=false
+    source_policy_test.go:373: out=map[platform:fixture platform_metadata:map[error_code:PARTIAL_CONTENT error_message:fixture partial result final_url:https://outside.example/article text:partial page body]] arts=[] err=platform read PARTIAL_CONTENT: fixture partial result
+=== RUN   TestPlatformErrorMetadataRespectsSourcePolicy/reddit=false/allow=true
+=== RUN   TestPlatformErrorMetadataRespectsSourcePolicy/reddit=true/allow=false
+    source_policy_test.go:373: out=map[platform:fixture platform_metadata:map[error_code:PARTIAL_CONTENT error_message:fixture partial result final_url:https://outside.example/article text:partial page body]] arts=[] err=platform read PARTIAL_CONTENT: fixture partial result
+=== RUN   TestPlatformErrorMetadataRespectsSourcePolicy/reddit=true/allow=true
+--- FAIL: TestPlatformErrorMetadataRespectsSourcePolicy (0.00s)
+    --- FAIL: TestPlatformErrorMetadataRespectsSourcePolicy/reddit=false/allow=false (0.00s)
+    --- PASS: TestPlatformErrorMetadataRespectsSourcePolicy/reddit=false/allow=true (0.00s)
+    --- FAIL: TestPlatformErrorMetadataRespectsSourcePolicy/reddit=true/allow=false (0.00s)
+    --- PASS: TestPlatformErrorMetadataRespectsSourcePolicy/reddit=true/allow=true (0.00s)
+FAIL
+FAIL	github.com/originaleric/digcrawl/provider/platform	0.296s
+FAIL

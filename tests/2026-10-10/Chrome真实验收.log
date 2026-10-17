@@ -1,0 +1,29 @@
+=== RUN   TestChromeLifecycleAcceptance
+    chrome_acceptance_test.go:87: API-first page fetch uses live request context
+    chrome_acceptance_test.go:99: real 92-second idle reuse passed
+    chrome_acceptance_test.go:151: round=1 old_group_released=true targets=0 leases=0 slots=0 goroutines=11 fd=14
+    chrome_acceptance_test.go:151: round=2 old_group_released=true targets=0 leases=0 slots=0 goroutines=11 fd=14
+    chrome_acceptance_test.go:151: round=3 old_group_released=true targets=0 leases=0 slots=0 goroutines=11 fd=14
+    chrome_acceptance_test.go:151: round=4 old_group_released=true targets=0 leases=0 slots=0 goroutines=11 fd=14
+    chrome_acceptance_test.go:151: round=5 old_group_released=true targets=0 leases=0 slots=0 goroutines=11 fd=14
+    chrome_acceptance_test.go:151: round=6 old_group_released=true targets=0 leases=0 slots=0 goroutines=11 fd=14
+    chrome_acceptance_test.go:151: round=7 old_group_released=true targets=0 leases=0 slots=0 goroutines=11 fd=14
+    chrome_acceptance_test.go:151: round=8 old_group_released=true targets=0 leases=0 slots=0 goroutines=11 fd=14
+    chrome_acceptance_test.go:151: round=9 old_group_released=true targets=0 leases=0 slots=0 goroutines=11 fd=14
+    chrome_acceptance_test.go:151: round=10 old_group_released=true targets=0 leases=0 slots=0 goroutines=11 fd=14
+    chrome_acceptance_test.go:151: round=11 old_group_released=true targets=0 leases=0 slots=0 goroutines=11 fd=14
+    chrome_acceptance_test.go:151: round=12 old_group_released=true targets=0 leases=0 slots=0 goroutines=11 fd=14
+    chrome_acceptance_test.go:151: round=13 old_group_released=true targets=0 leases=0 slots=0 goroutines=11 fd=14
+    chrome_acceptance_test.go:151: round=14 old_group_released=true targets=0 leases=0 slots=0 goroutines=11 fd=14
+    chrome_acceptance_test.go:151: round=15 old_group_released=true targets=0 leases=0 slots=0 goroutines=11 fd=14
+    chrome_acceptance_test.go:151: round=16 old_group_released=true targets=0 leases=0 slots=0 goroutines=11 fd=14
+    chrome_acceptance_test.go:151: round=17 old_group_released=true targets=0 leases=0 slots=0 goroutines=11 fd=14
+    chrome_acceptance_test.go:151: round=18 old_group_released=true targets=0 leases=0 slots=0 goroutines=11 fd=14
+    chrome_acceptance_test.go:151: round=19 old_group_released=true targets=0 leases=0 slots=0 goroutines=11 fd=14
+    chrome_acceptance_test.go:151: round=20 old_group_released=true targets=0 leases=0 slots=0 goroutines=11 fd=14
+--- PASS: TestChromeLifecycleAcceptance (243.83s)
+=== RUN   TestChromeExternalCDPOwnershipAcceptance
+    chrome_acceptance_test.go:229: attached-CDP shutdown preserved external owner and left no test targets
+--- PASS: TestChromeExternalCDPOwnershipAcceptance (1.44s)
+PASS
+ok  	github.com/originaleric/digcrawl/internal/browser	245.711s

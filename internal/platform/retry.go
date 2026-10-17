@@ -3,6 +3,7 @@ package platform
 import (
 	"context"
 	"errors"
+	"github.com/originaleric/digcrawl/internal/browser"
 	"strings"
 	"time"
 )
@@ -13,36 +14,39 @@ type RetryPolicy struct {
 	Delay       time.Duration
 }
 
-// DefaultBrowseRetry 浏览器兜底默认重试（仅 transient 错误）。
+// DefaultBrowseRetry 保留有限内容验证 fallback；浏览器故障由 BrowserBrowse 处理。
 var DefaultBrowseRetry = RetryPolicy{MaxAttempts: 2, Delay: 800 * time.Millisecond}
 
-// WithBrowseRetry 对 browser 读取函数做有限重试。
+// WithBrowseRetry 只对平台内容验证失败做有限 fallback，共享浏览器故障预算。
 func WithBrowseRetry(ctx context.Context, policy RetryPolicy, fn func(context.Context) error) error {
-	if policy.MaxAttempts <= 0 {
-		policy.MaxAttempts = 1
+	// Keep only the existing finite content-validation fallback. Transport
+	// and page failures have already been handled by BrowserBrowse.
+	ctx = browser.WithBrowseRetryContext(ctx)
+	attempts := policy.MaxAttempts
+	if attempts < 1 {
+		attempts = 1
 	}
-	var lastErr error
-	for attempt := 0; attempt < policy.MaxAttempts; attempt++ {
-		if attempt > 0 {
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case <-time.After(policy.Delay):
-			}
-		}
-		lastErr = fn(ctx)
-		if lastErr == nil {
+	if attempts > 2 {
+		attempts = 2
+	}
+	for attempt := 0; attempt < attempts; attempt++ {
+		err := fn(ctx)
+		if err == nil {
 			return nil
 		}
 		var re *ReadError
-		if errors.As(lastErr, &re) && IsFatalErrorCode(re.Code) {
-			return lastErr
+		if !errors.As(err, &re) || (re.Code != ErrSelectorStale && re.Code != ErrPartialContent) || attempt == attempts-1 {
+			return err
 		}
-		if !isRetryableBrowseError(lastErr) {
-			return lastErr
+		timer := time.NewTimer(policy.Delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
 		}
 	}
-	return lastErr
+	return nil
 }
 
 func isRetryableBrowseError(err error) bool {

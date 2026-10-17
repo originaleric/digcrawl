@@ -23,7 +23,7 @@ func FeedReadEntry(configDomains []string, artStore artifact.Store) registry.Ent
 }
 
 func readFeed(ctx context.Context, in platform.ReadInput) (*platform.Content, error) {
-	doc, err := feed.Service{}.Read(ctx, in.URL)
+	doc, err := (feed.Service{}).Read(ctx, in.URL)
 	if err != nil {
 		return nil, err
 	}

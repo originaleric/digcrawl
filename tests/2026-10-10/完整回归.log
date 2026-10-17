@@ -1,0 +1,58 @@
+?   	github.com/originaleric/digcrawl/client	[no test files]
+?   	github.com/originaleric/digcrawl/cmd/digcollect	[no test files]
+ok  	github.com/originaleric/digcrawl/cmd/digcrawl	3.053s
+ok  	github.com/originaleric/digcrawl/collect	(cached)
+ok  	github.com/originaleric/digcrawl/collect/store	(cached)
+ok  	github.com/originaleric/digcrawl/config	(cached)
+ok  	github.com/originaleric/digcrawl/internal/asr	(cached)
+ok  	github.com/originaleric/digcrawl/internal/browser	(cached)
+ok  	github.com/originaleric/digcrawl/internal/feed	(cached)
+ok  	github.com/originaleric/digcrawl/internal/media	(cached)
+ok  	github.com/originaleric/digcrawl/internal/notify	(cached)
+ok  	github.com/originaleric/digcrawl/internal/ocr	(cached)
+ok  	github.com/originaleric/digcrawl/internal/platform	(cached)
+ok  	github.com/originaleric/digcrawl/internal/platform/bilibili	(cached)
+ok  	github.com/originaleric/digcrawl/internal/platform/douyin	(cached)
+?   	github.com/originaleric/digcrawl/internal/platform/healthcheck	[no test files]
+ok  	github.com/originaleric/digcrawl/internal/platform/instagram	(cached)
+ok  	github.com/originaleric/digcrawl/internal/platform/kuaishou	(cached)
+ok  	github.com/originaleric/digcrawl/internal/platform/reddit	(cached)
+?   	github.com/originaleric/digcrawl/internal/platform/session	[no test files]
+ok  	github.com/originaleric/digcrawl/internal/platform/threads	(cached)
+ok  	github.com/originaleric/digcrawl/internal/platform/toutiao	(cached)
+ok  	github.com/originaleric/digcrawl/internal/platform/wechat	(cached)
+ok  	github.com/originaleric/digcrawl/internal/platform/weibo	(cached)
+ok  	github.com/originaleric/digcrawl/internal/platform/x	(cached)
+ok  	github.com/originaleric/digcrawl/internal/platform/xiaohongshu	(cached)
+ok  	github.com/originaleric/digcrawl/internal/platform/youtube	(cached)
+ok  	github.com/originaleric/digcrawl/internal/platform/zhihu	(cached)
+ok  	github.com/originaleric/digcrawl/internal/source	(cached)
+ok  	github.com/originaleric/digcrawl/internal/summary	(cached)
+?   	github.com/originaleric/digcrawl/internal/testutil	[no test files]
+?   	github.com/originaleric/digcrawl/internal/testutil/fakeffmpeg	[no test files]
+ok  	github.com/originaleric/digcrawl/internal/video	(cached)
+ok  	github.com/originaleric/digcrawl/internal/watchlist	(cached)
+ok  	github.com/originaleric/digcrawl/internal/watchlist/service	(cached)
+ok  	github.com/originaleric/digcrawl/protocol	(cached)
+?   	github.com/originaleric/digcrawl/provider	[no test files]
+ok  	github.com/originaleric/digcrawl/provider/asr	(cached)
+ok  	github.com/originaleric/digcrawl/provider/browser	(cached)
+?   	github.com/originaleric/digcrawl/provider/example	[no test files]
+ok  	github.com/originaleric/digcrawl/provider/platform	(cached)
+?   	github.com/originaleric/digcrawl/provider/stub	[no test files]
+ok  	github.com/originaleric/digcrawl/runtime	(cached)
+ok  	github.com/originaleric/digcrawl/runtime/artifact	(cached)
+?   	github.com/originaleric/digcrawl/runtime/audit	[no test files]
+ok  	github.com/originaleric/digcrawl/runtime/executor	(cached)
+ok  	github.com/originaleric/digcrawl/runtime/policy	(cached)
+?   	github.com/originaleric/digcrawl/runtime/registry	[no test files]
+?   	github.com/originaleric/digcrawl/runtime/version	[no test files]
+ok  	github.com/originaleric/digcrawl/skill	(cached)
+?   	github.com/originaleric/digcrawl/tests/2026-07-10/toutiao-digflow-round-2/runner	[no test files]
+ok  	github.com/originaleric/digcrawl/transport/bridge	(cached)
+ok  	github.com/originaleric/digcrawl/transport/collector	(cached)
+ok  	github.com/originaleric/digcrawl/transport/devhost	(cached)
+?   	github.com/originaleric/digcrawl/transport/host	[no test files]
+ok  	github.com/originaleric/digcrawl/transport/http	(cached)
+ok  	github.com/originaleric/digcrawl/transport/mcp	(cached)
+ok  	github.com/originaleric/digcrawl/transport/stdio	(cached)

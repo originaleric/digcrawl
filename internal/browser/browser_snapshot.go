@@ -4,9 +4,6 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"time"
-
-	"github.com/originaleric/digcrawl/config"
 )
 
 // BrowserSnapshotRequest 浏览器快照请求
@@ -32,7 +29,6 @@ func BrowserSnapshot(ctx context.Context, req *BrowserSnapshotRequest) (*Browser
 		return nil, fmt.Errorf("url 不能为空")
 	}
 
-	cfg := normalizeLocalBrowserConfig(config.Get().LocalBrowser)
 	filter := strings.ToLower(strings.TrimSpace(req.Filter))
 	if filter == "" {
 		filter = FilterInteractive // 默认仅返回可交互元素
@@ -46,67 +42,13 @@ func BrowserSnapshot(ctx context.Context, req *BrowserSnapshotRequest) (*Browser
 		maxDepth = -1 // 默认不限制深度
 	}
 
-	targetURL, err := validateURL(req.URL)
+	// Both snapshot entry points use the same read, recovery and source boundary.
+	resp, err := BrowserBrowse(ctx, &BrowserBrowseRequest{
+		URL: req.URL, Mode: "snapshot", WaitSelector: req.WaitSelector,
+		UseCookieDomain: req.UseCookieDomain, snapshotFilter: filter, snapshotMaxDepth: maxDepth,
+	})
 	if err != nil {
 		return nil, err
 	}
-	if err := checkAllowedDomain(targetURL.Hostname(), cfg.AllowedDomains); err != nil {
-		return nil, err
-	}
-	ctx, cancel := context.WithTimeout(ctx, time.Duration(cfg.TotalTimeoutSec)*time.Second)
-	defer cancel()
-
-	manager := getBrowserManager()
-	session, err := manager.acquire(ctx)
-	if err != nil {
-		return nil, err
-	}
-	defer manager.release(session)
-
-	page := session.page.Timeout(time.Duration(cfg.TotalTimeoutSec) * time.Second)
-
-	// 加载Cookie（如果指定）
-	if req.UseCookieDomain != "" {
-		if err := checkAllowedDomain(req.UseCookieDomain, cfg.AllowedDomains); err != nil {
-			return nil, fmt.Errorf("cookie 域名不在白名单: %w", err)
-		}
-		if err := loadDomainCookies(page, req.UseCookieDomain, cfg.CookieStoreDir, targetURL); err != nil {
-			return nil, err
-		}
-	}
-
-	// 导航到目标URL
-	if err := page.Timeout(time.Duration(cfg.NavigateTimeoutSec) * time.Second).Navigate(targetURL.String()); err != nil {
-		return nil, fmt.Errorf("页面导航失败: %w", err)
-	}
-	if err := page.WaitLoad(); err != nil {
-		return nil, fmt.Errorf("页面加载失败: %w", err)
-	}
-
-	// 等待选择器（如果指定）
-	if req.WaitSelector != "" {
-		if _, err := page.Timeout(time.Duration(cfg.WaitSelectorTimeoutSec) * time.Second).Element(req.WaitSelector); err != nil {
-			return nil, fmt.Errorf("等待选择器失败: %w", err)
-		}
-	}
-
-	// 获取页面标题
-	title, _ := pageTitle(page)
-
-	// 获取无障碍树快照
-	elements, refs, err := FetchAXTree(ctx, page)
-	if err != nil {
-		return nil, fmt.Errorf("获取无障碍树失败: %w", err)
-	}
-
-	// 应用过滤器
-	filteredElements := filterElements(elements, filter)
-
-	resp := &BrowserSnapshotResponse{
-		URL:      targetURL.String(),
-		Title:    title,
-		Elements: filteredElements,
-		Refs:     refs,
-	}
-	return resp, nil
+	return &BrowserSnapshotResponse{URL: resp.URL, Title: resp.Title, Elements: resp.Elements, Refs: resp.snapshotRefs}, nil
 }

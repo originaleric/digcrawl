@@ -1,0 +1,12 @@
+{
+  "installed": true,
+  "build_id": "sha256:d0a2d6722d423ccfe7db9cc19653f2b545a4424cabdc080dbf312c418fbd3eca",
+  "previous_sha256": "f54767c2b0b5872395be17fbc7bd2ef478df1c503d306b3071a0d8e74a7061e4",
+  "old_mcp_clients_closed": 3,
+  "legacy_bridge_candidates_removed": 2,
+  "running_bridge_count": 1,
+  "running_bridge_pids": [
+    1379
+  ],
+  "rollback_binary": "/private/tmp/digcrawl-browser-20261010/digcrawl.previous"
+}

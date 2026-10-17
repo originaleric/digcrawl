@@ -65,6 +65,7 @@ func (r *Runtime) Manifest() protocol.ToolManifest {
 		Type:           protocol.TypeToolManifest,
 		Runtime:        version.RuntimeName,
 		RuntimeVersion: version.RuntimeVersion,
+		BuildID:        version.BuildIdentity(),
 		InstanceID:     r.opts.InstanceID,
 		Tools:          r.allowedToolDescriptors(),
 	}

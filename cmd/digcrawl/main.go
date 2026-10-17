@@ -24,6 +24,7 @@ import (
 	"github.com/originaleric/digcrawl/internal/platform/wechatchannels"
 	"github.com/originaleric/digcrawl/runtime"
 	"github.com/originaleric/digcrawl/runtime/version"
+	"github.com/originaleric/digcrawl/transport/bridge"
 	"github.com/originaleric/digcrawl/transport/collector"
 	"github.com/originaleric/digcrawl/transport/devhost"
 	httpgw "github.com/originaleric/digcrawl/transport/http"
@@ -61,6 +62,8 @@ func run(argv []string) {
 		runDevHost(argv[2:])
 	case "mcp":
 		runMCP(argv[2:])
+	case "bridge":
+		runBridge(argv[2:])
 	case "stdio":
 		runStdio(argv[2:])
 	case "collect":
@@ -107,6 +110,8 @@ func printUsage() {
   digcrawl gateway [flags]     HTTP 工具网关
   digcrawl collector [flags]   WebSocket 反向连接 Collector
   digcrawl mcp [flags]         MCP 服务（stdio，供 IDE 使用）
+	  digcrawl bridge stop --config <profile>     停止该 profile 的私有 MCP Bridge
+	  digcrawl bridge restart --config <profile>  重启该 profile 的私有 MCP Bridge
   digcrawl stdio [flags]       stdin/stdout 逐行 JSON 协议
   digcrawl dev-host [flags]    本地参考宿主（仅开发）
   digcrawl collect <url>       采集 URL 并导出 Markdown/HTML/JSON
@@ -853,20 +858,29 @@ func runMCP(args []string) {
 		log.Fatalf("load MCP profile: %v (run `digcrawl init --profile skill` or pass --config)", err)
 	}
 	allowDefaultSkillProfileTools(cfg)
-	rt, err := runtime.NewRuntime(cfg)
+	startupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	rt, err := bridge.NewExecutor(startupCtx, bridgeExecutable(), profilePath, cfg)
 	if err != nil {
-		log.Fatalf("runtime: %v", err)
+		log.Fatalf("start local bridge: %v", err)
 	}
 	log.Printf("DigCrawl MCP server on stdio (instance=%s)", cfg.Gateway.InstanceID)
 	var serveErr error
 	if idleTimeoutExplicit {
-		serveErr = mcpgw.ServeStdioWithIdleTimeout(rt, *idleTimeout)
+		serveErr = mcpgw.ServeToolRuntimeStdio(rt, *idleTimeout, false)
 	} else {
-		serveErr = mcpgw.ServeStdioWithCodexRecovery(rt)
+		serveErr = mcpgw.ServeToolRuntimeStdio(rt, mcpgw.DefaultStdioIdleTimeout, true)
 	}
 	if serveErr != nil {
 		log.Fatalf("mcp: %v", serveErr)
 	}
+}
+
+func bridgeExecutable() string {
+	if executable := strings.TrimSpace(os.Getenv("DIGCRAWL_BRIDGE_EXECUTABLE")); executable != "" {
+		return executable
+	}
+	return os.Args[0]
 }
 
 // allowDefaultSkillProfileTools keeps existing standard Skill profiles

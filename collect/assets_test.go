@@ -55,6 +55,60 @@ func TestDownloadAssetsCopiesMediaArtifact(t *testing.T) {
 	}
 }
 
+func TestWithoutRetainedMediaComposesVideoAndImageSkips(t *testing.T) {
+	out := map[string]any{"media": []any{
+		map[string]any{"type": "video", "url": "https://example.com/a.mp4"},
+		map[string]any{"type": "image", "url": "https://example.com/a.jpg"},
+		map[string]any{"type": "photo", "url": "https://example.com/b.jpg"},
+		map[string]any{"type": "audio", "url": "https://example.com/a.mp3"},
+	}}
+	filtered := withoutRetainedMedia(out, true, true)
+	items := extractMediaItems(filtered)
+	if len(items) != 1 || items[0]["type"] != "audio" {
+		t.Fatalf("filtered=%+v", items)
+	}
+	if len(extractMediaItems(out)) != 4 {
+		t.Fatalf("filter must not mutate original output: %+v", out)
+	}
+}
+
+func TestExportDownloadsHiddenMediaWithoutPublishingMediaField(t *testing.T) {
+	includeMedia := false
+	dir := t.TempDir()
+	store := fakeArtifactStore{
+		data:        []byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n', 0, 0, 0, 0},
+		contentType: "image/png",
+	}
+	result, err := Export(context.Background(), map[string]any{
+		"title": "Hidden media",
+		"media": []any{map[string]any{"type": "image", "artifact_id": "image-1"}},
+	}, ExportOptions{
+		OutputDir:     dir,
+		Formats:       []string{"json"},
+		Now:           time.Date(2026, 9, 15, 0, 0, 0, 0, time.UTC),
+		DownloadMedia: true,
+		IncludeMedia:  &includeMedia,
+		ArtifactStore: store,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(result.Paths.Assets, "001.png")); err != nil {
+		t.Fatalf("hidden media must remain available to DownloadAssets: %v", err)
+	}
+	data, err := os.ReadFile(result.Paths.JSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var exported map[string]any
+	if err := json.Unmarshal(data, &exported); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := exported["media"]; ok {
+		t.Fatalf("media must not be published when disabled: %s", data)
+	}
+}
+
 func TestDownloadAssetsRejectsNonVideoArtifact(t *testing.T) {
 	store, err := artifact.NewDiskStore(t.TempDir(), time.Hour)
 	if err != nil {

@@ -1,0 +1,34 @@
+{
+  "id": "wechat",
+  "tool": "wechat.article.read",
+  "kind": "article",
+  "url": "https://mp.weixin.qq.com/s/mbU0bE6BV5YfAsTmoY4H3A",
+  "name": "微信公众号",
+  "name_en": "WeChat",
+  "topic": "Agent 上下文工程",
+  "topic_en": "Agent context engineering",
+  "prompt": "读取这篇 Agent 文章，提取正文与章节。",
+  "prompt_en": "Read this agent article and extract its text and sections.",
+  "note_zh": "已取得正文、章节和 7 条图片引用。",
+  "note_en": "Retrieved the article text, sections, and 7 image references.",
+  "status": "success",
+  "response_sha256": "66a88b4edcb61fb2f0db9e4484f4c1eafd5e59f79f8a5432f594b32695a68f36",
+  "title": "别再只卷Prompt 了，真正拉开Agent差距的是Context Engineering",
+  "author": "腾讯技术工程",
+  "published_at": "2026-09-14 17:36",
+  "captured_at": "2026-10-17T14:09:43+08:00",
+  "markdown_characters": 37401,
+  "media_references": {
+    "image": 7
+  },
+  "read_channel": "http",
+  "error": null,
+  "excerpt": "Prompt Engineering → ReAct → Context Engineering\nContext 的七类构成要素\n长任务的三大核心技术",
+  "original": {
+    "kind": "source_excerpt",
+    "path": null,
+    "captured_on": "2026-10-17",
+    "source_url": "https://mp.weixin.qq.com/s/mbU0bE6BV5YfAsTmoY4H3A",
+    "reason": "Browser site-safety policy blocked the page screenshot. Previously retrieved public headings are retained as a source excerpt."
+  }
+}

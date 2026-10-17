@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"syscall"
 )
 
 var errInteractiveLoginInProgress = errors.New("interactive login browser is already using this profile")
@@ -16,13 +15,11 @@ var errInteractiveLoginInProgress = errors.New("interactive login browser is alr
 // prepareInteractiveLoginProfile uses Chromium's own SingletonLock as the
 // single source of truth for a platform login. A live owner is never touched;
 // only a lock whose local owner PID is conclusively gone is removed.
-func prepareInteractiveLoginProfile(profileDir string, processAlive func(int) bool) (bool, error) {
+func prepareInteractiveLoginProfile(profileDir string, processAlive func(int) (bool, error)) (bool, error) {
 	if strings.TrimSpace(profileDir) == "" {
 		return false, fmt.Errorf("interactive login profile is empty")
 	}
-	if processAlive == nil {
-		processAlive = interactiveLoginProcessAlive
-	}
+
 	if err := os.MkdirAll(profileDir, 0o755); err != nil {
 		return false, fmt.Errorf("创建登录 profile 目录失败: %w", err)
 	}
@@ -30,19 +27,65 @@ func prepareInteractiveLoginProfile(profileDir string, processAlive func(int) bo
 	target, err := os.Readlink(filepath.Join(profileDir, "SingletonLock"))
 	if err != nil {
 		if os.IsNotExist(err) {
+			for _, name := range []string{"SingletonCookie", "SingletonSocket"} {
+				if _, e := os.Lstat(filepath.Join(profileDir, name)); e == nil {
+					return false, fmt.Errorf("profile owner unknown: orphan Singleton entry")
+				} else if !os.IsNotExist(e) {
+					return false, e
+				}
+			}
 			return false, nil
 		}
 		return false, fmt.Errorf("读取 Chrome profile 锁失败: %w", err)
+	}
+	// Snapshot every Singleton entry before inspecting the owner. External
+	// Chrome does not share our OS guard, so replacement entries must be kept.
+	var entries [3]os.FileInfo
+	names := [3]string{"SingletonSocket", "SingletonCookie", "SingletonLock"}
+	for i, name := range names {
+		entries[i], err = os.Lstat(filepath.Join(profileDir, name))
+		if err != nil && !os.IsNotExist(err) {
+			return false, err
+		}
 	}
 	pid, ok := chromeSingletonLockPID(target)
 	if !ok {
 		return false, fmt.Errorf("无法确认 Chrome profile 锁的本机所有者")
 	}
-	if processAlive(pid) {
+	if processAlive == nil {
+		processAlive = profileProcessAlive
+	}
+	alive, checkErr := processAlive(pid)
+	if checkErr != nil {
+		return false, fmt.Errorf("profile process identity unknown: %w", checkErr)
+	}
+	if alive {
 		return false, errInteractiveLoginInProgress
 	}
-	if err := removeChromeSingletonLocks(profileDir); err != nil {
+	current, readErr := os.Readlink(filepath.Join(profileDir, "SingletonLock"))
+	if readErr != nil || current != target {
+		return false, fmt.Errorf("profile owner changed during check")
+	}
+
+	if err := profileSocketReleased(profileDir); err != nil {
 		return false, err
+	}
+	for i, name := range names {
+		// Recheck all remaining entries before each deletion; lock goes last.
+		for j := i; j < len(names); j++ {
+			current, statErr := os.Lstat(filepath.Join(profileDir, names[j]))
+			if entries[j] == nil && os.IsNotExist(statErr) {
+				continue
+			}
+			if statErr != nil || entries[j] == nil || !os.SameFile(entries[j], current) {
+				return false, fmt.Errorf("profile Singleton identity changed during cleanup")
+			}
+		}
+		if entries[i] != nil {
+			if err := os.Remove(filepath.Join(profileDir, name)); err != nil {
+				return false, fmt.Errorf("移除失效 Chrome profile 锁 %s 失败: %w", name, err)
+			}
+		}
 	}
 	return true, nil
 }
@@ -73,26 +116,9 @@ func normalizeChromeLockHost(host string) string {
 	return strings.TrimSuffix(host, ".local")
 }
 
-func removeChromeSingletonLocks(profileDir string) error {
-	for _, name := range []string{"SingletonLock", "SingletonCookie", "SingletonSocket"} {
-		path := filepath.Join(profileDir, name)
-		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-			return fmt.Errorf("移除失效 Chrome profile 锁 %s 失败: %w", name, err)
-		}
-	}
-	return nil
-}
-
 func interactiveLoginProcessAlive(pid int) bool {
-	if pid <= 0 {
-		return false
-	}
-	process, err := os.FindProcess(pid)
-	if err != nil {
-		return false
-	}
-	err = process.Signal(syscall.Signal(0))
-	return err == nil || errors.Is(err, syscall.EPERM)
+	alive, err := profileProcessAlive(pid)
+	return alive || err != nil
 }
 
 func finishInteractiveLogin(result error, cookieSaved bool, connection *browserConnection) error {

@@ -27,3 +27,15 @@ also keeps a portable copy under its printed data path. It installs the Codex
 adapter automatically and installs the Claude Code Skill when that host is
 detected (or when `DIGCRAWL_SETUP_CLAUDE=1` is set); MCP registration remains
 host-owned outside Codex.
+
+The stdio process forwards calls to one private Bridge per profile. The Bridge
+owns the Runtime and Chrome and survives stdio reconnects. After upgrading,
+close old DigCrawl MCP connections, run the installed binary's
+`digcrawl bridge restart --config <actual-profile-absolute-path>`, then reconnect.
+A manifest build mismatch requires this explicit step.
+
+For browser failures, preserve the structured `error_details` beside `error`.
+When `handled: true`, the browser owner has already made its retry decision;
+follow `next_actions` before a new read. Tools depend on the active profile:
+use `tools/list` and do not assume an independent `browser.snapshot` is exposed.
+The default Skill uses `browser.browse` with `mode: "snapshot"` instead.

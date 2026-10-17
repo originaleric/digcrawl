@@ -222,6 +222,70 @@ func TestFailedOpenQuarantinesPartiallyOwnedBrowser(t *testing.T) {
 	}
 }
 
+func TestManagerShutdownDrainsLeaseThenClosesOwnedConnection(t *testing.T) {
+	closed := make(chan struct{})
+	conn := newLifecycleTestConnection(func(context.Context) error { return nil }, func(context.Context) error {
+		close(closed)
+		return nil
+	})
+	conn.leases = 1
+	m := &browserManager{
+		cfg:    config.LocalBrowserConfig{TotalTimeoutSec: 1},
+		active: conn,
+		stopCh: make(chan struct{}),
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer cancel()
+	if err := m.shutdown(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("shutdown with active lease error=%v, want deadline exceeded", err)
+	}
+	select {
+	case <-closed:
+		t.Fatal("shutdown closed a browser with an active tool lease")
+	default:
+	}
+
+	m.releaseConnection(conn)
+	if err := m.shutdown(context.Background()); err != nil {
+		t.Fatalf("shutdown after lease drain: %v", err)
+	}
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("shutdown did not close the drained owned browser")
+	}
+}
+
+func TestManagerShutdownImmediatelyClosesOwnedConnectionWithActiveLease(t *testing.T) {
+	closed := make(chan struct{})
+	conn := newLifecycleTestConnection(func(context.Context) error { return nil }, func(context.Context) error {
+		close(closed)
+		return nil
+	})
+	conn.owned = true
+	conn.leases = 1
+	m := &browserManager{
+		cfg:    config.LocalBrowserConfig{TotalTimeoutSec: 1},
+		active: conn,
+		stopCh: make(chan struct{}),
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := m.shutdownImmediately(ctx); err != nil {
+		t.Fatalf("immediate shutdown: %v", err)
+	}
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("immediate shutdown did not close the active leased browser")
+	}
+	if conn.leases != 0 {
+		t.Fatalf("remaining browser leases=%d, want 0", conn.leases)
+	}
+}
+
 func TestWaitForProfileUnlock(t *testing.T) {
 	t.Parallel()
 	profile := t.TempDir()
@@ -231,8 +295,8 @@ func TestWaitForProfileUnlock(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
 	defer cancel()
-	if err := waitForProfileUnlock(ctx, profile); !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("locked profile error=%v, want deadline exceeded", err)
+	if err := waitForProfileUnlock(ctx, profile); err == nil {
+		t.Fatalf("unknown lock must be rejected, error=%v", err)
 	}
 	if err := os.Remove(lock); err != nil {
 		t.Fatal(err)

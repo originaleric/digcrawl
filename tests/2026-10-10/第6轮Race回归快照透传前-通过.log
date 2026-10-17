@@ -1,0 +1,11 @@
+ok  	github.com/originaleric/digcrawl/internal/browser	7.808s
+ok  	github.com/originaleric/digcrawl/internal/platform	3.382s
+ok  	github.com/originaleric/digcrawl/internal/feed	3.150s
+ok  	github.com/originaleric/digcrawl/internal/platform/reddit	4.370s
+ok  	github.com/originaleric/digcrawl/internal/platform/wechat	3.875s
+ok  	github.com/originaleric/digcrawl/internal/platform/xiaohongshu	3.612s
+ok  	github.com/originaleric/digcrawl/provider/browser	4.147s
+ok  	github.com/originaleric/digcrawl/provider/platform	8.187s
+ok  	github.com/originaleric/digcrawl/runtime	5.730s
+ok  	github.com/originaleric/digcrawl/transport/bridge	10.016s
+ok  	github.com/originaleric/digcrawl/transport/collector	5.419s

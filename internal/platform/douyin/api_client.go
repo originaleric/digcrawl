@@ -38,6 +38,9 @@ func FetchVideoViaAPI(ctx context.Context, norm *platform.NormalizedURL, cookieD
 		Referer:         browseURL,
 	})
 	if err != nil {
+		if stopErr, stop := platform.ShouldStopStrategy(err); stop {
+			return nil, &platform.APIAttempt{Fatal: true, Message: stopErr.Error()}, stopErr
+		}
 		return nil, &platform.APIAttempt{
 			FallbackBrowser: true,
 			Message:         err.Error(),

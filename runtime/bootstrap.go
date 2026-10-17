@@ -61,6 +61,7 @@ func collectProviders(cfg *config.Config, opts RegistryOptions) []provider.Provi
 	}
 	if browserProviderEnabled(cfg) {
 		out = append(out, &browserprov.Provider{
+			Config:        cfg,
 			ConfigDomains: domains,
 			ArtifactStore: opts.ArtifactStore,
 		})

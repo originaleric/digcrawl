@@ -1,0 +1,96 @@
+[
+  {
+    "check": "MCP_normal_read_with_configured_OCR",
+    "pass": true,
+    "diagnostics": {
+      "attempts": 1,
+      "diagnostic_id": "52bc6febf44c0fc3c284326e",
+      "fallback_count": 0,
+      "first_failure": null,
+      "handled": true,
+      "max_retries": 1,
+      "recovery_action": "none",
+      "recovery_status": "not_attempted",
+      "retry_count": 0
+    }
+  },
+  {
+    "check": "MCP_requested_media_error",
+    "pass": true,
+    "code": "BROWSER_CONTENT_NOT_FOUND",
+    "details": {
+      "attempts": 1,
+      "component": "local_browser",
+      "diagnostic_id": "a2133122e4666f666ca684bf",
+      "fallback_count": 0,
+      "first_failure": null,
+      "handled": true,
+      "max_retries": 1,
+      "next_actions": [
+        {
+          "description": "运行 doctor --config <实际 profile>，检查失败步骤和诊断编号后再读取",
+          "executor": "user_or_agent",
+          "precondition": "运行 doctor --config <实际 profile>，检查失败步骤和诊断编号后再读取",
+          "type": "run_doctor"
+        }
+      ],
+      "operation": "metadata",
+      "reason": "unclassified",
+      "recovery_action": "none",
+      "recovery_status": "not_attempted",
+      "retry_count": 0,
+      "retry_exhausted": false,
+      "retryable": false,
+      "stage": "metadata"
+    }
+  },
+  {
+    "check": "MCP_real_final_url",
+    "pass": true,
+    "changed_to_final_url": true
+  },
+  {
+    "check": "original_github_url",
+    "pass": true,
+    "title": "GitHub - WyattBlue/auto-editor: Effort free video editing! · GitHub",
+    "text_characters": 5123,
+    "diagnostics": {
+      "attempts": 1,
+      "diagnostic_id": "c44c084deec272dbb68fd45d",
+      "fallback_count": 0,
+      "first_failure": null,
+      "handled": true,
+      "max_retries": 1,
+      "recovery_action": "none",
+      "recovery_status": "not_attempted",
+      "retry_count": 0
+    }
+  },
+  {
+    "check": "MCP_progress",
+    "pass": true
+  },
+  {
+    "check": "installed_running_build",
+    "pass": true,
+    "build_id": "sha256:ae0abc79818ff3ac416f97b67ec6c60f8276095013c3090dc67a4cee8f1dac0e",
+    "bridge_count": 1,
+    "bridge_pid": 83122
+  },
+  {
+    "check": "doctor_same_owner",
+    "pass": true,
+    "checks": [
+      "OK   binary",
+      "OK   profile",
+      "OK   artifact directory",
+      "OK   browser dependency",
+      "OK   Bridge transport",
+      "OK   Bridge build",
+      "OK   browser operation",
+      "OK   Skill ffmpeg",
+      "OK   Skill ASR provider",
+      "OK   mcp startup"
+    ]
+  }
+]

@@ -1,0 +1,20 @@
+ok  	github.com/originaleric/digcrawl/internal/browser	6.023s
+ok  	github.com/originaleric/digcrawl/provider/browser	2.565s
+ok  	github.com/originaleric/digcrawl/provider/platform	5.866s
+ok  	github.com/originaleric/digcrawl/internal/platform	(cached)
+ok  	github.com/originaleric/digcrawl/internal/platform/bilibili	2.886s
+ok  	github.com/originaleric/digcrawl/internal/platform/douyin	2.486s
+?   	github.com/originaleric/digcrawl/internal/platform/healthcheck	[no test files]
+ok  	github.com/originaleric/digcrawl/internal/platform/instagram	(cached)
+ok  	github.com/originaleric/digcrawl/internal/platform/kuaishou	3.630s
+ok  	github.com/originaleric/digcrawl/internal/platform/reddit	(cached)
+?   	github.com/originaleric/digcrawl/internal/platform/session	[no test files]
+ok  	github.com/originaleric/digcrawl/internal/platform/threads	(cached)
+ok  	github.com/originaleric/digcrawl/internal/platform/toutiao	3.285s
+ok  	github.com/originaleric/digcrawl/internal/platform/wechat	4.217s
+ok  	github.com/originaleric/digcrawl/internal/platform/weibo	(cached)
+ok  	github.com/originaleric/digcrawl/internal/platform/x	4.871s
+ok  	github.com/originaleric/digcrawl/internal/platform/xiaohongshu	5.183s
+ok  	github.com/originaleric/digcrawl/internal/platform/youtube	(cached)
+ok  	github.com/originaleric/digcrawl/internal/platform/zhihu	(cached)
+ok  	github.com/originaleric/digcrawl/transport/collector	(cached)

@@ -66,7 +66,7 @@ func Run(ctx context.Context, rt *runtime.Runtime, opts RunOptions) (map[string]
 		out = map[string]any{}
 	}
 
-	if result.Status != "success" && !isRecoverableProviderVideoRetentionFailure(result, out) {
+	if result.Status != "success" && !isRecoverableProviderRetentionFailure(result, out) {
 		if code, message := structuredPlatformError(out); code != "" {
 			return out, result, platform.NewReadError(code, message, match.Platform, nil)
 		}
@@ -89,20 +89,33 @@ func Run(ctx context.Context, rt *runtime.Runtime, opts RunOptions) (map[string]
 	return out, result, nil
 }
 
-// isRecoverableProviderVideoRetentionFailure recognizes only the explicit
+// isRecoverableProviderRetentionFailure recognizes only the explicit
 // provider-retention boundary. It deliberately does not turn generic handler
 // errors, platform errors, or malformed partial output into successful Collect
 // executions.
-func isRecoverableProviderVideoRetentionFailure(result *protocol.ToolResult, out map[string]any) bool {
-	if result == nil || result.Error == nil || result.Error.Code != platformprov.ProviderVideoDownloadFailedCode {
+func isRecoverableProviderRetentionFailure(result *protocol.ToolResult, out map[string]any) bool {
+	if result == nil || result.Error == nil {
 		return false
 	}
-	return providerVideoDownloadStatus(out) == "failed"
+	switch result.Error.Code {
+	case platformprov.ProviderVideoDownloadFailedCode:
+		return providerVideoDownloadStatus(out) == "failed"
+	case platformprov.ProviderImageDownloadFailedCode:
+		return providerImageDownloadStatus(out) == "failed"
+	default:
+		return false
+	}
 }
 
 func providerVideoDownloadStatus(out map[string]any) string {
 	meta, _ := out["platform_metadata"].(map[string]any)
 	status, _ := meta["video_download_status"].(string)
+	return strings.ToLower(strings.TrimSpace(status))
+}
+
+func providerImageDownloadStatus(out map[string]any) string {
+	meta, _ := out["platform_metadata"].(map[string]any)
+	status, _ := meta["image_download_status"].(string)
 	return strings.ToLower(strings.TrimSpace(status))
 }
 
@@ -112,6 +125,7 @@ func buildToolInput(match Match, opts RunOptions) (map[string]any, error) {
 			"url":               opts.URL,
 			"action":            "read",
 			"mode":              "full",
+			"include_media":     opts.IncludeMedia,
 			"use_cookie_domain": opts.UseCookieDomain,
 		}, nil
 	}

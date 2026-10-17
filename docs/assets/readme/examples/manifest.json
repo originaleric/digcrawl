@@ -1,0 +1,217 @@
+{
+  "verified_on": "2026-10-17",
+  "runtime": "DigCrawl 0.1.0, commit 4ee930d1321c9e0a6704fa932ffe0c700a90ba78",
+  "notes": [
+    "Original-page screenshots paired with verified result excerpts, not screenshots of an Agent interface. WeChat uses a clearly labeled source excerpt.",
+    "Video cases expose retrieved metadata and references; no ASR was requested.",
+    "YouTube retains the actual pre-login LOGIN_REQUIRED result and a successful local working-tree read after manual Chrome sign-in. Captions were advertised but no caption text was retrieved."
+  ],
+  "cases": [
+    {
+      "id": "wechat",
+      "tool": "wechat.article.read",
+      "kind": "article",
+      "url": "https://mp.weixin.qq.com/s/mbU0bE6BV5YfAsTmoY4H3A",
+      "name": "微信公众号",
+      "name_en": "WeChat",
+      "topic": "Agent 上下文工程",
+      "topic_en": "Agent context engineering",
+      "prompt": "读取这篇 Agent 文章，提取正文与章节。",
+      "prompt_en": "Read this agent article and extract its text and sections.",
+      "note_zh": "已取得正文、章节和 7 条图片引用。",
+      "note_en": "Retrieved the article text, sections, and 7 image references.",
+      "status": "success",
+      "response_sha256": "66a88b4edcb61fb2f0db9e4484f4c1eafd5e59f79f8a5432f594b32695a68f36",
+      "title": "别再只卷Prompt 了，真正拉开Agent差距的是Context Engineering",
+      "author": "腾讯技术工程",
+      "published_at": "2026-09-14 17:36",
+      "captured_at": "2026-10-17T14:09:43+08:00",
+      "markdown_characters": 37401,
+      "media_references": {
+        "image": 7
+      },
+      "read_channel": "http",
+      "error": null,
+      "excerpt": "Prompt Engineering → ReAct → Context Engineering\nContext 的七类构成要素\n长任务的三大核心技术",
+      "original": {
+        "kind": "source_excerpt",
+        "path": null,
+        "captured_on": "2026-10-17",
+        "source_url": "https://mp.weixin.qq.com/s/mbU0bE6BV5YfAsTmoY4H3A",
+        "reason": "Browser site-safety policy blocked the page screenshot. Previously retrieved public headings are retained as a source excerpt."
+      }
+    },
+    {
+      "id": "xiaohongshu",
+      "tool": "xiaohongshu.note.read",
+      "kind": "image_note",
+      "url": "https://www.xiaohongshu.com/explore/6ac20976000000001c00ca12",
+      "name": "小红书",
+      "name_en": "Xiaohongshu",
+      "topic": "Agent 新物种地图",
+      "topic_en": "An agent landscape map",
+      "prompt": "读取这篇 Agent 图文笔记，提取文字和图片。",
+      "prompt_en": "Read this agent image note and extract its text and images.",
+      "note_zh": "使用本机授权登录，取得正文和 2 条图片引用。",
+      "note_en": "Used an authorized local session to retrieve the note text and 2 image references.",
+      "status": "success",
+      "response_sha256": "5999fd07b770a9b10f17f1f004975599672a4bd628958f467ef391e112d415a5",
+      "title": "2026 Agent新物种地图｜20款近期高热 Agent",
+      "author": "略懂AI的Asher",
+      "published_at": null,
+      "captured_at": "2026-10-17T14:31:14+08:00",
+      "markdown_characters": 1215,
+      "media_references": {
+        "image": 2
+      },
+      "read_channel": "browser",
+      "error": null,
+      "excerpt": "能力范式转向；组织形态重组；负责周期跨越",
+      "image_observation": {
+        "categories": [
+          "Personal",
+          "Coding",
+          "Workflow",
+          "Research",
+          "Creative"
+        ],
+        "basis": "Host inspected the returned page screenshot; source claims are not independently endorsed."
+      },
+      "original": {
+        "kind": "screenshot",
+        "path": "examples/originals/xiaohongshu.jpg",
+        "captured_on": "2026-10-17",
+        "source_url": "https://www.xiaohongshu.com/explore/6ac20976000000001c00ca12"
+      }
+    },
+    {
+      "id": "bilibili",
+      "tool": "bilibili.video.read",
+      "kind": "video",
+      "url": "https://www.bilibili.com/video/BV1z3ZFYUE6K/",
+      "name": "B站",
+      "name_en": "Bilibili",
+      "topic": "AI Agent 原理",
+      "topic_en": "AI agent fundamentals",
+      "prompt": "读取这个 Agent 教程，提取标题、简介和分P。",
+      "prompt_en": "Read this agent tutorial and extract its title, description, and parts.",
+      "note_zh": "已取得视频资料与媒体引用；本例未请求转写。",
+      "note_en": "Retrieved video metadata and media references; transcription was not requested.",
+      "status": "success",
+      "response_sha256": "02d1254b88bafe07a9fce2781a1fc0f7d7fbae5187d743e2475bb38b89717cf1",
+      "title": "李宏毅：一堂课搞懂AI Agent原理【生成式AI的机器学习(2025)】大模型LLM",
+      "author": "AI算法工程师笔记-",
+      "published_at": "2025-03-29T11:02:25+08:00",
+      "captured_at": "2026-10-17T14:10:22+08:00",
+      "markdown_characters": 463,
+      "media_references": {
+        "image": 1,
+        "video": 2
+      },
+      "read_channel": "api",
+      "error": null,
+      "excerpt": "分P1: 第二讲：一堂课搞懂AI Agent原理\n分P2: 大模型路线图-\n分P4: ML2025Agent",
+      "original": {
+        "kind": "screenshot",
+        "path": "examples/originals/bilibili.jpg",
+        "captured_on": "2026-10-17",
+        "source_url": "https://www.bilibili.com/video/BV1z3ZFYUE6K/"
+      }
+    },
+    {
+      "id": "x",
+      "tool": "x.post.read",
+      "kind": "video_post",
+      "url": "https://x.com/OpenAI/status/1882509286439637448",
+      "name": "X",
+      "name_en": "X",
+      "topic": "Operator 浏览器 Agent",
+      "topic_en": "Operator browser agent",
+      "prompt": "读取这条 Operator 视频帖，提取正文和视频信息。",
+      "prompt_en": "Read this Operator video post and extract its text and video information.",
+      "note_zh": "已取得帖子正文及视频、封面引用；本例未请求转写。",
+      "note_en": "Retrieved the post text, video reference, and cover reference; no transcription was requested.",
+      "status": "success",
+      "response_sha256": "bd3d7b64a800ccefe533e6bb8dfe2c68a910a867c4c6113ef90227c1fa2bd6cf",
+      "title": "A research preview of Operator, an agent that can use its own browser to perform...",
+      "author": "OpenAI",
+      "published_at": "2025-01-23T19:22:43.000Z",
+      "captured_at": "2026-10-17T14:13:45+08:00",
+      "markdown_characters": 119,
+      "media_references": {
+        "video": 1,
+        "image": 1
+      },
+      "read_channel": "api",
+      "error": null,
+      "excerpt": "A research preview of Operator, an agent that can use its own browser to perform tasks for you.",
+      "original": {
+        "kind": "screenshot",
+        "path": "examples/originals/x.jpg",
+        "captured_on": "2026-10-17",
+        "source_url": "https://x.com/OpenAI/status/1882509286439637448"
+      }
+    },
+    {
+      "id": "youtube",
+      "tool": "youtube.video.read",
+      "kind": "video",
+      "url": "https://www.youtube.com/watch?v=LP5OCa20Zpg",
+      "name": "YouTube",
+      "name_en": "YouTube",
+      "topic": "Tips for building AI agents",
+      "topic_en": "Tips for building AI agents",
+      "prompt": "读取这个 Agent 视频，提取简介与章节。",
+      "prompt_en": "Read this agent video and extract its description and chapters.",
+      "note_zh": "登录后已取得简介、章节与封面；字幕正文未取回。",
+      "note_en": "Retrieved the description, chapters, and cover after sign-in; caption text was not retrieved.",
+      "status": "success",
+      "response_sha256": "c0757a9e383f4941df255771d7cc09eed444ae0f7ec8018e6d126bbecccef51c",
+      "title": "Tips for building AI agents",
+      "author": "Anthropic",
+      "published_at": "2025-02-13T04:21:22-08:00",
+      "captured_at": "2026-10-17T15:00:58+08:00",
+      "markdown_characters": 709,
+      "media_references": {
+        "image": 1
+      },
+      "read_channel": "browser",
+      "error": null,
+      "excerpt": "00:26 Defining AI agents and workflows\n10:47 Coding agents: Potential and challenges\n16:26 Advice for developers exploring agents",
+      "original": {
+        "kind": "screenshot",
+        "path": "examples/originals/youtube-after-login.jpg",
+        "captured_on": "2026-10-17",
+        "source_url": "https://www.youtube.com/watch?v=LP5OCa20Zpg",
+        "capture_method": "DigCrawl youtube.video.read screenshot attachment",
+        "crop": {
+          "x": 16,
+          "y": 68,
+          "width": 880,
+          "height": 590
+        },
+        "screenshot_stage": "after local session synchronization"
+      },
+      "runtime": "local working-tree build, 2026-10-17",
+      "captions_available": true,
+      "warnings": [
+        "YouTube captions were advertised but could not be read"
+      ],
+      "before_login": {
+        "status": "error",
+        "error": {
+          "code": "LOGIN_REQUIRED",
+          "message": "Sign in to confirm you’re not a bot"
+        },
+        "response_sha256": "64a0e556192fd1cfe06f9e1353e611a0ae5388311bbf01ce9c0f0912493ae93d",
+        "evidence": "youtube-before-login.json",
+        "original": {
+          "kind": "screenshot",
+          "path": "examples/originals/youtube.jpg",
+          "captured_on": "2026-10-17",
+          "source_url": "https://www.youtube.com/watch?v=LP5OCa20Zpg"
+        }
+      }
+    }
+  ]
+}

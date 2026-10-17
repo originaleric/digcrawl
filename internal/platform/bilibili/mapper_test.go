@@ -80,19 +80,24 @@ func TestBrowserVideoCaptureKeepsAPIContentAsSourceOfTruth(t *testing.T) {
 		Markdown: "请登录",
 		Media:    []platform.MediaItem{{Type: "image", URL: "https://i0.hdslb.com/login.jpg"}},
 	}
-	appendBrowserVideoMedia(apiContent, loginShell)
+	if err := appendBrowserVideoMedia(apiContent, loginShell); err != nil {
+		t.Fatal(err)
+	}
 	if apiContent.Title != "API title" || apiContent.Text != "API body" || apiContent.Markdown != "API markdown" || len(apiContent.Media) != 1 {
 		t.Fatalf("browser shell must not replace API content: %+v", apiContent)
 	}
 
 	videoCapture := &platform.Content{
-		Title: "browser title must not replace API",
+		Title:            "browser title must not replace API",
+		PlatformMetadata: map[string]any{"final_url": "https://www.bilibili.com/video/BV1xx411c7mD"},
 		Media: []platform.MediaItem{
 			{Type: "image", URL: "https://i0.hdslb.com/browser.jpg"},
 			{Type: "video", URL: "https://media.example/video.mp4"},
 		},
 	}
-	appendBrowserVideoMedia(apiContent, videoCapture)
+	if err := appendBrowserVideoMedia(apiContent, videoCapture); err != nil {
+		t.Fatal(err)
+	}
 	if apiContent.Title != "API title" || apiContent.Text != "API body" || len(apiContent.Media) != 2 || apiContent.Media[1].URL != "https://media.example/video.mp4" {
 		t.Fatalf("browser capture must only enrich API content with video: %+v", apiContent)
 	}
@@ -109,5 +114,35 @@ func TestBuildSummaryInputKeepsTitleWhenDescriptionIsThin(t *testing.T) {
 	})
 	if !strings.Contains(text, "标题: 字幕君交流场所") || !strings.Contains(text, "UP主: UP主") {
 		t.Fatalf("summary input lost useful context: %q", text)
+	}
+}
+
+func TestMergedBrowserVideoRetainsSource(t *testing.T) {
+	norm := &platform.NormalizedURL{OriginalURL: "https://www.bilibili.com/video/BV1xx411c7mD", CanonicalURL: "https://www.bilibili.com/video/BV1xx411c7mD", PlatformID: "BV1xx411c7mD", ContentKind: "bv"}
+	api, err := mapAPIResponse(platform.ReadInput{IncludeMedia: true}, norm, &viewResponse{Data: viewData{BVID: norm.PlatformID, Title: "API source title"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	browserContent := &platform.Content{SourceURL: norm.OriginalURL, PlatformMetadata: map[string]any{"final_url": "https://outside.example/video"}, Media: []platform.MediaItem{{Type: "video", URL: "https://cdn.example/video.mp4"}}}
+	if err := appendBrowserVideoMedia(api, browserContent); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("merged source=%s meta=%v media=%v", api.SourceURL, api.PlatformMetadata, api.Media)
+	if len(api.Media) != 1 {
+		t.Fatal("fixture did not merge media")
+	}
+	if platform.MetaString(api.PlatformMetadata, "final_url") != "https://outside.example/video" {
+		t.Errorf("browser source discarded while browser media was merged")
+	}
+}
+
+func TestBrowserVideoWithUnknownSourceDoesNotMutateAPI(t *testing.T) {
+	api := &platform.Content{Title: "API title", Media: []platform.MediaItem{{Type: "image", URL: "https://cdn.example/cover.jpg"}}, PlatformMetadata: map[string]any{"extraction_source": "api"}}
+	capture := &platform.Content{Media: []platform.MediaItem{{Type: "video", URL: "https://cdn.example/a.mp4"}}}
+	if err := appendBrowserVideoMedia(api, capture); err == nil {
+		t.Fatal("unconfirmed source accepted")
+	}
+	if api.Title != "API title" || len(api.Media) != 1 || len(api.PlatformMetadata) != 1 {
+		t.Fatalf("API changed before source validation: %+v", api)
 	}
 }

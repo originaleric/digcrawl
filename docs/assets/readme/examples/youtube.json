@@ -1,0 +1,61 @@
+{
+  "id": "youtube",
+  "tool": "youtube.video.read",
+  "kind": "video",
+  "url": "https://www.youtube.com/watch?v=LP5OCa20Zpg",
+  "name": "YouTube",
+  "name_en": "YouTube",
+  "topic": "Tips for building AI agents",
+  "topic_en": "Tips for building AI agents",
+  "prompt": "读取这个 Agent 视频，提取简介与章节。",
+  "prompt_en": "Read this agent video and extract its description and chapters.",
+  "note_zh": "登录后已取得简介、章节与封面；字幕正文未取回。",
+  "note_en": "Retrieved the description, chapters, and cover after sign-in; caption text was not retrieved.",
+  "status": "success",
+  "response_sha256": "c0757a9e383f4941df255771d7cc09eed444ae0f7ec8018e6d126bbecccef51c",
+  "title": "Tips for building AI agents",
+  "author": "Anthropic",
+  "published_at": "2025-02-13T04:21:22-08:00",
+  "captured_at": "2026-10-17T15:00:58+08:00",
+  "markdown_characters": 709,
+  "media_references": {
+    "image": 1
+  },
+  "read_channel": "browser",
+  "error": null,
+  "excerpt": "00:26 Defining AI agents and workflows\n10:47 Coding agents: Potential and challenges\n16:26 Advice for developers exploring agents",
+  "original": {
+    "kind": "screenshot",
+    "path": "examples/originals/youtube-after-login.jpg",
+    "captured_on": "2026-10-17",
+    "source_url": "https://www.youtube.com/watch?v=LP5OCa20Zpg",
+    "capture_method": "DigCrawl youtube.video.read screenshot attachment",
+    "crop": {
+      "x": 16,
+      "y": 68,
+      "width": 880,
+      "height": 590
+    },
+    "screenshot_stage": "after local session synchronization"
+  },
+  "runtime": "local working-tree build, 2026-10-17",
+  "captions_available": true,
+  "warnings": [
+    "YouTube captions were advertised but could not be read"
+  ],
+  "before_login": {
+    "status": "error",
+    "error": {
+      "code": "LOGIN_REQUIRED",
+      "message": "Sign in to confirm you’re not a bot"
+    },
+    "response_sha256": "64a0e556192fd1cfe06f9e1353e611a0ae5388311bbf01ce9c0f0912493ae93d",
+    "evidence": "youtube-before-login.json",
+    "original": {
+      "kind": "screenshot",
+      "path": "examples/originals/youtube.jpg",
+      "captured_on": "2026-10-17",
+      "source_url": "https://www.youtube.com/watch?v=LP5OCa20Zpg"
+    }
+  }
+}

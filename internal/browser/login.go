@@ -11,10 +11,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/go-rod/rod"
 	"github.com/go-rod/rod/lib/launcher"
 	"github.com/go-rod/rod/lib/launcher/flags"
-	"github.com/go-rod/stealth"
 	"github.com/originaleric/digcrawl/config"
 	"golang.org/x/term"
 )
@@ -63,13 +61,21 @@ var loginSpecs = map[string]LoginSpec{
 		CookieDomain: "www.instagram.com",
 		CookieURLs:   []string{"https://www.instagram.com", "https://instagram.com"},
 	},
+	"youtube": {
+		Platform:     "youtube",
+		IndexURL:     "https://www.youtube.com",
+		CookieDomain: "www.youtube.com",
+		// Google authentication completes in the dedicated browser. Persist
+		// only YouTube-scoped cookies, never the user's Google-wide session.
+		CookieURLs: []string{"https://www.youtube.com", "https://youtube.com"},
+	},
 }
 
 // LoginSpecFor returns login configuration for a platform.
 func LoginSpecFor(platform string) (LoginSpec, error) {
 	spec, ok := loginSpecs[strings.ToLower(strings.TrimSpace(platform))]
 	if !ok {
-		return LoginSpec{}, fmt.Errorf("不支持的平台 %q，可选: xiaohongshu, douyin, toutiao, threads, instagram", platform)
+		return LoginSpec{}, fmt.Errorf("不支持的平台 %q，可选: xiaohongshu, douyin, toutiao, threads, instagram, youtube", platform)
 	}
 	return spec, nil
 }
@@ -98,6 +104,12 @@ func InteractiveLogin(ctx context.Context, platform string, cfg config.LocalBrow
 		return err
 	}
 
+	guard, identity, err := AcquireProfileLock(profileDir)
+	if err != nil {
+		return err
+	}
+	defer guard.Close()
+	profileDir = identity
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()
 	clearedStaleLock, err := prepareInteractiveLoginProfile(profileDir, nil)
@@ -111,8 +123,16 @@ func InteractiveLogin(ctx context.Context, platform string, cfg config.LocalBrow
 		fmt.Fprintln(os.Stderr, "已清理上次异常退出遗留的 Chrome profile 锁。")
 	}
 	cookieSaved := false
+	manualSignIn := spec.Platform == "youtube"
+	if manualSignIn {
+		// Google sign-in belongs in a normal, user-operated browser. Do not
+		// connect CDP or inject scripts into its authentication pages.
+		if err := confirmManualYouTubeLogin(ctx, cfg, profileDir, os.Stdin); err != nil {
+			return err
+		}
+	}
 
-	connection, err := launchInteractiveLoginBrowser(ctx, cfg, profileDir)
+	connection, err := launchLoginBrowser(ctx, cfg, profileDir, manualSignIn)
 	if err != nil && connection == nil {
 		// A second command can race the first between its preflight and Chrome
 		// creating SingletonLock. Re-check once to give a non-takeover error; if
@@ -124,7 +144,7 @@ func InteractiveLogin(ctx context.Context, platform string, cfg config.LocalBrow
 		}
 		if profileErr == nil && clearedAfterLaunch {
 			fmt.Fprintln(os.Stderr, "已清理上次异常退出遗留的 Chrome profile 锁。")
-			connection, err = launchInteractiveLoginBrowser(ctx, cfg, profileDir)
+			connection, err = launchLoginBrowser(ctx, cfg, profileDir, manualSignIn)
 		}
 	}
 	if err != nil {
@@ -132,19 +152,24 @@ func InteractiveLogin(ctx context.Context, platform string, cfg config.LocalBrow
 	}
 	defer func() { resultErr = finishInteractiveLogin(resultErr, cookieSaved, connection) }()
 
-	page, err := stealth.Page(connection.browser)
+	pageCtx, pageCancel := browserOperationContext(ctx, 5*time.Second)
+	page, err := createStealthPage(pageCtx, connection.browser)
+	pageCancel()
 	if err != nil {
 		return fmt.Errorf("创建页面失败: %w", err)
 	}
+	page = page.Context(ctx)
 	if err := page.Navigate(spec.IndexURL); err != nil {
 		return fmt.Errorf("打开登录页失败: %w", err)
 	}
 	_ = page.WaitLoad()
 
-	fmt.Printf("已打开 DigCrawl 独立登录浏览器：%s\n", spec.IndexURL)
-	fmt.Printf("登录成功后回到终端按 Enter；Cookie 将保存到 %s\n", cfg.CookieStoreDir)
-	if err := waitForLoginConfirmation(os.Stdin); err != nil {
-		return err
+	if !manualSignIn {
+		fmt.Printf("已打开 DigCrawl 独立登录浏览器：%s\n", spec.IndexURL)
+		fmt.Printf("登录成功后回到终端按 Enter；Cookie 将保存到 %s\n", cfg.CookieStoreDir)
+		if err := waitForLoginConfirmationContext(ctx, os.Stdin); err != nil {
+			return err
+		}
 	}
 	warnings, err := persistConfirmedLoginCookies(
 		func() error {
@@ -173,13 +198,17 @@ func InteractiveLogin(ctx context.Context, platform string, cfg config.LocalBrow
 	return nil
 }
 
-// launchInteractiveLoginBrowser always launches a fresh, profile-owned Chrome.
+// launchLoginBrowser always launches a fresh, profile-owned Chrome.
 // It intentionally ignores background CDP configuration: a fixed port may
 // refer to an unrelated local browser, which a login command must never close.
-func launchInteractiveLoginBrowser(ctx context.Context, cfg config.LocalBrowserConfig, profileDir string) (*browserConnection, error) {
+// YouTube uses a headless collector only after the user-operated Chrome has
+// exited and released the profile. It never performs Google authentication.
+func launchLoginBrowser(ctx context.Context, cfg config.LocalBrowserConfig, profileDir string, headless bool) (*browserConnection, error) {
+	setupCtx, cancel := browserOperationContext(ctx, 10*time.Second)
+	defer cancel()
 	l := launcher.New().
-		Context(ctx).
-		Headless(false).
+		Context(setupCtx).
+		Headless(headless).
 		Set(flags.Flag("disable-gpu")).
 		UserDataDir(profileDir)
 	if cfg.ChromePath != "" {
@@ -187,16 +216,16 @@ func launchInteractiveLoginBrowser(ctx context.Context, cfg config.LocalBrowserC
 	}
 	l = applyInteractiveLauncherPolicy(l, cfg)
 
-	controlURL, err := l.Launch()
-	if err != nil {
-		return nil, err
-	}
+	controlURL, err := launchBrowser(l)
 	connection := newBrowserConnection(nil, nil, l, true, profileDir, 0)
-	b := rod.New().ControlURL(controlURL).Context(ctx).Timeout(time.Duration(cfg.TotalTimeoutSec) * time.Second)
-	if err := b.Connect(); err != nil {
+	if err != nil {
 		return connection, err
 	}
-	connection.browser = b
+	b, transport, err := connectCDPBrowser(setupCtx, controlURL, time.Duration(cfg.TotalTimeoutSec)*time.Second)
+	if err != nil {
+		return connection, err
+	}
+	connection = newBrowserConnection(b, transport, l, true, profileDir, 0)
 	return connection, nil
 }
 
@@ -255,6 +284,17 @@ func waitForLoginConfirmation(in io.Reader) error {
 		return fmt.Errorf("未收到登录确认；请在可交互终端中按 Enter，或手动运行登录命令: %w", err)
 	}
 	return nil
+}
+
+func waitForLoginConfirmationContext(ctx context.Context, in io.Reader) error {
+	done := make(chan error, 1)
+	go func() { done <- waitForLoginConfirmation(in) }()
+	select {
+	case err := <-done:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // CheckSession 打开平台首页并检测是否已有可用 Cookie。

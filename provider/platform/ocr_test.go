@@ -96,7 +96,7 @@ func TestPlatformReadHandlerDoesNotUseExternalCallIDAsArtifactIdentity(t *testin
 	}
 }
 
-func TestPlatformReadHandlerAppliesSkillConfiguredOCR(t *testing.T) {
+func TestPlatformReadHandlerAppliesEnabledSkillOCRWithoutReturningInternalMedia(t *testing.T) {
 	enabled := true
 	oldSkill := config.Skill()
 	config.SetSkill(config.SkillConfig{OCR: config.OCRConfig{Enabled: &enabled, Provider: "stub"}})
@@ -104,9 +104,7 @@ func TestPlatformReadHandlerAppliesSkillConfiguredOCR(t *testing.T) {
 		config.SetSkill(oldSkill)
 	}()
 
-	input, err := json.Marshal(platformReadInput{
-		URL: "https://8.8.8.8/post", IncludeScreenshot: true, IncludeOCR: true,
-	})
+	input, err := json.Marshal(platformReadInput{URL: "https://8.8.8.8/post"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -118,18 +116,47 @@ func TestPlatformReadHandlerAppliesSkillConfiguredOCR(t *testing.T) {
 		[]string{"8.8.8.8"}, nil, store,
 		func(_ context.Context, in iplatform.ReadInput) (*iplatform.Content, error) {
 			if !in.IncludeMedia {
-				t.Fatal("skill OCR should request media from the platform reader")
+				t.Fatal("enabled skill OCR should request media from the platform reader")
 			}
-			return &iplatform.Content{Platform: "test", ContentType: "article", SourceURL: in.URL, Markdown: "body", ScreenshotBase64: "iVBORw0KGgo="}, nil
+			return &iplatform.Content{
+				Platform: "test", ContentType: "article", SourceURL: in.URL, Markdown: "body",
+				Media: []iplatform.MediaItem{{Type: "image", URL: "https://images.example.test/article.png"}},
+			}, nil
 		},
 	)
 
-	out, _, err := handler(context.Background(), &protocol.ToolCall{Type: protocol.TypeToolCall, ID: "skill_ocr_screenshot", Tool: "test.read", Input: input})
+	out, _, err := handler(context.Background(), &protocol.ToolCall{Type: protocol.TypeToolCall, ID: "skill_ocr_default", Tool: "test.read", Input: input})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out["markdown"].(string), "stub OCR text from screenshot") {
+	if !strings.Contains(out["markdown"].(string), "stub OCR text from https://images.example.test/article.png") {
 		t.Fatalf("skill OCR markdown=%s", out["markdown"])
+	}
+	if _, ok := out["media"]; ok {
+		t.Fatalf("internal OCR media must not broaden text-only output: %+v", out["media"])
+	}
+}
+
+func TestPlatformReadHandlerDoesNotApplySkillDefaultOCRToCollect(t *testing.T) {
+	enabled := true
+	cfg := &config.Config{Skill: config.SkillConfig{OCR: config.OCRConfig{Enabled: &enabled, Provider: "stub"}}}
+	input, err := json.Marshal(platformReadInput{URL: "https://8.8.8.8/post"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := platformReadHandlerNamedWithConfig("test.read", []string{"8.8.8.8"}, nil, nil, func(_ context.Context, in iplatform.ReadInput) (*iplatform.Content, error) {
+		if in.IncludeMedia {
+			t.Fatal("Collect must not inherit Skill.OCR media acquisition")
+		}
+		return &iplatform.Content{Platform: "test", ContentType: "article", SourceURL: in.URL, Markdown: "body"}, nil
+	}, cfg)
+
+	out, _, err := handler(executor.WithCollectExecution(context.Background()), &protocol.ToolCall{Type: protocol.TypeToolCall, Tool: "test.read", Input: input})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out["markdown"].(string), "stub OCR") {
+		t.Fatalf("Collect unexpectedly applied Skill OCR: %q", out["markdown"])
 	}
 }
 
@@ -187,6 +214,85 @@ func TestPlatformReadHandlerRetainsOptedInProviderVideo(t *testing.T) {
 	}
 }
 
+func TestPlatformReadHandlerRejectsImageRetentionOverItemLimitBeforeCreatingDirectory(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "retained-images")
+	cfg := &config.Config{ImageDownload: config.ImageDownloadConfig{Dir: root, Providers: map[string]bool{"toutiao": true}, MaxItems: 2}}
+	input, err := json.Marshal(platformReadInput{URL: "https://8.8.8.8/article"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := platformReadHandlerNamedWithConfig(ToolToutiaoArticleRead, []string{"8.8.8.8"}, nil, nil, func(_ context.Context, in iplatform.ReadInput) (*iplatform.Content, error) {
+		if !in.IncludeMedia {
+			t.Fatal("image retention must request media internally")
+		}
+		return &iplatform.Content{Platform: "toutiao", ContentType: "article", SourceURL: in.URL, Media: []iplatform.MediaItem{
+			{Type: "image", URL: "https://example.com/1.jpg"}, {Type: "image", URL: "https://example.com/2.jpg"}, {Type: "photo", URL: "https://example.com/3.jpg"},
+		}}, nil
+	}, cfg)
+	out, _, err := handler(context.Background(), &protocol.ToolCall{Type: protocol.TypeToolCall, Tool: ToolToutiaoArticleRead, Input: input})
+	if err == nil {
+		t.Fatal("expected item limit retention error")
+	}
+	var coded interface{ ToolErrorCode() string }
+	if !errors.As(err, &coded) || coded.ToolErrorCode() != ProviderImageDownloadFailedCode {
+		t.Fatalf("err=%v", err)
+	}
+	meta, _ := out["platform_metadata"].(map[string]any)
+	if meta["image_download_status"] != "failed" || meta["image_download_failure_reason"] != "item_limit_exceeded" || meta["image_download_attempted_count"] != 0 {
+		t.Fatalf("metadata=%+v", meta)
+	}
+	if _, statErr := os.Stat(root); !os.IsNotExist(statErr) {
+		t.Fatalf("item limit must not create retention root: %v", statErr)
+	}
+	if _, ok := out["media"]; ok {
+		t.Fatalf("internal retention media leaked: %+v", out)
+	}
+}
+
+func TestCollectKeepsMediaAfterRecoverableImageRetentionFailure(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "retained-images")
+	cfg := &config.Config{ImageDownload: config.ImageDownloadConfig{Dir: root, Providers: map[string]bool{"toutiao": true}, MaxItems: 1}}
+	input, err := json.Marshal(platformReadInput{URL: "https://8.8.8.8/article"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := platformReadHandlerNamedWithConfig(ToolToutiaoArticleRead, []string{"8.8.8.8"}, nil, nil, func(_ context.Context, in iplatform.ReadInput) (*iplatform.Content, error) {
+		if !in.IncludeMedia {
+			t.Fatal("image retention must request media internally")
+		}
+		return &iplatform.Content{Platform: "toutiao", ContentType: "article", SourceURL: in.URL, Media: []iplatform.MediaItem{
+			{Type: "image", URL: "https://example.com/1.jpg"}, {Type: "image", URL: "https://example.com/2.jpg"},
+		}}, nil
+	}, cfg)
+	out, _, err := handler(executor.WithCollectExecution(context.Background()), &protocol.ToolCall{Type: protocol.TypeToolCall, Tool: ToolToutiaoArticleRead, Input: input})
+	if err == nil {
+		t.Fatal("expected recoverable image retention error")
+	}
+	if len(outputImageMedia(out)) != 2 {
+		t.Fatalf("Collect must retain media for its DownloadAssets fallback: %+v", out)
+	}
+}
+
+func TestIsRetainedImageFileAcceptsAVIFAndRejectsUnknownBinary(t *testing.T) {
+	dir := t.TempDir()
+	avifPath := filepath.Join(dir, "image.avif")
+	// ISO-BMFF ftyp with AVIF major brand and compatible brand.
+	avif := []byte{0, 0, 0, 24, 'f', 't', 'y', 'p', 'a', 'v', 'i', 'f', 0, 0, 0, 0, 'm', 'i', 'f', '1', 'a', 'v', 'i', 'f'}
+	if err := os.WriteFile(avifPath, avif, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if !isRetainedImageFile(avifPath) {
+		t.Fatal("valid AVIF signature must be retained")
+	}
+	unknownPath := filepath.Join(dir, "unknown.avif")
+	if err := os.WriteFile(unknownPath, []byte("not an image, despite its extension"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if isRetainedImageFile(unknownPath) {
+		t.Fatal("unknown binary must not be retained as an image")
+	}
+}
+
 func TestPlatformReadHandlerRejectsNonVideoArtifactForProviderRetention(t *testing.T) {
 	mediaRoot := t.TempDir()
 	store, err := artifact.NewDiskStore(t.TempDir(), time.Hour)
@@ -204,8 +310,8 @@ func TestPlatformReadHandlerRejectsNonVideoArtifactForProviderRetention(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler := platformReadHandlerNamedWithConfig(ToolToutiaoVideoRead, []string{"8.8.8.8"}, nil, store, func(_ context.Context, _ iplatform.ReadInput) (*iplatform.Content, error) {
-		return &iplatform.Content{Platform: "toutiao", ContentType: "video", Media: []iplatform.MediaItem{{Type: "video", ArtifactID: "invalid-video"}}}, nil
+	handler := platformReadHandlerNamedWithConfig(ToolToutiaoVideoRead, []string{"8.8.8.8"}, nil, store, func(_ context.Context, in iplatform.ReadInput) (*iplatform.Content, error) {
+		return &iplatform.Content{Platform: "toutiao", ContentType: "video", SourceURL: in.URL, Media: []iplatform.MediaItem{{Type: "video", ArtifactID: "invalid-video"}}}, nil
 	}, cfg)
 	out, _, err := handler(context.Background(), &protocol.ToolCall{Type: protocol.TypeToolCall, Tool: ToolToutiaoVideoRead, Input: input})
 	if err == nil {

@@ -1,0 +1,79 @@
+=== RUN   TestChromeDedicatedSnapshotAcceptance
+=== RUN   TestChromeDedicatedSnapshotAcceptance/page_changed
+=== RUN   TestChromeDedicatedSnapshotAcceptance/send_queue
+=== RUN   TestChromeDedicatedSnapshotAcceptance/cancelled
+=== RUN   TestChromeDedicatedSnapshotAcceptance/local_domain_restriction
+--- PASS: TestChromeDedicatedSnapshotAcceptance (2.07s)
+    --- PASS: TestChromeDedicatedSnapshotAcceptance/page_changed (0.33s)
+    --- PASS: TestChromeDedicatedSnapshotAcceptance/send_queue (0.39s)
+    --- PASS: TestChromeDedicatedSnapshotAcceptance/cancelled (0.38s)
+    --- PASS: TestChromeDedicatedSnapshotAcceptance/local_domain_restriction (0.17s)
+PASS
+ok  	github.com/originaleric/digcrawl/internal/browser	3.191s
+=== RUN   TestChromeSnapshotSourcePolicyAcceptance
+=== RUN   TestChromeSnapshotSourcePolicyAcceptance/allow_redirect=false
+    entries_test.go:287: start=http://localhost:65522/redirect final=http://127.0.0.1:65522/final out=map[] artifacts=0 err=DOMAIN_NOT_ALLOWED: target domain "127.0.0.1" is not allowed
+=== RUN   TestChromeSnapshotSourcePolicyAcceptance/allow_redirect=true
+    entries_test.go:287: start=http://localhost:65522/redirect final=http://127.0.0.1:65522/final out=map[elements:[{Ref:e1 Role:button Name:Final source button Value: Depth:3 Disabled:false Focused:false NodeID:7}] source_url:http://127.0.0.1:65522/final title:Final source] artifacts=0 err=<nil>
+--- PASS: TestChromeSnapshotSourcePolicyAcceptance (0.73s)
+    --- PASS: TestChromeSnapshotSourcePolicyAcceptance/allow_redirect=false (0.47s)
+    --- PASS: TestChromeSnapshotSourcePolicyAcceptance/allow_redirect=true (0.16s)
+PASS
+ok  	github.com/originaleric/digcrawl/provider/browser	2.613s
+=== RUN   TestChromePlatformSourcePolicyAcceptance
+=== RUN   TestChromePlatformSourcePolicyAcceptance/bilibili_merged_source
+2026/10/10 22:44:36 [platform-read] platform=bilibili channel=api source=api api_ms=87 feed_ms=0 browser_ms=141 retries=0
+2026/10/10 22:44:36 [platform-read] platform=bilibili channel=api source=api api_ms=42 feed_ms=0 browser_ms=125 retries=0
+    source_policy_test.go:135: out=map[author:0x7b03272dab80 browser_diagnostics:map[attempts:1 diagnostic_id:de7816a9ad9c3f42bc9f94c0 fallback_count:0 first_failure:map[] handled:true max_retries:1 recovery_action:none recovery_status:not_attempted retry_count:0] canonical_url:https://www.bilibili.com/video/BV1xx411c7mD captured_at:2026-10-10T22:44:36+08:00 content_type:video engagement:0x7b03271f2240 markdown:标题: 字幕君交流场所
+        简介: www
+        UP主: 碧诗
+        互动: 播放5540613 点赞276989 评论89373 收藏127408 分享28917 media:[{image https://i0.hdslb.com/bfs/archive/transparent.png } {video https://outside.example/clip.mp4 }] platform:bilibili platform_metadata:map[aid:2 api_code:0 api_endpoint:https://api.bilibili.com/x/web-interface/view?bvid=BV1xx411c7mD api_fetch_mode:http api_http_status:200 api_latency_ms:42 api_signature_mode:none browser_latency_ms:125 cid:62131 extraction_source:api final_url:https://outside.example/video page_kind:bv platform:bilibili platform_id:BV1xx411c7mD read_channel:api video_id:BV1xx411c7mD] published_at:2009-09-09T09:09:09+08:00 source_url:https://www.bilibili.com/video/BV1xx411c7mD text:标题: 字幕君交流场所
+        简介: www
+        UP主: 碧诗
+        互动: 播放5540613 点赞276989 评论89373 收藏127408 分享28917 title:字幕君交流场所] err=<nil>
+--- FAIL: TestChromePlatformSourcePolicyAcceptance (1.16s)
+    --- FAIL: TestChromePlatformSourcePolicyAcceptance/bilibili_merged_source (0.40s)
+=== RUN   TestRedditRSSSourcePolicyAcrossEntries
+=== RUN   TestRedditRSSSourcePolicyAcrossEntries/reddit.post.read/default
+2026/10/10 22:44:36 [platform-read] platform=reddit channel=rss source=rss api_ms=0 feed_ms=0 browser_ms=0 retries=0
+=== RUN   TestRedditRSSSourcePolicyAcrossEntries/reddit.post.read/call_restriction
+2026/10/10 22:44:36 [platform-read] platform=reddit channel=rss source=rss api_ms=0 feed_ms=0 browser_ms=0 retries=0
+=== RUN   TestRedditRSSSourcePolicyAcrossEntries/reddit.post.read/config_restriction
+2026/10/10 22:44:36 [platform-read] platform=reddit channel=rss source=rss api_ms=0 feed_ms=0 browser_ms=0 retries=0
+=== RUN   TestRedditRSSSourcePolicyAcrossEntries/reddit.post.read/call_overrides_config
+2026/10/10 22:44:36 [platform-read] platform=reddit channel=rss source=rss api_ms=0 feed_ms=0 browser_ms=0 retries=0
+=== RUN   TestRedditRSSSourcePolicyAcrossEntries/reddit.subreddit.read/default
+=== RUN   TestRedditRSSSourcePolicyAcrossEntries/reddit.subreddit.read/call_restriction
+=== RUN   TestRedditRSSSourcePolicyAcrossEntries/reddit.subreddit.read/config_restriction
+=== RUN   TestRedditRSSSourcePolicyAcrossEntries/reddit.subreddit.read/call_overrides_config
+=== RUN   TestRedditRSSSourcePolicyAcrossEntries/reddit.user.read/default
+=== RUN   TestRedditRSSSourcePolicyAcrossEntries/reddit.user.read/call_restriction
+=== RUN   TestRedditRSSSourcePolicyAcrossEntries/reddit.user.read/config_restriction
+=== RUN   TestRedditRSSSourcePolicyAcrossEntries/reddit.user.read/call_overrides_config
+--- PASS: TestRedditRSSSourcePolicyAcrossEntries (0.00s)
+    --- PASS: TestRedditRSSSourcePolicyAcrossEntries/reddit.post.read/default (0.00s)
+    --- PASS: TestRedditRSSSourcePolicyAcrossEntries/reddit.post.read/call_restriction (0.00s)
+    --- PASS: TestRedditRSSSourcePolicyAcrossEntries/reddit.post.read/config_restriction (0.00s)
+    --- PASS: TestRedditRSSSourcePolicyAcrossEntries/reddit.post.read/call_overrides_config (0.00s)
+    --- PASS: TestRedditRSSSourcePolicyAcrossEntries/reddit.subreddit.read/default (0.00s)
+    --- PASS: TestRedditRSSSourcePolicyAcrossEntries/reddit.subreddit.read/call_restriction (0.00s)
+    --- PASS: TestRedditRSSSourcePolicyAcrossEntries/reddit.subreddit.read/config_restriction (0.00s)
+    --- PASS: TestRedditRSSSourcePolicyAcrossEntries/reddit.subreddit.read/call_overrides_config (0.00s)
+    --- PASS: TestRedditRSSSourcePolicyAcrossEntries/reddit.user.read/default (0.00s)
+    --- PASS: TestRedditRSSSourcePolicyAcrossEntries/reddit.user.read/call_restriction (0.00s)
+    --- PASS: TestRedditRSSSourcePolicyAcrossEntries/reddit.user.read/config_restriction (0.00s)
+    --- PASS: TestRedditRSSSourcePolicyAcrossEntries/reddit.user.read/call_overrides_config (0.00s)
+FAIL
+FAIL	github.com/originaleric/digcrawl/provider/platform	3.614s
+=== RUN   TestFeedSourceIsConfirmedAcrossReadPaths
+--- PASS: TestFeedSourceIsConfirmedAcrossReadPaths (0.00s)
+PASS
+ok  	github.com/originaleric/digcrawl/internal/feed	2.721s
+=== RUN   TestMergedBrowserVideoRetainsSource
+    mapper_test.go:130: merged source=https://www.bilibili.com/video/BV1xx411c7mD meta=map[aid:0 api_code:0 cid:0 extraction_source:api final_url:https://outside.example/video page_kind:bv platform_id:BV1xx411c7mD video_id:BV1xx411c7mD] media=[{video https://cdn.example/video.mp4 }]
+--- PASS: TestMergedBrowserVideoRetainsSource (0.00s)
+=== RUN   TestBrowserVideoWithUnknownSourceDoesNotMutateAPI
+--- PASS: TestBrowserVideoWithUnknownSourceDoesNotMutateAPI (0.00s)
+PASS
+ok  	github.com/originaleric/digcrawl/internal/platform/bilibili	2.150s
+FAIL

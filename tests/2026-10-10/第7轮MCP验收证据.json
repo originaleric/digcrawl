@@ -1,0 +1,198 @@
+[
+  {
+    "check": "MCP_normal_read",
+    "pass": true,
+    "diagnostics": {
+      "attempts": 1,
+      "diagnostic_id": "f1733263b930221bca2f9b16",
+      "fallback_count": 0,
+      "first_failure": null,
+      "handled": true,
+      "max_retries": 1,
+      "recovery_action": "none",
+      "recovery_status": "not_attempted",
+      "retry_count": 0
+    }
+  },
+  {
+    "check": "MCP_page_change_full_read",
+    "pass": true,
+    "details": {
+      "attempts": 1,
+      "component": "local_browser",
+      "diagnostic_id": "1cac59a4b492e3e60a2e4d89",
+      "fallback_count": 0,
+      "first_failure": null,
+      "handled": true,
+      "max_retries": 1,
+      "next_actions": [
+        {
+          "description": "页面在提取期间发生切换；等待页面稳定后重新读取，本次混合内容已丢弃",
+          "executor": "user_or_agent",
+          "precondition": "页面在提取期间发生切换；等待页面稳定后重新读取，本次混合内容已丢弃",
+          "type": "retry_read"
+        }
+      ],
+      "operation": "read_page",
+      "reason": "page_changed",
+      "recovery_action": "none",
+      "recovery_status": "not_attempted",
+      "retry_count": 0,
+      "retry_exhausted": false,
+      "retryable": false,
+      "stage": "read_page"
+    }
+  },
+  {
+    "check": "MCP_page_change_summary_read",
+    "pass": true,
+    "details": {
+      "attempts": 1,
+      "component": "local_browser",
+      "diagnostic_id": "4f29798e5889c7d85ad6626d",
+      "fallback_count": 0,
+      "first_failure": null,
+      "handled": true,
+      "max_retries": 1,
+      "next_actions": [
+        {
+          "description": "页面在提取期间发生切换；等待页面稳定后重新读取，本次混合内容已丢弃",
+          "executor": "user_or_agent",
+          "precondition": "页面在提取期间发生切换；等待页面稳定后重新读取，本次混合内容已丢弃",
+          "type": "retry_read"
+        }
+      ],
+      "operation": "read_page",
+      "reason": "page_changed",
+      "recovery_action": "none",
+      "recovery_status": "not_attempted",
+      "retry_count": 0,
+      "retry_exhausted": false,
+      "retryable": false,
+      "stage": "read_page"
+    }
+  },
+  {
+    "check": "MCP_page_change_snapshot_read",
+    "pass": true,
+    "details": {
+      "attempts": 1,
+      "component": "local_browser",
+      "diagnostic_id": "33026df42445367b591ce376",
+      "fallback_count": 0,
+      "first_failure": null,
+      "handled": true,
+      "max_retries": 1,
+      "next_actions": [
+        {
+          "description": "页面在提取期间发生切换；等待页面稳定后重新读取，本次混合内容已丢弃",
+          "executor": "user_or_agent",
+          "precondition": "页面在提取期间发生切换；等待页面稳定后重新读取，本次混合内容已丢弃",
+          "type": "retry_read"
+        }
+      ],
+      "operation": "read_page",
+      "reason": "page_changed",
+      "recovery_action": "none",
+      "recovery_status": "not_attempted",
+      "retry_count": 0,
+      "retry_exhausted": false,
+      "retryable": false,
+      "stage": "read_page"
+    }
+  },
+  {
+    "check": "MCP_page_change_full_screenshot",
+    "pass": true,
+    "details": {
+      "attempts": 1,
+      "component": "local_browser",
+      "diagnostic_id": "ab09ddf52eb19ed716199113",
+      "fallback_count": 0,
+      "first_failure": null,
+      "handled": true,
+      "max_retries": 1,
+      "next_actions": [
+        {
+          "description": "页面在提取期间发生切换；等待页面稳定后重新读取，本次混合内容已丢弃",
+          "executor": "user_or_agent",
+          "precondition": "页面在提取期间发生切换；等待页面稳定后重新读取，本次混合内容已丢弃",
+          "type": "retry_read"
+        }
+      ],
+      "operation": "read_page",
+      "reason": "page_changed",
+      "recovery_action": "none",
+      "recovery_status": "not_attempted",
+      "retry_count": 0,
+      "retry_exhausted": false,
+      "retryable": false,
+      "stage": "read_page"
+    }
+  },
+  {
+    "check": "MCP_normal_snapshot",
+    "pass": true
+  },
+  {
+    "check": "MCP_dedicated_snapshot_actual_profile",
+    "status": "not_applicable",
+    "reason": "actual profile does not expose browser.snapshot; isolated Chrome/provider acceptance passed"
+  },
+  {
+    "check": "MCP_allowed_redirect",
+    "pass": true
+  },
+  {
+    "check": "original_github_url",
+    "pass": true,
+    "title": "GitHub - WyattBlue/auto-editor: Effort free video editing! · GitHub",
+    "text_characters": 5119,
+    "diagnostics": {
+      "attempts": 1,
+      "diagnostic_id": "8cf8da50a0fb514c0b323207",
+      "fallback_count": 0,
+      "first_failure": null,
+      "handled": true,
+      "max_retries": 1,
+      "recovery_action": "none",
+      "recovery_status": "not_attempted",
+      "retry_count": 0
+    }
+  },
+  {
+    "check": "MCP_progress",
+    "pass": true
+  },
+  {
+    "check": "installed_feed_redirect_policy_reject",
+    "pass": true
+  },
+  {
+    "check": "installed_feed_redirect_policy_allow",
+    "pass": true
+  },
+  {
+    "check": "installed_running_build",
+    "pass": true,
+    "build_id": "sha256:8a2983b0363f61aa5286e2e230ee91661cec6079cefc9b1e078db8e6429de5e3",
+    "bridge_count": 1,
+    "bridge_pid": 36926
+  },
+  {
+    "check": "doctor_same_owner",
+    "pass": true,
+    "checks": [
+      "OK   binary",
+      "OK   profile",
+      "OK   artifact directory",
+      "OK   browser dependency",
+      "OK   Bridge transport",
+      "OK   Bridge build",
+      "OK   browser operation",
+      "OK   Skill ffmpeg",
+      "OK   Skill ASR provider",
+      "OK   mcp startup"
+    ]
+  }
+]

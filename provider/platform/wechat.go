@@ -1,6 +1,7 @@
 package platformprov
 
 import (
+	"github.com/originaleric/digcrawl/config"
 	"github.com/originaleric/digcrawl/internal/platform/wechat"
 	"github.com/originaleric/digcrawl/internal/platform/wechatchannels"
 	"github.com/originaleric/digcrawl/runtime/artifact"
@@ -10,8 +11,8 @@ import (
 var wechatDefaultDomains = []string{"mp.weixin.qq.com", "weixin.qq.com"}
 
 // WechatArticleReadEntry returns registry entry for wechat.article.read.
-func WechatArticleReadEntry(configDomains []string, artStore artifact.Store) registry.Entry {
-	return platformReadEntry(
+func WechatArticleReadEntry(configDomains []string, artStore artifact.Store, runtimeCfg ...*config.Config) registry.Entry {
+	return platformReadEntryWithConfig(
 		ToolWechatArticleRead,
 		"Read a WeChat official account article via local browser with cookie reuse.",
 		[]string{"browser", "wechat", "cookie.local", "platform.read"},
@@ -19,6 +20,7 @@ func WechatArticleReadEntry(configDomains []string, artStore artifact.Store) reg
 		configDomains,
 		artStore,
 		wechat.ReadArticle,
+		optionalRuntimeConfig(runtimeCfg),
 	)
 }
 

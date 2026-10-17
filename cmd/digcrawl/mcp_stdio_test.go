@@ -7,31 +7,83 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/originaleric/digcrawl/config"
+	"github.com/originaleric/digcrawl/transport/bridge"
 )
+
+// The Bridge fixture is a copy of the native test executable so child launch
+// and process ownership use the same argument shape on Unix and Windows.
+func TestMain(m *testing.M) {
+	if strings.TrimSuffix(filepath.Base(os.Args[0]), ".exe") == "digcrawl-bridge-test-helper" && len(os.Args) > 1 && os.Args[1] == "bridge" {
+		run(append([]string{"digcrawl"}, os.Args[1:]...))
+		os.Exit(0)
+	}
+	os.Exit(m.Run())
+}
 
 func TestMCPStdioHelper(t *testing.T) {
 	if os.Getenv("DIGCRAWL_MCP_STDIO_HELPER") != "1" {
 		return
 	}
-	run([]string{"digcrawl", "mcp", "--config", os.Getenv("DIGCRAWL_MCP_STDIO_CONFIG")})
+	run([]string{"digcrawl", "mcp", "--idle-timeout", "100ms", "--config", os.Getenv("DIGCRAWL_MCP_STDIO_CONFIG")})
+}
+
+func TestMCPBridgeHelper(t *testing.T) {
+	if os.Getenv("DIGCRAWL_BRIDGE_HELPER") != "1" {
+		return
+	}
+	for i, arg := range os.Args {
+		if arg == "--" {
+			run(append([]string{"digcrawl"}, os.Args[i+1:]...))
+			return
+		}
+	}
+	t.Fatal("bridge helper did not receive command arguments")
+}
+
+func TestBridgeServeRejectsUnmanagedForegroundWorker(t *testing.T) {
+	profilePath := writeMCPPhaseOneProfile(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestMCPBridgeHelper$", "--", "bridge", "serve", "--config", profilePath)
+	cmd.Env = append(os.Environ(), "DIGCRAWL_BRIDGE_HELPER=1")
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatal("unmanaged bridge serve unexpectedly started")
+	}
+	if !strings.Contains(string(output), "bridge serve is internal") {
+		t.Fatalf("unmanaged bridge serve output=%q", output)
+	}
 }
 
 func TestMCPPhaseOneProfileExposesOnlyReadTools(t *testing.T) {
 	profilePath := writeMCPPhaseOneProfile(t)
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), bridgeStopTimeout)
+		defer cancel()
+		if _, err := bridge.Stop(ctx, profilePath); err != nil {
+			t.Errorf("stop test bridge: %v", err)
+		}
+	})
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	t.Cleanup(cancel)
 	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestMCPStdioHelper$")
 	cmd.Env = append(os.Environ(),
 		"DIGCRAWL_MCP_STDIO_HELPER=1",
 		"DIGCRAWL_MCP_STDIO_CONFIG="+profilePath,
+		"DIGCRAWL_BRIDGE_EXECUTABLE="+writeMCPBridgeExecutable(t),
 	)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -162,6 +214,245 @@ func TestMCPPhaseOneProfileExposesOnlyReadTools(t *testing.T) {
 	if err := ctx.Err(); err != nil {
 		t.Fatalf("MCP stdio integration test timed out: %v; stderr=%s", err, stderr.String())
 	}
+	// The stdio child has exited, but it must have launched a detached Bridge
+	// through Executor.startOrWait. A ready manifest here covers the actual
+	// sidecar creation path instead of only attaching to a pre-started server.
+	waitForMCPTestBridge(t, profilePath)
+}
+
+func TestBridgeRestartReplacesRunningBridge(t *testing.T) {
+	profilePath := writeMCPPhaseOneProfile(t)
+	cfg, err := config.Load(profilePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	socket, err := bridge.SocketPath(profilePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	startCtx, cancelStart := context.WithTimeout(context.Background(), bridgeStartTimeout)
+	defer cancelStart()
+	if _, err := bridge.NewExecutor(startCtx, writeMCPBridgeExecutable(t), profilePath, cfg); err != nil {
+		t.Fatalf("start production-shape bridge: %v", err)
+	}
+	waitForMCPTestBridge(t, profilePath)
+	oldPID := waitForMCPTestBridgePID(t, socket)
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), bridgeStopTimeout)
+		defer cancel()
+		if _, stopErr := bridge.Stop(ctx, profilePath); stopErr != nil {
+			t.Errorf("stop replacement bridge: %v", stopErr)
+		}
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestMCPBridgeHelper$", "--", "bridge", "restart", "--config", profilePath)
+	cmd.Env = append(os.Environ(),
+		"DIGCRAWL_BRIDGE_HELPER=1",
+		"DIGCRAWL_BRIDGE_EXECUTABLE="+writeMCPBridgeExecutable(t),
+	)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("bridge restart command: %v; stderr=%s", err, stderr.String())
+	}
+	if err := ctx.Err(); err != nil {
+		t.Fatalf("bridge restart timed out: %v; stderr=%s", err, stderr.String())
+	}
+	waitForMCPTestBridge(t, profilePath)
+	newPID := waitForMCPTestBridgePID(t, socket)
+	if newPID == oldPID {
+		t.Fatalf("bridge restart retained old owner PID %d", oldPID)
+	}
+	if live, err := mcpTestProcessLive(oldPID); err != nil || live {
+		t.Fatalf("old bridge owner survived restart: live=%v err=%v", live, err)
+	}
+}
+
+func TestConcurrentExecutorsLeaveOneManagedBridgeWorker(t *testing.T) {
+	profilePath := writeMCPPhaseOneProfile(t)
+	cfg, err := config.Load(profilePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	socket, err := bridge.SocketPath(profilePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	executable := writeMCPBridgeExecutable(t)
+	const starters = 12
+	errs := make(chan error, starters)
+	var callers sync.WaitGroup
+	callers.Add(starters)
+	for range starters {
+		go func() {
+			defer callers.Done()
+			ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+			defer cancel()
+			_, err := bridge.NewExecutor(ctx, executable, profilePath, cfg)
+			errs <- err
+		}()
+	}
+	callers.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent Executor startup: %v", err)
+		}
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), bridgeStopTimeout)
+		defer cancel()
+		if _, stopErr := bridge.Stop(ctx, profilePath); stopErr != nil {
+			t.Errorf("stop concurrent test bridge: %v", stopErr)
+		}
+	})
+	waitForMCPTestBridge(t, profilePath)
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if pids := mcpTestBridgePIDs(t, socket); len(pids) == 1 {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("managed Bridge workers for one socket = %v, want exactly one", mcpTestBridgePIDs(t, socket))
+}
+
+func writeMCPBridgeExecutable(t *testing.T) string {
+	t.Helper()
+	name := "digcrawl-bridge-test-helper"
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	path := filepath.Join(t.TempDir(), name)
+	data, err := os.ReadFile(os.Args[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func waitForMCPTestBridge(t *testing.T, profilePath string) {
+	t.Helper()
+	socket, err := bridge.SocketPath(profilePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dialer := &net.Dialer{}
+	httpClient := &http.Client{Transport: &http.Transport{
+		DisableKeepAlives: true,
+		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			return dialer.DialContext(ctx, "unix", socket)
+		},
+	}}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		request, err := http.NewRequestWithContext(context.Background(), http.MethodGet, "http://digcrawl-bridge/manifest", nil)
+		if err == nil {
+			response, err := httpClient.Do(request)
+			if err == nil {
+				_ = response.Body.Close()
+				if response.StatusCode == http.StatusOK {
+					return
+				}
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("MCP-launched bridge did not become ready")
+}
+
+func waitForMCPTestBridgePID(t *testing.T, socket string) int {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if pids := mcpTestBridgePIDs(t, socket); len(pids) > 0 {
+			return pids[0]
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("MCP-launched bridge owner did not appear in the process table")
+	return 0
+}
+
+func mcpTestBridgePIDs(t *testing.T, socket string) []int {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		output, err := exec.CommandContext(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", "Get-CimInstance Win32_Process -Filter \"CommandLine LIKE '%bridge serve%'\" | Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress").Output()
+		if err != nil {
+			t.Fatalf("inspect MCP-launched bridge workers: %v", err)
+		}
+		type process struct {
+			PID     int    `json:"ProcessId"`
+			Command string `json:"CommandLine"`
+		}
+		var processes []process
+		value := strings.TrimSpace(string(output))
+		if value == "" || value == "null" {
+			return nil
+		}
+		if strings.HasPrefix(value, "{") {
+			var single process
+			err = json.Unmarshal(output, &single)
+			processes = append(processes, single)
+		} else {
+			err = json.Unmarshal(output, &processes)
+		}
+		if err != nil {
+			t.Fatalf("decode bridge process table: %v", err)
+		}
+		var pids []int
+		for _, candidate := range processes {
+			if candidate.PID > 0 && strings.Contains(candidate.Command, "bridge serve") &&
+				(strings.Contains(candidate.Command, "--socket "+socket) || strings.Contains(candidate.Command, "--socket \""+socket+"\"")) {
+				pids = append(pids, candidate.PID)
+			}
+		}
+		return pids
+	}
+	output, err := exec.Command("ps", "-ax", "-o", "pid=,command=").Output()
+	if err != nil {
+		t.Fatalf("inspect MCP-launched bridge workers: %v", err)
+	}
+	needle := "--socket " + socket
+	var pids []int
+	for _, line := range strings.Split(string(output), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 2 || !strings.Contains(line, "bridge serve") || !strings.Contains(line, needle) {
+			continue
+		}
+		pid, parseErr := strconv.Atoi(fields[0])
+		if parseErr == nil && pid > 0 {
+			pids = append(pids, pid)
+		}
+	}
+	return pids
+}
+
+func mcpTestProcessLive(pid int) (bool, error) {
+	if runtime.GOOS == "windows" {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		output, err := exec.CommandContext(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", "$process = Get-Process -Id "+strconv.Itoa(pid)+" -ErrorAction SilentlyContinue; if ($null -ne $process) { 'alive' }; exit 0").Output()
+		if err != nil {
+			return false, err
+		}
+		return strings.TrimSpace(string(output)) == "alive", nil
+	}
+	output, err := exec.Command("ps", "-p", strconv.Itoa(pid), "-o", "stat=").Output()
+	if err != nil {
+		if _, ok := err.(*exec.ExitError); ok {
+			return false, nil
+		}
+		return false, err
+	}
+	return strings.TrimSpace(string(output)) != "" && !strings.HasPrefix(strings.TrimSpace(string(output)), "Z"), nil
 }
 
 // lockedBuffer owns child-process stderr for this streaming integration test.

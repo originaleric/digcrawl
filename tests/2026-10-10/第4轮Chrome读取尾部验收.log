@@ -1,0 +1,25 @@
+=== RUN   TestChromeReadTailFailureAcceptance
+=== RUN   TestChromeReadTailFailureAcceptance/metadata_deadline
+    chrome_acceptance_test.go:291: typed failure preserved; healthy connection reused; targets/leases/slots/sessions=0
+=== RUN   TestChromeReadTailFailureAcceptance/metadata_cancel
+    chrome_acceptance_test.go:291: typed failure preserved; healthy connection reused; targets/leases/slots/sessions=0
+=== RUN   TestChromeReadTailFailureAcceptance/metadata_invalid_value
+    chrome_acceptance_test.go:291: typed failure preserved; healthy connection reused; targets/leases/slots/sessions=0
+=== RUN   TestChromeReadTailFailureAcceptance/metadata_null
+    chrome_acceptance_test.go:291: typed failure preserved; healthy connection reused; targets/leases/slots/sessions=0
+=== RUN   TestChromeReadTailFailureAcceptance/metadata_script_error
+    chrome_acceptance_test.go:291: typed failure preserved; healthy connection reused; targets/leases/slots/sessions=0
+=== RUN   TestChromeReadTailFailureAcceptance/media_deadline
+    chrome_acceptance_test.go:291: typed failure preserved; healthy connection reused; targets/leases/slots/sessions=0
+=== RUN   TestChromeReadTailFailureAcceptance/metadata_transport_disconnect
+    chrome_acceptance_test.go:315: metadata CDP failure recovered once; old process released; targets/leases/slots/sessions=0
+--- PASS: TestChromeReadTailFailureAcceptance (5.87s)
+    --- PASS: TestChromeReadTailFailureAcceptance/metadata_deadline (1.12s)
+    --- PASS: TestChromeReadTailFailureAcceptance/metadata_cancel (0.23s)
+    --- PASS: TestChromeReadTailFailureAcceptance/metadata_invalid_value (0.23s)
+    --- PASS: TestChromeReadTailFailureAcceptance/metadata_null (0.23s)
+    --- PASS: TestChromeReadTailFailureAcceptance/metadata_script_error (0.24s)
+    --- PASS: TestChromeReadTailFailureAcceptance/media_deadline (1.14s)
+    --- PASS: TestChromeReadTailFailureAcceptance/metadata_transport_disconnect (1.00s)
+PASS
+ok  	github.com/originaleric/digcrawl/internal/browser	6.198s

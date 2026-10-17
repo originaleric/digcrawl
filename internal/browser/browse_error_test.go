@@ -2,8 +2,12 @@ package browser
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
+
+	"github.com/go-rod/rod"
+	"github.com/go-rod/rod/lib/proto"
 )
 
 func TestNewBrowseErrorReportsPageClosedWithDiagnostics(t *testing.T) {
@@ -88,5 +92,17 @@ func TestIsPageClosedCauseDoesNotTreatSelectorTimeoutAsClosed(t *testing.T) {
 	}
 	if isPageClosedCause(errors.New("context deadline exceeded")) {
 		t.Fatal("a candidate selector timeout must not be reported as page closed")
+	}
+}
+
+func TestScriptExceptionTextCannotRetireBrowserConnection(t *testing.T) {
+	for _, text := range []string{"EOF", "context deadline exceeded", "dial tcp connection refused", "target closed", "external target cleanup required"} {
+		t.Run(text, func(t *testing.T) {
+			cause := fmt.Errorf("metadata evaluation: %w", &rod.EvalError{RuntimeExceptionDetails: &proto.RuntimeExceptionDetails{Exception: &proto.RuntimeRemoteObject{Description: text}}})
+			err := newBrowseError(ErrorBrowserContentNotFound, "metadata", "提取页面结构化信息失败", cause, false).(*BrowseError)
+			if err.Code != ErrorBrowserContentNotFound || err.Retryable || isConnectionFailure(err) || isPageClosedCause(cause) || isRetryableBrowserCause(cause) || browseCauseReason(cause) != "unclassified" {
+				t.Fatalf("script exception mistaken for browser failure: %+v", err)
+			}
+		})
 	}
 }

@@ -13,6 +13,7 @@ const (
 type ToolManifest struct {
 	Type           string           `json:"type"`
 	Runtime        string           `json:"runtime"`
+	BuildID        string           `json:"build_id,omitempty"`
 	RuntimeVersion string           `json:"runtime_version"`
 	InstanceID     string           `json:"instance_id"`
 	Tools          []ToolDescriptor `json:"tools"`

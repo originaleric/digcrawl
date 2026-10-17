@@ -24,7 +24,7 @@ var PostBrowseAttempts = []platform.BrowseAttempt{
 
 // MetadataScript 登录墙/限流识别 + 首条 tweet 提取。
 func MetadataScript() string {
-	return platform.ParseCountJS + `(() => {
+	return platform.WithParseCountJS(`() => {
   const warnings = ['thread_not_expanded'];
   const pick = (sels) => {
     for (const s of sels) {
@@ -112,5 +112,5 @@ func MetadataScript() string {
     };
   }
   return merged;
-})()`
+}`)
 }

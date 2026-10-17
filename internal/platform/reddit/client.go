@@ -73,6 +73,9 @@ type ListingItem struct {
 type ListingResult struct {
 	Items []ListingItem
 	After string
+	// SourceURL is the confirmed page source for an RSS fallback. API results
+	// use the configured API backend and do not masquerade as page reads.
+	SourceURL string `json:"-"`
 }
 
 type redditListing struct {
