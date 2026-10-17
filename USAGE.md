@@ -10,8 +10,6 @@ DigCrawl 是面向任意 Agent 编排系统的**本地工具网关**：在用户
 
 ### 使用 npx 安装
 
-> 发布准备中：仓库公开、`digcrawl-skill` npm 包发布后可用。
-
 已安装 Node.js 20.19+ 的用户可在 macOS、Linux 或 Windows 运行：
 
 ```bash

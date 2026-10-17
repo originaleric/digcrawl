@@ -15,6 +15,7 @@
 
 <p align="center">
   <a href="./LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/License-MIT-blue.svg"></a>
+  <a href="https://www.npmjs.com/package/digcrawl-skill"><img alt="npm: digcrawl-skill" src="https://img.shields.io/npm/v/digcrawl-skill.svg"></a>
   <img alt="Local-first" src="https://img.shields.io/badge/runtime-local--first-111111">
   <img alt="CLI, MCP, HTTP" src="https://img.shields.io/badge/interfaces-CLI%20%7C%20MCP%20%7C%20HTTP-0071e3">
 </p>
@@ -41,8 +42,6 @@ Read and summarize this link: <URL>
 ## Quick Start
 
 **Install with npx** (macOS / Linux / Windows; Node.js 20.19+):
-
-> Coming soon: requires a public repository and the npm package release.
 
 ```bash
 npx digcrawl-skill install

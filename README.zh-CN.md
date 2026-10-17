@@ -15,6 +15,7 @@
 
 <p align="center">
   <a href="./LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/License-MIT-blue.svg"></a>
+  <a href="https://www.npmjs.com/package/digcrawl-skill"><img alt="npm: digcrawl-skill" src="https://img.shields.io/npm/v/digcrawl-skill.svg"></a>
   <img alt="Local-first" src="https://img.shields.io/badge/runtime-local--first-111111">
   <img alt="CLI, MCP, HTTP" src="https://img.shields.io/badge/interfaces-CLI%20%7C%20MCP%20%7C%20HTTP-0071e3">
 </p>
@@ -41,8 +42,6 @@
 ## 快速开始
 
 **使用 npx 安装**（macOS / Linux / Windows，需要 Node.js 20.19+）：
-
-> 发布准备中：仓库公开、npm 包发布后可用。
 
 ```bash
 npx digcrawl-skill install
