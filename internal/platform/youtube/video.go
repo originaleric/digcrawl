@@ -14,6 +14,11 @@ import (
 // and optional public caption tracks. Explicit video download is owned by the
 // provider's yt-dlp integration after this page read succeeds.
 func ReadVideo(ctx context.Context, in platform.ReadInput) (*platform.Content, error) {
+	return readVideoWithBrowse(ctx, in, platform.Browse)
+}
+
+func readVideoWithBrowse(ctx context.Context, in platform.ReadInput,
+	browse func(context.Context, string, platform.ReadInput, platform.BrowseSpec) (*browser.BrowserBrowseResponse, error)) (*platform.Content, error) {
 	ctx = browser.WithBrowseRetryContext(ctx)
 	norm, err := NormalizeURL(in.URL)
 	if err != nil {
@@ -26,13 +31,13 @@ func ReadVideo(ctx context.Context, in platform.ReadInput) (*platform.Content, e
 	spec := platform.BrowseSpec{
 		WaitSelector:    DefaultWaitSelector,
 		ContentSelector: DefaultContentSelector,
-		CookieDomain:    strings.TrimSpace(in.UseCookieDomain),
+		CookieDomain:    norm.CookieDomain,
 		MetadataScript:  MetadataScript(),
 		CaptureMedia:    false,
 	}
 	var resp *browser.BrowserBrowseResponse
 	err = platform.WithBrowseRetry(ctx, platform.BrowseRetryPolicy(), func(ctx context.Context) error {
-		result, browseErr := platform.Browse(ctx, norm.EffectiveBrowseURL(), in, spec)
+		result, browseErr := browse(ctx, norm.EffectiveBrowseURL(), in, spec)
 		if browseErr != nil {
 			return browseErr
 		}

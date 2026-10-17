@@ -1,0 +1,34 @@
+{
+  "id": "bilibili",
+  "tool": "bilibili.video.read",
+  "kind": "video",
+  "url": "https://www.bilibili.com/video/BV1z3ZFYUE6K/",
+  "name": "B站",
+  "name_en": "Bilibili",
+  "topic": "AI Agent 原理",
+  "topic_en": "AI agent fundamentals",
+  "prompt": "读取这个 Agent 教程，提取标题、简介和分P。",
+  "prompt_en": "Read this agent tutorial and extract its title, description, and parts.",
+  "note_zh": "已取得视频资料与媒体引用；本例未请求转写。",
+  "note_en": "Retrieved video metadata and media references; transcription was not requested.",
+  "status": "success",
+  "response_sha256": "02d1254b88bafe07a9fce2781a1fc0f7d7fbae5187d743e2475bb38b89717cf1",
+  "title": "李宏毅：一堂课搞懂AI Agent原理【生成式AI的机器学习(2025)】大模型LLM",
+  "author": "AI算法工程师笔记-",
+  "published_at": "2025-03-29T11:02:25+08:00",
+  "captured_at": "2026-10-17T14:10:22+08:00",
+  "markdown_characters": 463,
+  "media_references": {
+    "image": 1,
+    "video": 2
+  },
+  "read_channel": "api",
+  "error": null,
+  "excerpt": "分P1: 第二讲：一堂课搞懂AI Agent原理\n分P2: 大模型路线图-\n分P4: ML2025Agent",
+  "original": {
+    "kind": "screenshot",
+    "path": "examples/originals/bilibili.jpg",
+    "captured_on": "2026-10-17",
+    "source_url": "https://www.bilibili.com/video/BV1z3ZFYUE6K/"
+  }
+}

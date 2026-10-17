@@ -20,6 +20,24 @@ func TestThreadsLoginSpecUsesCurrentDomain(t *testing.T) {
 	}
 }
 
+func TestYouTubeLoginUsesYouTubeSessionScope(t *testing.T) {
+	t.Parallel()
+	spec, err := LoginSpecFor(" YouTube ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if spec.IndexURL != "https://www.youtube.com" || spec.CookieDomain != "www.youtube.com" {
+		t.Fatalf("unexpected YouTube login scope: %+v", spec)
+	}
+	// Google sign-in may run in this browser, but synchronization must return
+	// to YouTube rather than persisting a Google-wide authenticated session.
+	for _, rawURL := range spec.CookieURLs {
+		if rawURL != "https://www.youtube.com" && rawURL != "https://youtube.com" {
+			t.Fatalf("unexpected cross-site cookie warmup: %s", rawURL)
+		}
+	}
+}
+
 func TestPrepareInteractiveLoginProfileRejectsLiveOwnerAndClearsStaleLock(t *testing.T) {
 	profile := t.TempDir()
 	host, err := os.Hostname()

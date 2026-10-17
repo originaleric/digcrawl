@@ -136,6 +136,31 @@ func TestCanonicalSessionIsSharedByRootAndWWW(t *testing.T) {
 	}
 }
 
+func TestYouTubeSessionExcludesGoogleAndLookalikeDomains(t *testing.T) {
+	t.Parallel()
+	cookies := filterSessionCookies([]*proto.NetworkCookie{
+		{Name: "yt", Value: "test-session", Domain: ".youtube.com", Path: "/", Secure: true},
+		{Name: "yt-www", Value: "test-session", Domain: "www.youtube.com", Path: "/", Secure: true},
+		{Name: "google", Value: "must-not-persist", Domain: ".google.com", Path: "/"},
+		{Name: "accounts", Value: "must-not-persist", Domain: "accounts.google.com", Path: "/"},
+		{Name: "lookalike", Value: "must-not-persist", Domain: "notyoutube.com", Path: "/"},
+	}, "youtube.com")
+	if len(cookies) != 2 || cookies[0].Name != "yt" || cookies[1].Name != "yt-www" {
+		t.Fatalf("unexpected YouTube session cookies: %+v", cookies)
+	}
+	dir := t.TempDir()
+	if err := saveDomainCookies(&cookieReadPage{cookies: cookies}, "www.youtube.com", dir, mustParseURL(t, "https://www.youtube.com/")); err != nil {
+		t.Fatal(err)
+	}
+	page := &cookieSetPage{}
+	if err := loadDomainCookies(page, "www.youtube.com", dir, mustParseURL(t, "https://www.youtube.com/watch?v=dQw4w9WgXcQ")); err != nil {
+		t.Fatal(err)
+	}
+	if len(page.cookies) != 2 || cookieValues(page.cookies) != "yt=test-session; yt-www=test-session" {
+		t.Fatalf("saved YouTube session was not reused: %+v", page.cookies)
+	}
+}
+
 func TestCanonicalCookieDomainSharesOnlyRootAndWWW(t *testing.T) {
 	cases := map[string]string{
 		"www.toutiao.com":  "toutiao.com",

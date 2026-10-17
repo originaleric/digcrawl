@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -16,6 +17,38 @@ import (
 	"github.com/originaleric/digcrawl/protocol"
 	"github.com/originaleric/digcrawl/runtime/version"
 )
+
+// The failing child is a native executable on every platform. It reports the
+// private startup diagnostic without depending on a shell interpreter.
+func TestMain(m *testing.M) {
+	if strings.TrimSuffix(filepath.Base(os.Args[0]), ".exe") == "bridge-failure" {
+		for i, arg := range os.Args {
+			if arg == "--startup-status" && i+1 < len(os.Args) {
+				_ = os.WriteFile(os.Args[i+1], []byte("configured Chrome profile is already owned by another local DigCrawl bridge"), 0o600)
+				break
+			}
+		}
+		os.Exit(1)
+	}
+	os.Exit(m.Run())
+}
+
+// bridgeSocketTempDir keeps fixtures within the Unix socket path limit while
+// using a temporary root that exists on the current CI platform.
+func bridgeSocketTempDir(t *testing.T) string {
+	t.Helper()
+	base := ""
+	if runtime.GOOS == "darwin" {
+		// macOS's default per-user temporary root can itself be too long.
+		base = "/tmp"
+	}
+	dir, err := os.MkdirTemp(base, "digbridge-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	return dir
+}
 
 func TestSocketPathCanonicalizesProfileSymlink(t *testing.T) {
 	dir := t.TempDir()
@@ -81,11 +114,7 @@ func TestServeKeepsBridgeAvailableAcrossIdleGaps(t *testing.T) {
 	// macOS has a short Unix-domain socket path limit; the production socket
 	// is hashed under the user cache for this reason. Keep this fixture short
 	// too instead of accidentally testing an impossible listener path.
-	socketDir, err := os.MkdirTemp("/private/tmp", "digbridge-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(socketDir) })
+	socketDir := bridgeSocketTempDir(t)
 	socket := filepath.Join(socketDir, "bridge.sock")
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
@@ -168,11 +197,7 @@ func TestServeRejectsSecondBridgeForSamePersistentBrowserProfile(t *testing.T) {
 		t.Skipf("symlinks unavailable in this test environment: %v", err)
 	}
 	cfg.LocalBrowser.UserDataDir = profileAlias
-	socketDir, err := os.MkdirTemp("/private/tmp", "digbridge-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(socketDir) })
+	socketDir := bridgeSocketTempDir(t)
 
 	ctx, stop := context.WithCancel(context.Background())
 	defer stop()
@@ -185,7 +210,7 @@ func TestServeRejectsSecondBridgeForSamePersistentBrowserProfile(t *testing.T) {
 
 	secondCfg := bridgeTestConfig(t, dir)
 	secondCfg.LocalBrowser.UserDataDir = sharedProfile
-	err = Serve(context.Background(), secondCfg, filepath.Join(socketDir, "second.sock"))
+	err := Serve(context.Background(), secondCfg, filepath.Join(socketDir, "second.sock"))
 	if !errors.Is(err, ErrBrowserProfileInUse) {
 		t.Fatalf("second bridge error=%v, want ErrBrowserProfileInUse", err)
 	}
@@ -239,11 +264,7 @@ func TestStopDoesNotFallBackToAnInProcessControlRequest(t *testing.T) {
 }
 
 func TestExecuteBoundsStalledBridgeRPCToCallPolicy(t *testing.T) {
-	socketDir, err := os.MkdirTemp("/private/tmp", "digbridge-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(socketDir) })
+	socketDir := bridgeSocketTempDir(t)
 	socket := filepath.Join(socketDir, "bridge.sock")
 	listener, err := net.Listen("unix", socket)
 	if err != nil {
@@ -291,11 +312,7 @@ func TestExecuteBoundsStalledBridgeRPCToCallPolicy(t *testing.T) {
 }
 
 func TestRemoteArtifactStoreBoundsStalledBridgeArtifactFetch(t *testing.T) {
-	socketDir, err := os.MkdirTemp("/private/tmp", "digbridge-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(socketDir) })
+	socketDir := bridgeSocketTempDir(t)
 	socket := filepath.Join(socketDir, "bridge.sock")
 	listener, err := net.Listen("unix", socket)
 	if err != nil {
@@ -371,17 +388,14 @@ func TestNewExecutorReportsPrivateStartupStatus(t *testing.T) {
 		t.Fatal(err)
 	}
 	executable := filepath.Join(dir, "bridge-failure")
-	script := `#!/bin/sh
-while [ "$#" -gt 0 ]; do
-  if [ "$1" = "--startup-status" ]; then
-    printf '%s' 'configured Chrome profile is already owned by another local DigCrawl bridge' > "$2"
-    exit 1
-  fi
-  shift
-done
-exit 1
-`
-	if err := os.WriteFile(executable, []byte(script), 0o700); err != nil {
+	if runtime.GOOS == "windows" {
+		executable += ".exe"
+	}
+	data, err := os.ReadFile(os.Args[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(executable, data, 0o700); err != nil {
 		t.Fatal(err)
 	}
 	// This matches the production startup budget plus a small scheduling margin:
@@ -389,7 +403,7 @@ exit 1
 	// busy local test runner schedules a child in an arbitrary three seconds.
 	ctx, cancel := context.WithTimeout(context.Background(), startupTimeout+2*time.Second)
 	defer cancel()
-	_, err := NewExecutor(ctx, executable, profile, &config.Config{})
+	_, err = NewExecutor(ctx, executable, profile, &config.Config{})
 	if err == nil || !strings.Contains(err.Error(), "configured Chrome profile is already owned") {
 		t.Fatalf("startup error=%v, want private startup diagnostic", err)
 	}

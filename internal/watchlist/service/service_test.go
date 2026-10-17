@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -64,43 +65,72 @@ func (r blockingFeedReader) ListLatest(ctx context.Context, item WatchItem) ([]F
 }
 
 func TestRunDueRenewsTaskAndWatchLocks(t *testing.T) {
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
 	st, err := watchlist.OpenStore(filepath.Join(t.TempDir(), "watch.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer st.Close()
+	// Windows CI can spend hundreds of milliseconds in SQLite commits and
+	// scheduling. Keep a realistic lease while holding work beyond two full
+	// lease periods so the assertion still requires actual renewal.
+	const lockTTL = 3 * time.Second
 	cfg := &config.Config{Watchlist: config.WatchlistConfig{
-		DryRun: boolPtr(true), DefaultInterval: "6h", LockTTL: "300ms",
+		DryRun: boolPtr(true), DefaultInterval: "6h", LockTTL: lockTTL.String(),
 		LoginRecovery: config.WatchlistLoginRecoveryConfig{Enabled: boolPtr(true)},
 		Items:         []config.WatchlistItem{{ID: "source", Platform: "feed", Type: "rss", URL: "https://example.com/feed", Enabled: boolPtr(true)}},
 	}}
 	reader := blockingFeedReader{entered: make(chan struct{}), release: make(chan struct{})}
+	release := sync.OnceFunc(func() { close(reader.release) })
 	svc := &Service{cfg: cfg, store: st, feeds: reader, notifier: &recordingNotifier{}, owner: "test"}
-	done := make(chan error, 1)
+	type runResult struct {
+		summaries []RunSummary
+		err       error
+	}
+	done := make(chan runResult, 1)
 	go func() {
-		_, err := svc.RunDue(ctx, time.Now())
-		done <- err
+		defer close(done)
+		summaries, err := svc.RunDue(ctx, time.Now())
+		done <- runResult{summaries, err}
+	}()
+	defer func() {
+		release()
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(15 * time.Second):
+			t.Error("scheduled task did not stop during cleanup")
+		}
 	}()
 	select {
 	case <-reader.entered:
-	case <-time.After(3 * time.Second):
+	case result := <-done:
+		t.Fatalf("scheduled task exited before source discovery: summaries=%+v err=%v", result.summaries, result.err)
+	case <-time.After(15 * time.Second):
 		t.Fatal("scheduled task did not enter source discovery")
 	}
-	time.Sleep(800 * time.Millisecond)
+
+	timer := time.NewTimer(2*lockTTL + time.Second)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+	case result := <-done:
+		t.Fatalf("scheduled task stopped while source discovery was blocked: summaries=%+v err=%v", result.summaries, result.err)
+	}
 	if locked, err := st.AcquireTaskLock(ctx, "source", "other", time.Second); err != nil || locked {
 		t.Fatalf("task lock expired during active work: acquired=%v err=%v", locked, err)
 	}
 	if locked, err := st.AcquireLock(ctx, "source", "other", time.Second); err != nil || locked {
 		t.Fatalf("watch lock expired during active work: acquired=%v err=%v", locked, err)
 	}
-	close(reader.release)
+	release()
 	select {
-	case err := <-done:
-		if err != nil {
-			t.Fatal(err)
+	case result := <-done:
+		if result.err != nil {
+			t.Fatal(result.err)
 		}
-	case <-time.After(3 * time.Second):
+	case <-time.After(15 * time.Second):
 		t.Fatal("scheduled task did not finish")
 	}
 }

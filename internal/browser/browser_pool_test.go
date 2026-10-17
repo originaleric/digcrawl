@@ -238,6 +238,9 @@ func TestManagedConfigDisablesExternalCDPAndPrefersConfiguredChrome(t *testing.T
 	connected := true
 	cdpMode := true
 	chrome := filepath.Join(t.TempDir(), "chrome")
+	if runtime.GOOS == "windows" {
+		chrome += ".exe"
+	}
 	if err := os.WriteFile(chrome, []byte("#!/bin/sh\n"), 0o700); err != nil {
 		t.Fatal(err)
 	}

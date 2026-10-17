@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -21,6 +22,16 @@ import (
 	"github.com/originaleric/digcrawl/config"
 	"github.com/originaleric/digcrawl/transport/bridge"
 )
+
+// The Bridge fixture is a copy of the native test executable so child launch
+// and process ownership use the same argument shape on Unix and Windows.
+func TestMain(m *testing.M) {
+	if strings.TrimSuffix(filepath.Base(os.Args[0]), ".exe") == "digcrawl-bridge-test-helper" && len(os.Args) > 1 && os.Args[1] == "bridge" {
+		run(append([]string{"digcrawl"}, os.Args[1:]...))
+		os.Exit(0)
+	}
+	os.Exit(m.Run())
+}
 
 func TestMCPStdioHelper(t *testing.T) {
 	if os.Getenv("DIGCRAWL_MCP_STDIO_HELPER") != "1" {
@@ -60,7 +71,7 @@ func TestBridgeServeRejectsUnmanagedForegroundWorker(t *testing.T) {
 func TestMCPPhaseOneProfileExposesOnlyReadTools(t *testing.T) {
 	profilePath := writeMCPPhaseOneProfile(t)
 	t.Cleanup(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), bridgeStopTimeout)
 		defer cancel()
 		if _, err := bridge.Stop(ctx, profilePath); err != nil {
 			t.Errorf("stop test bridge: %v", err)
@@ -227,7 +238,7 @@ func TestBridgeRestartReplacesRunningBridge(t *testing.T) {
 	waitForMCPTestBridge(t, profilePath)
 	oldPID := waitForMCPTestBridgePID(t, socket)
 	t.Cleanup(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), bridgeStopTimeout)
 		defer cancel()
 		if _, stopErr := bridge.Stop(ctx, profilePath); stopErr != nil {
 			t.Errorf("stop replacement bridge: %v", stopErr)
@@ -291,7 +302,7 @@ func TestConcurrentExecutorsLeaveOneManagedBridgeWorker(t *testing.T) {
 		}
 	}
 	t.Cleanup(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), bridgeStopTimeout)
 		defer cancel()
 		if _, stopErr := bridge.Stop(ctx, profilePath); stopErr != nil {
 			t.Errorf("stop concurrent test bridge: %v", stopErr)
@@ -310,9 +321,16 @@ func TestConcurrentExecutorsLeaveOneManagedBridgeWorker(t *testing.T) {
 
 func writeMCPBridgeExecutable(t *testing.T) string {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "digcrawl-bridge-test-helper")
-	script := "#!/bin/sh\nDIGCRAWL_BRIDGE_HELPER=1 exec " + strconv.Quote(os.Args[0]) + " -test.run='^TestMCPBridgeHelper$' -- \"$@\"\n"
-	if err := os.WriteFile(path, []byte(script), 0o700); err != nil {
+	name := "digcrawl-bridge-test-helper"
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	path := filepath.Join(t.TempDir(), name)
+	data, err := os.ReadFile(os.Args[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0o700); err != nil {
 		t.Fatal(err)
 	}
 	return path
@@ -350,21 +368,10 @@ func waitForMCPTestBridge(t *testing.T, profilePath string) {
 
 func waitForMCPTestBridgePID(t *testing.T, socket string) int {
 	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		output, err := exec.Command("ps", "-ax", "-o", "pid=,command=").Output()
-		if err == nil {
-			needle := "--socket " + socket
-			for _, line := range strings.Split(string(output), "\n") {
-				fields := strings.Fields(line)
-				if len(fields) < 2 || !strings.Contains(line, "bridge serve") || !strings.Contains(line, needle) {
-					continue
-				}
-				pid, parseErr := strconv.Atoi(fields[0])
-				if parseErr == nil && pid > 0 {
-					return pid
-				}
-			}
+		if pids := mcpTestBridgePIDs(t, socket); len(pids) > 0 {
+			return pids[0]
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
@@ -374,6 +381,41 @@ func waitForMCPTestBridgePID(t *testing.T, socket string) int {
 
 func mcpTestBridgePIDs(t *testing.T, socket string) []int {
 	t.Helper()
+	if runtime.GOOS == "windows" {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		output, err := exec.CommandContext(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", "Get-CimInstance Win32_Process -Filter \"CommandLine LIKE '%bridge serve%'\" | Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress").Output()
+		if err != nil {
+			t.Fatalf("inspect MCP-launched bridge workers: %v", err)
+		}
+		type process struct {
+			PID     int    `json:"ProcessId"`
+			Command string `json:"CommandLine"`
+		}
+		var processes []process
+		value := strings.TrimSpace(string(output))
+		if value == "" || value == "null" {
+			return nil
+		}
+		if strings.HasPrefix(value, "{") {
+			var single process
+			err = json.Unmarshal(output, &single)
+			processes = append(processes, single)
+		} else {
+			err = json.Unmarshal(output, &processes)
+		}
+		if err != nil {
+			t.Fatalf("decode bridge process table: %v", err)
+		}
+		var pids []int
+		for _, candidate := range processes {
+			if candidate.PID > 0 && strings.Contains(candidate.Command, "bridge serve") &&
+				(strings.Contains(candidate.Command, "--socket "+socket) || strings.Contains(candidate.Command, "--socket \""+socket+"\"")) {
+				pids = append(pids, candidate.PID)
+			}
+		}
+		return pids
+	}
 	output, err := exec.Command("ps", "-ax", "-o", "pid=,command=").Output()
 	if err != nil {
 		t.Fatalf("inspect MCP-launched bridge workers: %v", err)
@@ -394,6 +436,15 @@ func mcpTestBridgePIDs(t *testing.T, socket string) []int {
 }
 
 func mcpTestProcessLive(pid int) (bool, error) {
+	if runtime.GOOS == "windows" {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		output, err := exec.CommandContext(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", "$process = Get-Process -Id "+strconv.Itoa(pid)+" -ErrorAction SilentlyContinue; if ($null -ne $process) { 'alive' }; exit 0").Output()
+		if err != nil {
+			return false, err
+		}
+		return strings.TrimSpace(string(output)) == "alive", nil
+	}
 	output, err := exec.Command("ps", "-p", strconv.Itoa(pid), "-o", "stat=").Output()
 	if err != nil {
 		if _, ok := err.(*exec.ExitError); ok {

@@ -36,8 +36,8 @@ func runBrowser(args []string) {
 
 func printBrowserUsage() {
 	fmt.Fprintf(os.Stderr, `浏览器会话命令:
-  digcrawl browser login --platform xiaohongshu|douyin|toutiao|threads|instagram
-  digcrawl browser check --platform xiaohongshu|douyin|toutiao|threads|instagram [--url URL] [--trial]
+  digcrawl browser login --platform xiaohongshu|douyin|toutiao|threads|instagram|youtube
+  digcrawl browser check --platform xiaohongshu|douyin|toutiao|threads|instagram|youtube [--url URL] [--trial]
 
 不传 --config 时，优先使用当前项目的 config/config.yaml，其次使用用户级 Skill profile；定制 profile 请显式传 --config。
 `)
@@ -46,7 +46,7 @@ func printBrowserUsage() {
 func runBrowserLogin(args []string) {
 	fs := flag.NewFlagSet("browser login", flag.ExitOnError)
 	configPath := fs.String("config", "", "path to profile (default: project config, then user skill profile)")
-	platform := fs.String("platform", "", "platform: xiaohongshu, douyin, toutiao, threads, instagram")
+	platform := fs.String("platform", "", "platform: xiaohongshu, douyin, toutiao, threads, instagram, youtube")
 	_ = fs.Parse(args)
 
 	path, err := browserProfilePath(*configPath)
@@ -90,7 +90,7 @@ func recordWatchlistLogin(cfg *config.Config, platform string) error {
 func runBrowserCheck(args []string) {
 	fs := flag.NewFlagSet("browser check", flag.ExitOnError)
 	configPath := fs.String("config", "", "path to profile (default: project config, then user skill profile)")
-	platform := fs.String("platform", "", "platform: xiaohongshu, douyin, toutiao, threads, instagram")
+	platform := fs.String("platform", "", "platform: xiaohongshu, douyin, toutiao, threads, instagram, youtube")
 	probeURL := fs.String("url", "", "optional probe URL for trial read")
 	trial := fs.Bool("trial", false, "require trial read (needs --url or Platform.HealthProbes)")
 	_ = fs.Parse(args)
