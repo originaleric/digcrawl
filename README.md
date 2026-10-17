@@ -1,275 +1,406 @@
 <h1 align="center">DigCrawl</h1>
 
-<p align="center">
-  Local-first content collection and normalization for people, pipelines, and AI agents.
-</p>
+<p align="center"><strong>Multi-platform content retrieval for AI agents.</strong></p>
 
-<p align="center">
-  Read web and supported social content, then export reliable Markdown, HTML, JSON, media metadata, and structured diagnostics.
-</p>
+<p align="center">Retrieve pages, text, images, and video from public and user-authorized signed-in sources.</p>
 
 <p align="center">
   <a href="./README.zh-CN.md">中文</a> ·
-  <a href="./USAGE.md">Usage</a> ·
-  <a href="./docs/DigCrawl功能与使用手册.md">Documentation</a> ·
-  <a href="./.agents/skills/digcrawl/">Agent Skill</a> ·
+  <a href="#quick-start">Quick start</a> ·
+  <a href="#supported-sources">Sources</a> ·
+  <a href="#collect-export-and-watch">Collect &amp; watch</a> ·
+  <a href="#documentation">Docs</a> ·
   <a href="https://github.com/originaleric/digcrawl/releases">Releases</a>
 </p>
 
 <p align="center">
   <a href="./LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/License-MIT-blue.svg"></a>
-  <img alt="Language: Go" src="https://img.shields.io/badge/language-Go-00ADD8">
-  <img alt="Interfaces: CLI, MCP, HTTP" src="https://img.shields.io/badge/interfaces-CLI%20%7C%20MCP%20%7C%20HTTP-2aa7b8">
-  <img alt="Runs locally" src="https://img.shields.io/badge/runtime-local--first-111111">
+  <img alt="Local-first" src="https://img.shields.io/badge/runtime-local--first-111111">
+  <img alt="CLI, MCP, HTTP" src="https://img.shields.io/badge/interfaces-CLI%20%7C%20MCP%20%7C%20HTTP-0071e3">
 </p>
 
-DigCrawl is a local-first content collection and normalization engine. It reads public web pages and supported social platforms; when a source requires it, it can reuse a user-approved local browser session. The result is structured content that people, data workflows, and AI agents can use directly.
+<p align="center">
+  <img src="./docs/assets/readme/hero.en.svg" width="100%" alt="DigCrawl retrieves pages, posts, images and video for your agent using user-authorized sessions">
+</p>
 
-```text
-URL or source list
-        │
-        ▼
-identify → collect → normalize → export / index / notify
-        │                 │
-        │                 └── Markdown · HTML · JSON · media metadata · diagnostics
-        ▼
-static HTML / API / RSS first, local browser fallback when configured
-```
 
 ## DigCrawl Skill: Run It in Your Agent
 
-DigCrawl includes an official [Agent Skill](./.agents/skills/digcrawl/) for Codex, Claude Code, and other MCP-compatible agents. The Skill gives an agent platform-aware link routing, safe handling for sign-in and rate-limit states, and clear boundaries around local browser sessions.
+**Paste into your agent chat** (Codex, Grok Build, Claude Code, or similar):
 
-Once the `digcrawl` binary is installed, the setup has three steps:
-
-```bash
-# 1. Create the keyless local Skill profile.
-digcrawl init --profile skill
-
-# 2. Verify the profile and local runtime.
-digcrawl doctor --config "$HOME/.config/digcrawl/digcrawl-skill.yaml"
-
-# 3. Start the MCP server (your Agent normally starts this from its configuration).
-digcrawl mcp --config "$HOME/.config/digcrawl/digcrawl-skill.yaml"
+```text
+Install the DigCrawl Skill for me: https://github.com/originaleric/digcrawl
 ```
 
-Add the same local MCP command to the Agent you use:
+Follow the instructions to restart your agent or open a new chat, then send a link:
 
-| Agent | Configuration example |
-| --- | --- |
-| Codex | [`codex/config.toml.example`](./.agents/skills/digcrawl/codex/config.toml.example) |
-| Claude Code | [`claude-code/.mcp.json.example`](./.agents/skills/digcrawl/claude-code/.mcp.json.example) |
-| Any MCP-compatible Agent | Follow the portable [MCP stdio contract](./.agents/skills/digcrawl/mcp/README.md): configure `digcrawl mcp --config <absolute-profile-path>` as a local stdio server. |
-
-The Agent Skills format makes the complete `SKILL.md` bundle portable; MCP makes its stdio tool contract portable. Neither standard defines one universal host configuration file or Skill discovery path, so the bundle is intentionally host-neutral and the small registration adapters remain host-specific.
-
-After configuration, simply give your Agent a supported URL and ask it to read, summarize, compare, quote, or—when explicitly requested—transcribe it. The Agent uses DigCrawl locally and preserves structured outcomes such as login required, captcha, or rate limiting.
-
-For a supported platform video, explicitly ask the Agent to save that platform's videos. The Skill enables only the requested provider in the user-owned local `VideoDownload` profile and can use a user-specified absolute directory or its profile-local default. Bilibili, Douyin, Instagram, Kuaishou, Threads, Toutiao, Weibo, Xiaohongshu, YouTube, and Zhihu are eligible; X, Reddit, and WeChat are not in this video-retention path. Provider image retention is separate and opt-in through `ImageDownload`: it supports single-content providers (including X, Reddit, WeChat, and browser web pages), saves a complete bounded image set or none, and never enables OCR by itself. For a direct local file or media URL, use `digcrawl video`; `--keep <path>` controls retention for that one CLI invocation.
-
-The Skill does not include API keys or expose browser cookies. See the [Agent Skill](./.agents/skills/digcrawl/) for routing behavior and [Use with AI Agents](#use-with-ai-agents) for security details.
+```text
+Read and summarize this link: <URL>
+```
 
 ## Quick Start
 
-Install the current verified release on macOS or Linux—**Go is not required**:
+**Install in your terminal** (macOS / Linux, no Go required):
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/originaleric/digcrawl/main/scripts/install.sh | sh
 ```
 
-The installer detects the operating system and CPU architecture, downloads the matching GitHub Release, verifies it against `checksums.txt`, and installs `digcrawl` to `~/.local/bin`. It also installs the complete portable Agent Skill under `$XDG_DATA_HOME/digcrawl/skills/digcrawl` (or `~/.local/share/digcrawl/skills/digcrawl`), creates the keyless Skill profile when needed, and prints the standard MCP stdio launch contract. It installs the Claude Code Skill when Claude is detected, and atomically registers (or repairs) the Codex adapter at its effective user or project configuration, always using the stable installed binary rather than a build or temporary path. It never uses `sudo` or changes shell configuration. `--skip-codex` leaves the portable setup intact; use `--skip-agent-setup` for a binary-only install. To review or pin the installer, download it first or pass a release tag:
+The installer verifies downloads and installs the program, complete Skill, and default profile.
 
-```bash
-curl -fsSLO https://raw.githubusercontent.com/originaleric/digcrawl/main/scripts/install.sh
-sh install.sh --version vX.Y.Z
-# Optional: keep the portable Skill but do not modify Codex.
-sh install.sh --skip-codex
-# Optional: install the binary only.
-sh install.sh --skip-agent-setup
-```
+<details>
+<summary>Install location, other hosts, and Windows</summary>
 
-If `~/.local/bin` is not in `PATH`, add it using your shell’s normal configuration, then restart the shell. Windows users should download the matching `.zip` from [GitHub Releases](https://github.com/originaleric/digcrawl/releases). Full manual-install and checksum instructions are in the [usage guide](./USAGE.md).
+- Configures Codex automatically and installs the Claude Code Skill when detected. See [MCP setup](./.agents/skills/digcrawl/mcp/README.md) for other hosts.
+- Installs to `~/.local/bin`; add it to `PATH` if the command is not found.
+- For Windows, download a [Release](https://github.com/originaleric/digcrawl/releases). See [installation](./USAGE.md#1-安装) for version pinning and source builds.
 
-After the installer registers or repairs Codex, restart Codex Desktop and create a new task so it loads the new MCP tool catalog. Existing tasks cannot retroactively acquire an MCP server that failed during their startup.
-
-Confirm the binary and, if you used `--skip-agent-setup`, initialize a local Agent/MCP profile manually:
-
-```bash
-digcrawl version
-digcrawl init --profile skill
-digcrawl config validate --config "$HOME/.config/digcrawl/digcrawl-skill.yaml"
-digcrawl doctor --config "$HOME/.config/digcrawl/digcrawl-skill.yaml"
-```
-
-To enable local video transcription, prepare the same Skill profile's isolated runtime and model once:
-
-```bash
-digcrawl asr setup --config "$HOME/.config/digcrawl/digcrawl-skill.yaml" --scope skill --yes
-digcrawl asr check --config "$HOME/.config/digcrawl/digcrawl-skill.yaml" --scope skill
-```
-
-On macOS and Linux, the default profile is stored in `$XDG_CONFIG_HOME/digcrawl/` (or `~/.config/digcrawl/`). On Windows it is stored in `%APPDATA%\DigCrawl\`. `init` never overwrites an existing profile unless `--force` is supplied.
-
-Developers who want to build from source need Go 1.26.1+; see the [development installation instructions](./USAGE.md#从源码运行). For installation, release verification, configuration, and troubleshooting, see the [usage guide](./USAGE.md).
+</details>
 
 ## What You Can Do
 
-| You want to… | Use DigCrawl to… | Start with |
-| --- | --- | --- |
-| Archive a single page | Extract a page or post into portable Markdown, HTML, JSON, and optional media assets. | `digcrawl collect <url>` |
-| Collect a queue of URLs | Process a file or local inbox and retain an index or database record. | `digcrawl collect --file urls.txt` |
-| Analyze a video file or direct URL | Extract speech transcripts and on-screen text from a local video or direct media URL. | `digcrawl video ./video.mp4` |
-| Monitor new content | Discover new items from feeds, lists, profiles, or pages, then collect and notify on a schedule. | `digcrawl watchlist run --once` |
-| Give an AI agent reading tools | Run a local MCP server with the official Skill and platform-aware tool routing. | `digcrawl mcp --config <profile>` |
-| Integrate a host application | Use HTTP Gateway, Collector, stdio, or the Go SDK. | [transport docs](./transport/README.md) |
+| Use case | Capability |
+| --- | --- |
+| Content retrieval | Read pages, articles, posts, and source images |
+| Video understanding | Retrieve available captions; optionally transcribe speech and recognize on-screen text |
+| Ongoing collection | Process URL batches, monitor updates, and notify |
+| Agent reading | Supply source content for summaries, comparisons, and research |
 
 ## Supported Sources
 
-DigCrawl treats crawling as a stable pipeline—**crawl, collect, normalize, export**—rather than as a browser gateway. It uses static HTML, platform APIs, and RSS/Atom before falling back to a local browser where that path is enabled.
+- **Posts and communities**: WeChat Official Accounts, Xiaohongshu, Weibo, Zhihu, X, Reddit, Threads, Instagram.
+- **Video and content platforms**: Douyin, Toutiao, Bilibili, Kuaishou, YouTube.
+- **Web and feeds**: Web pages, RSS, Atom, sitemaps, platform lists, and profiles.
 
-| Source group | Supported sources |
-| --- | --- |
-| Social content | WeChat Official Accounts, Xiaohongshu, Douyin, Toutiao, X, Reddit, Threads, Instagram, Bilibili, Weibo, Kuaishou, Zhihu, and YouTube |
-| Syndication and discovery | RSS, Atom, sitemap, platform lists, profile pages, and supported content feeds |
-| The open web | Any `http` or `https` page through the generic browser reader |
-
-Platform readers return structured states such as `LOGIN_REQUIRED`, `CAPTCHA_REQUIRED`, `RATE_LIMITED`, and `CONTENT_TYPE_MISMATCH`. A blocked or private page is never silently exported as valid content.
-
-Public X posts are read through the public Syndication endpoint first, then retain the existing Tweet API, oEmbed, and browser fallbacks. This obtains post text, public images, and the best available direct MP4 reference when the endpoint supplies it; it neither uses cookies nor reads private or login-gated posts. `ImageDownload` is a separate, per-provider opt-in for retaining original images locally. It is independent from OCR and from Collect's `.assets` output: a requested image set is saved atomically within configured size, item, and timeout bounds, or not retained at all.
-
-See [supported platforms and source boundaries](./USAGE.md) for URL patterns, authentication behavior, and configuration.
+See [source details](./USAGE.md#支持的内容来源) for platform capabilities and login requirements.
 
 ## Collect, Export, and Watch
 
-Collect one URL or a batch:
+Save retrieved content as Markdown, HTML, JSON, and optional media files, or monitor sources continuously with Watchlist.
+
+
+<details>
+<summary>Common CLI commands: pages, batches, video, and watchlists</summary>
 
 ```bash
-./digcrawl collect "https://mp.weixin.qq.com/s/..." --format md,html,json
-./digcrawl collect --file urls.txt --format md,json --out ./collect-output
-./digcrawl collect inbox --watch
+# Single pages and batches
+digcrawl collect "https://mp.weixin.qq.com/s/..." --format md,html,json
+digcrawl collect --file urls.txt --out ./collect-output
+
+# Analyze local video using the configured processors
+digcrawl video ./meeting.mp4
+
+# Run once or monitor continuously
+digcrawl watchlist run --once --config config/config.yaml
+digcrawl watchlist serve --config config/config.yaml
 ```
 
-Analyze a local video or a directly downloadable video URL:
+Transcription and OCR require the relevant dependencies; see [video analysis](./USAGE.md#直接视频解析) and [Collect](./collect/README.md).
 
-```bash
-# Run processors enabled in the ASR and video-frame OCR configuration.
-./digcrawl video ./meeting.mp4
-
-# Run both ASR and frame OCR, then export Markdown.
-./digcrawl video "https://cdn.example.com/meeting.mp4" --mode both --format md --out meeting.md
-
-# Run speech transcription or on-screen text recognition only.
-./digcrawl video ./meeting.mp4 --mode asr
-./digcrawl video ./meeting.mp4 --mode ocr
-```
-
-Video URLs must point directly to downloadable media; use the relevant collection tool for platform page URLs. Remote videos are deleted after processing unless `--keep ./video.mp4` is supplied. Unless `--config` is supplied, active root ASR/OCR settings in `config/config.yaml` take priority and inactive processors can fall back to the active settings in the standard user Skill profile.
-
-Run a watchlist once, or keep its scheduler running locally:
-
-```bash
-./digcrawl watchlist run --once --config config/config.yaml
-./digcrawl watchlist serve --config config/config.yaml
-```
-
-Watchlist execution is serial by default. To opt in to bounded parallel source
-runs and item processing, configure Watchlist.Scheduler.MaxConcurrentRuns and
-Watchlist.Collect.MaxConcurrentItems; shared collection output paths,
-index.json, and per-platform request spacing remain protected.
-
-Typical output is organized for both humans and downstream programs:
-
-```text
-collect-output/
-  index.json
-  <platform-or-web>/<slug>/
-    content.md
-    content.html
-    content.json
-    .assets/
-```
-
-DigCrawl can persist collection records in `index.json`, SQLite, or both. Watchlists can use YAML, SQLite, or MySQL according to the selected configuration.
+</details>
 
 ## Use with AI Agents
 
-The repository includes the official [DigCrawl Agent Skill](./.agents/skills/digcrawl/). It teaches compatible agents how to route links to the right local MCP tool, handle sign-in and rate-limit states, and avoid exposing a user’s cookies.
+Original pages beside actual retrieval results (2026-10-17). WeChat uses a source excerpt; video examples did not run speech transcription.
 
-Each Release archive contains the full portable Skill at `skills/digcrawl/`; the installer keeps a stable copy in its printed data directory. Copy or link that whole directory into the user or project Skill location documented by your host, rather than copying only `SKILL.md`. The installer can repair the Codex adapter and installs the Claude Code Skill when detected, but it does not guess other hosts' configuration files.
+### Article · WeChat
 
-For every MCP-capable host, register the local server with the absolute binary and profile path specified by the [generic stdio contract](./.agents/skills/digcrawl/mcp/README.md):
-
-```toml
-[mcp_servers.digcrawl]
-command = "/absolute/path/to/digcrawl"
-args = ["mcp", "--config", "/absolute/path/to/digcrawl-skill.yaml"]
+```text
+Read this agent article and extract its text and sections. https://mp.weixin.qq.com/s/mbU0bE6BV5YfAsTmoY4H3A
 ```
 
-Codex and Claude Code examples are available in the [Skill directory](./.agents/skills/digcrawl/). The first `digcrawl mcp` call starts one private, profile-scoped local Bridge; stdio children forward to that singleton rather than each owning a Runtime, Chrome, or fixed CDP port. Profile symlink aliases resolve to that same Bridge. A persistent `LocalBrowser.UserDataDir` may be owned by only one Bridge at a time; use a distinct directory for an intentionally separate configuration, rather than silently mixing their policies. `bridge serve` is an internal worker command; `mcp` is the only normal start entry point. The lifecycle has one OS file lock per profile and one worker-owned process group: the lock admits exactly one worker, and that worker records its private group only so a later starter can wait for Chrome to release the profile after an interrupted stop. `digcrawl bridge stop --config <profile>` directly kills the current worker group; it does not drain MCP work, make an HTTP shutdown request, or perform a rolling handoff. If a previously signalled group outlives its parent, stop holds the same lock and waits or reports its deadline—it never trusts an old numeric PID group enough to signal a potentially recycled group. A browser CDP transport loss during a read retires that connection and replays the idempotent read once within its original deadline. OCR is enrichment: when a configured OCR provider is unavailable, retrieved page text remains successful and `platform_metadata.ocr_status` is `degraded` with a stable reason. The release installer uses its verified staged binary to stop the standard profile's old Bridge before replacing the installed binary. The CLI instead reclaims unused stdio proxies: uninitialized pipes expire after one minute, and initialized sessions expire after 15 minutes without an actual `tools/call`; only `initialize` and `tools/call` count as activity, while MCP `ping` packets do not keep an inactive child alive. A positive `--idle-timeout` changes that initialized-session interval while retaining the one-minute initialization grace. Pass `--idle-timeout=0` only for a host that genuinely requires an unbounded stdio connection.
+<p align="center">
+  <img src="./docs/assets/readme/examples/wechat.en.svg?v=c65d6772" width="100%" alt="WeChat: success">
+</p>
 
-The default Skill is intentionally keyless. It uses the host agent’s multimodal model for page screenshots and image understanding; optional local ASR remains explicit and requires local dependencies and configuration.
+[Source](https://mp.weixin.qq.com/s/mbU0bE6BV5YfAsTmoY4H3A) · Retrieved the article text, sections, and 7 image references.
 
-Browser reads and platform fallbacks share one total browser deadline and at most one automatic fault retry. Cancellation, send-queue contention, login requirements, and page changes do not trigger unconditional replay. Navigation or document reload during extraction discards the mixed result. Confirmed browser, Feed/Reddit RSS, and merged Bilibili media sources are checked against the call policy before delivery, downloads, or storage. For `BROWSER_*` failures, `error_details` includes the failed stage, recovery outcome, `next_actions`, and `diagnostic_id`; an agent receiving `handled: true` should complete the indicated prerequisite before starting a new read. See the [troubleshooting and upgrade steps](./USAGE.md#浏览器超时或反复失败).
+<details>
+<summary>View returned field excerpts</summary>
+
+```json
+{
+  "status": "success",
+  "title": "别再只卷Prompt 了，真正拉开Agent差距的是Context Engineering",
+  "author": "腾讯技术工程",
+  "media_references": {
+    "image": 7
+  },
+  "excerpt": "Prompt Engineering → ReAct → Context Engineering\nContext 的七类构成要素\n长任务的三大核心技术"
+}
+```
+
+[Verification data](./docs/assets/readme/examples/wechat.json)
+
+</details>
+
+### Image Note · Xiaohongshu
+
+```text
+Read this agent image note and extract its text and images. <paste the full Xiaohongshu share link>
+```
+
+<p align="center">
+  <img src="./docs/assets/readme/examples/xiaohongshu.en.svg?v=63ceefe9" width="100%" alt="Xiaohongshu: success">
+</p>
+
+[Source](https://www.xiaohongshu.com/explore/6ac20976000000001c00ca12) · [Original screenshot](./docs/assets/readme/examples/originals/xiaohongshu.jpg) · Used an authorized local session to retrieve the note text and 2 image references. Use the full share link.
+
+<details>
+<summary>View returned field excerpts</summary>
+
+```json
+{
+  "status": "success",
+  "title": "2026 Agent新物种地图｜20款近期高热 Agent",
+  "author": "略懂AI的Asher",
+  "media_references": {
+    "image": 2
+  },
+  "excerpt": "能力范式转向；组织形态重组；负责周期跨越",
+  "image_observation": [
+    "Personal",
+    "Coding",
+    "Workflow",
+    "Research",
+    "Creative"
+  ]
+}
+```
+
+[Verification data](./docs/assets/readme/examples/xiaohongshu.json)
+
+</details>
+
+### Video
+
+#### Bilibili · Agent Fundamentals
+
+```text
+Read this agent tutorial and extract its title, description, and parts. https://www.bilibili.com/video/BV1z3ZFYUE6K/
+```
+
+<p align="center">
+  <img src="./docs/assets/readme/examples/bilibili.en.svg?v=bb1ce02b" width="100%" alt="Bilibili: success">
+</p>
+
+[Source](https://www.bilibili.com/video/BV1z3ZFYUE6K/) · [Original screenshot](./docs/assets/readme/examples/originals/bilibili.jpg) · Retrieved video metadata and media references; transcription was not requested.
+
+<details>
+<summary>View returned field excerpts</summary>
+
+```json
+{
+  "status": "success",
+  "title": "李宏毅：一堂课搞懂AI Agent原理【生成式AI的机器学习(2025)】大模型LLM",
+  "author": "AI算法工程师笔记-",
+  "media_references": {
+    "image": 1,
+    "video": 2
+  },
+  "excerpt": "分P1: 第二讲：一堂课搞懂AI Agent原理\n分P2: 大模型路线图-\n分P4: ML2025Agent"
+}
+```
+
+[Verification data](./docs/assets/readme/examples/bilibili.json)
+
+</details>
+
+#### X · Operator Demo
+
+```text
+Read this Operator video post and extract its text and video information. https://x.com/OpenAI/status/1882509286439637448
+```
+
+<p align="center">
+  <img src="./docs/assets/readme/examples/x.en.svg?v=02a9c970" width="100%" alt="X: success">
+</p>
+
+[Source](https://x.com/OpenAI/status/1882509286439637448) · [Original screenshot](./docs/assets/readme/examples/originals/x.jpg) · Retrieved the post text, video reference, and cover reference; no transcription was requested.
+
+<details>
+<summary>View returned field excerpts</summary>
+
+```json
+{
+  "status": "success",
+  "title": "A research preview of Operator, an agent that can use its own browser to perform...",
+  "author": "OpenAI",
+  "media_references": {
+    "video": 1,
+    "image": 1
+  },
+  "excerpt": "A research preview of Operator, an agent that can use its own browser to perform tasks for you."
+}
+```
+
+[Verification data](./docs/assets/readme/examples/x.json)
+
+</details>
+
+#### YouTube · Agent Building Advice
+
+```text
+Read this agent video and extract its description and chapters. https://www.youtube.com/watch?v=LP5OCa20Zpg
+```
+
+<p align="center">
+  <img src="./docs/assets/readme/examples/youtube.en.svg?v=ceb49958" width="100%" alt="YouTube: original video page and retrieved content">
+</p>
+
+[Source](https://www.youtube.com/watch?v=LP5OCa20Zpg) · [Original video screenshot](./docs/assets/readme/examples/originals/youtube-after-login.jpg) · Retrieved the description, chapters, and cover after sign-in; caption text was not retrieved.
+
+<details>
+<summary>View fields before and after sign-in</summary>
+
+```json
+{
+  "before_sign_in": {
+    "status": "error",
+    "error": {
+      "code": "LOGIN_REQUIRED",
+      "message": "Sign in to confirm you’re not a bot"
+    }
+  },
+  "after_sign_in": {
+    "status": "success",
+    "title": "Tips for building AI agents",
+    "author": "Anthropic",
+    "media_references": {
+      "image": 1
+    },
+    "captions_available": true,
+    "warnings": [
+      "YouTube captions were advertised but could not be read"
+    ],
+    "excerpt": "00:26 Defining AI agents and workflows\n10:47 Coding agents: Potential and challenges\n16:26 Advice for developers exploring agents"
+  }
+}
+```
+
+[After sign-in evidence](./docs/assets/readme/examples/youtube.json) · [Before sign-in evidence](./docs/assets/readme/examples/youtube-before-login.json)
+
+</details>
+
+### YouTube Sign-In
+
+On `LOGIN_REQUIRED`, ask your agent to open a dedicated, ordinary Chrome window:
+
+```text
+Open the DigCrawl sign-in window for YouTube.
+```
+
+Sign in to Google yourself, return to YouTube, then tell the agent “I’ve finished signing in.” The agent saves the local session and reads the original video again.
+
+<p align="center">
+  <img src="./docs/assets/readme/login/youtube-flow.en.svg?v=fb10ec86" width="100%" alt="Five-step local YouTube sign-in flow with original video screenshots before and after session synchronization">
+</p>
+
+<details>
+<summary>YouTube manual sign-in and session details</summary>
+
+```bash
+digcrawl browser login --config "<profile path used by MCP>" --platform youtube
+```
+
+Sign in through the dedicated Chrome window and return to YouTube, then press Enter in the original terminal. DigCrawl closes the window and synchronizes the session. On Windows, close all dedicated Chrome windows before pressing Enter.
+
+Use the same profile as MCP; your everyday browser session is not copied automatically. Credentials and cookies stay on your machine. Preserve any Google sign-in rejection; see [sign-in guidance](./USAGE.md#平台登录与健康检查).
+
+</details>
+
+### When Sign-In Is Required · Xiaohongshu Example
+
+On `LOGIN_REQUIRED`, ask your agent to open DigCrawl’s dedicated sign-in window:
+
+```text
+Open the DigCrawl sign-in window for Xiaohongshu.
+```
+
+Sign in yourself, then tell the agent “I’ve finished signing in.” The agent saves the local session and reads the original link again.
+
+<p align="center">
+  <img src="./docs/assets/readme/login/flow.en.svg?v=b147dc73" width="100%" alt="Local Xiaohongshu sign-in flow with actual platform screenshots">
+</p>
+
+<details>
+<summary>Manual sign-in and session details</summary>
+
+```bash
+digcrawl browser login --config "<profile path used by MCP>" --platform xiaohongshu
+```
+
+When running the command yourself, press Enter in that terminal after signing in. Use the same profile as MCP; your everyday browser session is not copied automatically. Credentials and cookies stay on your machine.
+
+See [sign-in guidance](./USAGE.md#平台登录与健康检查) for other platforms and troubleshooting.
+
+</details>
+
+<details>
+<summary>Manual Skill and MCP configuration</summary>
+
+Install the complete [Skill directory](./.agents/skills/digcrawl/), then configure the local server for your host:
+
+- [Codex example](./.agents/skills/digcrawl/codex/config.toml.example)
+- [Claude Code example](./.agents/skills/digcrawl/claude-code/.mcp.json.example)
+- [Other MCP hosts](./.agents/skills/digcrawl/mcp/README.md)
+
+Use absolute program and profile paths, and copy the whole Skill rather than only `SKILL.md`. See [setup](./USAGE.md#6-ide-集成mcp) for profile initialization.
+
+</details>
 
 ## Local-First Security
 
-DigCrawl runs on the user’s machine and is designed to make its access boundaries visible:
-
-- The HTTP Gateway listens locally by default.
-- Tool allowlists, domain allow/block rules, and per-tool approval markers constrain execution.
-- Browser sessions are used only through the configured local browser and are not returned as cookies or secrets.
-- Sign-in, verification, private-content, and rate-limit conditions are exposed as structured results.
-- Artifacts, audit records, and optional retention policies are managed separately from collected output.
-
-Read the [runtime documentation](./runtime/README.md) before exposing a Gateway or Collector beyond a trusted local environment.
-
-## Architecture and Interfaces
-
-| Layer | Responsibility |
-| --- | --- |
-| `collect/` | URL recognition, collection orchestration, export, indexing, and inbox processing |
-| `internal/source/` | Feed, sitemap, page, and platform discovery for Watchlist sources |
-| `internal/platform/` and `internal/browser/` | Platform readers, local browser sessions, and fallback extraction |
-| `runtime/` | Tool registry, policy, audit, artifacts, and unified execution |
-| `transport/` | HTTP Gateway, reverse Collector, MCP, stdio, and development host |
-| `protocol/` | Tool manifest, call, and result contracts |
-| `client/` | Go SDK for calling a DigCrawl HTTP Gateway |
-
-Use DigCrawl as a local CLI, a long-running Watchlist service, an HTTP Gateway, a reverse Collector, an MCP server, a stdio process, or a Go library integration.
-
-## Documentation
-
-| Document | Contents |
-| --- | --- |
-| [Usage guide](./USAGE.md) | Installation, configuration, CLI commands, collect flow, APIs, and FAQ |
-| [Chinese product guide](./docs/DigCrawl功能与使用手册.md) | Feature overview and practical operating guide |
-| [Agent Skill](./.agents/skills/digcrawl/) | Agent routing, error handling, and MCP client examples |
-| [Collect](./collect/README.md) | Output, persistence, and collection workflow |
-| [Protocol](./protocol/README.md) | `ToolManifest`, `ToolCall`, and `ToolResult` |
-| [Runtime](./runtime/README.md) | Policy, audit, and artifacts |
-| [Transport](./transport/README.md) | HTTP, Collector, MCP, stdio, and host integration |
-| [Configuration examples](./config/) | Safe-to-copy configuration templates |
-
-## Contributing
-
-Contributions are welcome. Please start by opening an issue describing the source, use case, expected behavior, and any platform restrictions. Never submit credentials, browser profiles, cookies, real access tokens, or private collected content.
-
-When adding or changing a platform reader, include reproducible fixtures or tests where the platform terms and content access allow it, and preserve structured diagnostics for login, verification, rate limiting, and unsupported content types.
-
-## Open Source Notes
-
-DigCrawl is a local content tool. You are responsible for complying with the terms of service, permissions, and applicable law for every source you collect. Do not use it to bypass authentication, access controls, captchas, or content restrictions.
-
-## License
-
-[MIT](./LICENSE)
+- Runs on your machine; HTTP Gateway listens on localhost by default.
+- The default Skill needs no API key and does not expose cookies to the agent.
+- Signed-in sources use user-authorized local sessions; users handle login and captchas.
+- Access failures and rate limits are reported explicitly; error pages are not treated as content.
 
 ### Browser recovery and diagnostics
 
-`BrowserBrowse` owns browser fault retries. Platform fallbacks share at most one additional attempt within one total browser deadline; platform and Collector retry settings no longer multiply these attempts. Normal content/selector fallbacks are counted separately. Media retention, OCR and ASR failures after a successful read do not replay the whole handler.
+Follow the returned error guidance or see [browser troubleshooting](./USAGE.md#浏览器超时或反复失败).
 
-Read `browser_diagnostics` on success and `error_details` on failure for attempt counts, recovery status and next actions. `handled: true` means the invocation already made its retry decision; agents must complete the indicated prerequisite before a new read. A CDP send-queue timeout is local contention and does not restart a healthy browser.
+<details>
+<summary>Check the local environment</summary>
 
-`digcrawl doctor --config <actual profile>` checks dependencies, Bridge transport, build identity and browser operations separately. The existing Bridge creates and closes a blank test page; doctor never starts a competing browser. Before the first MCP connection an unreachable Bridge means the operation check was not executed. `digcrawl doctor --diagnostic-id <returned ID>` reads a bounded safe local summary.
+```bash
+digcrawl doctor --config "$HOME/.config/digcrawl/digcrawl-skill.yaml"
+```
 
-After upgrading, close old DigCrawl MCP connections, run the installed binary's `digcrawl bridge restart --config <actual profile>`, then reconnect. Restart interrupts in-flight calls; clients never automatically swap Bridge versions. Occupied or unverified profiles require explicit resolution; login data and cookies are not deleted as a directory.
+See the [MCP documentation](./.agents/skills/digcrawl/mcp/README.md) for upgrade reconnection and Bridge lifecycle details.
+
+</details>
+
+## Architecture and Interfaces
+
+| Interface | Use |
+| --- | --- |
+| CLI / Watchlist | Local retrieval, batches, and scheduled monitoring |
+| Skill / MCP | Content reading tools for AI agents |
+| HTTP / stdio / Go SDK | Integration with applications and data workflows |
+
+See [Runtime](./runtime/README.md), [Transport](./transport/README.md), and [Protocol](./protocol/README.md) for internal modules and tool contracts.
+
+## Documentation
+
+**For users**
+
+- [Installation and usage](./USAGE.md) · [Product guide](./docs/DigCrawl功能与使用手册.md) · [Browser troubleshooting](./USAGE.md#浏览器超时或反复失败)
+- [Agent Skill](./.agents/skills/digcrawl/) · [MCP setup](./.agents/skills/digcrawl/mcp/README.md)
+
+**For developers**
+
+- [HTTP / stdio](./transport/README.md) · [Go SDK](./client/README.md) · [Configuration examples](./config/)
+- [Collect](./collect/README.md) · [Runtime](./runtime/README.md) · [Protocol](./protocol/README.md)
+
+## Contributing
+
+Issues and PRs are welcome. Include your use case, reproduction steps, or tests. Never commit credentials, cookies, browser data, or private content.
+
+## Open Source Notes
+
+Respect source terms, permissions, and applicable law. Do not bypass login, captchas, or access restrictions.
+
+## License
+
+[MIT License](./LICENSE)

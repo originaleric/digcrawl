@@ -273,7 +273,9 @@ ensure_skill_profile() {
 retire_standard_bridge() {
   bridge_controller="$1"
   bridge_profile=$(profile_path)
-  [ -f "$bridge_profile" ] || return
+  # A fresh install has no previous Bridge to stop. Keep this a successful
+  # no-op under set -e so installation can create the first Skill profile.
+  [ -f "$bridge_profile" ] || return 0
   "$bridge_controller" bridge stop --config "$bridge_profile"
   printf '%s\n' "Stopped the previous DigCrawl Bridge for $bridge_profile before replacing the installed binary."
 }

@@ -1071,11 +1071,16 @@ digcrawl browser login --platform douyin
 digcrawl browser login --platform toutiao
 digcrawl browser login --platform threads
 digcrawl browser login --platform instagram
+digcrawl browser login --platform youtube
 ```
+
+YouTube 登录使用普通 Chrome 的独立 profile：登录阶段不连接 CDP、不注入脚本。用户点击“登录”，完成 Google 登录并返回 YouTube，再确认保存；DigCrawl 正常关闭该专用 Chrome、等待 profile 释放后，才启动后台会话同步。Windows 用户需先关闭该专用 Chrome 的全部窗口，再确认。`youtube.video.read` 默认复用该配置目录中的 YouTube 会话；不会复制日常浏览器会话，也不会将 Google 域的 Cookie 写入 YouTube Cookie 存储。登录不保证消除平台的验证要求；若仍返回 `LOGIN_REQUIRED` 或 `CAPTCHA_REQUIRED`，按原错误处理。该会话接入用于浏览器读取，`yt-dlp` 媒体下载不自动继承它。
 
 登录后可检查会话，并可选试读一个 URL：
 
 ```bash
+digcrawl browser check --platform youtube \
+  --url "https://www.youtube.com/watch?v=LP5OCa20Zpg" --trial
 digcrawl browser check --platform toutiao \
   --url "https://www.toutiao.com/article/xxxx" --trial
 digcrawl browser check --platform threads \
@@ -1427,6 +1432,7 @@ GOROOT=/Users/dig/.gvm/gos/go1.26.1 /Users/dig/.gvm/gos/go1.26.1/bin/go build -o
 ./digcrawl browser login --platform toutiao
 ./digcrawl browser login --platform threads
 ./digcrawl browser login --platform instagram
+./digcrawl browser login --platform youtube
 
 ./digcrawl browser check --platform toutiao \
   --url "https://www.toutiao.com/article/你的文章ID/" --trial
