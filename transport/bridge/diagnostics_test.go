@@ -20,11 +20,7 @@ import (
 )
 
 func TestBuildMismatchDoesNotStartOrReplaceExistingBridge(t *testing.T) {
-	dir, err := os.MkdirTemp("/private/tmp", "dig-build-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(dir)
+	dir := bridgeSocketTempDir(t)
 	socket := filepath.Join(dir, "bridge.sock")
 	listener, err := net.Listen("unix", socket)
 	if err != nil {

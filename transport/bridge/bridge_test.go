@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -16,6 +17,23 @@ import (
 	"github.com/originaleric/digcrawl/protocol"
 	"github.com/originaleric/digcrawl/runtime/version"
 )
+
+// bridgeSocketTempDir keeps fixtures within the Unix socket path limit while
+// using a temporary root that exists on the current CI platform.
+func bridgeSocketTempDir(t *testing.T) string {
+	t.Helper()
+	base := ""
+	if runtime.GOOS == "darwin" {
+		// macOS's default per-user temporary root can itself be too long.
+		base = "/tmp"
+	}
+	dir, err := os.MkdirTemp(base, "digbridge-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	return dir
+}
 
 func TestSocketPathCanonicalizesProfileSymlink(t *testing.T) {
 	dir := t.TempDir()
@@ -81,11 +99,7 @@ func TestServeKeepsBridgeAvailableAcrossIdleGaps(t *testing.T) {
 	// macOS has a short Unix-domain socket path limit; the production socket
 	// is hashed under the user cache for this reason. Keep this fixture short
 	// too instead of accidentally testing an impossible listener path.
-	socketDir, err := os.MkdirTemp("/private/tmp", "digbridge-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(socketDir) })
+	socketDir := bridgeSocketTempDir(t)
 	socket := filepath.Join(socketDir, "bridge.sock")
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
@@ -168,11 +182,7 @@ func TestServeRejectsSecondBridgeForSamePersistentBrowserProfile(t *testing.T) {
 		t.Skipf("symlinks unavailable in this test environment: %v", err)
 	}
 	cfg.LocalBrowser.UserDataDir = profileAlias
-	socketDir, err := os.MkdirTemp("/private/tmp", "digbridge-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(socketDir) })
+	socketDir := bridgeSocketTempDir(t)
 
 	ctx, stop := context.WithCancel(context.Background())
 	defer stop()
@@ -185,7 +195,7 @@ func TestServeRejectsSecondBridgeForSamePersistentBrowserProfile(t *testing.T) {
 
 	secondCfg := bridgeTestConfig(t, dir)
 	secondCfg.LocalBrowser.UserDataDir = sharedProfile
-	err = Serve(context.Background(), secondCfg, filepath.Join(socketDir, "second.sock"))
+	err := Serve(context.Background(), secondCfg, filepath.Join(socketDir, "second.sock"))
 	if !errors.Is(err, ErrBrowserProfileInUse) {
 		t.Fatalf("second bridge error=%v, want ErrBrowserProfileInUse", err)
 	}
@@ -239,11 +249,7 @@ func TestStopDoesNotFallBackToAnInProcessControlRequest(t *testing.T) {
 }
 
 func TestExecuteBoundsStalledBridgeRPCToCallPolicy(t *testing.T) {
-	socketDir, err := os.MkdirTemp("/private/tmp", "digbridge-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(socketDir) })
+	socketDir := bridgeSocketTempDir(t)
 	socket := filepath.Join(socketDir, "bridge.sock")
 	listener, err := net.Listen("unix", socket)
 	if err != nil {
@@ -291,11 +297,7 @@ func TestExecuteBoundsStalledBridgeRPCToCallPolicy(t *testing.T) {
 }
 
 func TestRemoteArtifactStoreBoundsStalledBridgeArtifactFetch(t *testing.T) {
-	socketDir, err := os.MkdirTemp("/private/tmp", "digbridge-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(socketDir) })
+	socketDir := bridgeSocketTempDir(t)
 	socket := filepath.Join(socketDir, "bridge.sock")
 	listener, err := net.Listen("unix", socket)
 	if err != nil {
