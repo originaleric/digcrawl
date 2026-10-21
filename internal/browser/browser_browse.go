@@ -455,7 +455,9 @@ func captureMediaURLs(page *rod.Page) ([]string, error) {
 		return nil, err
 	}
 	var urls []string
-	if err := json.Unmarshal([]byte(raw.Str()), &urls); err != nil {
+	// ObjectToJSON returns the JSON array itself. Str formats arrays as Go
+	// display text ([url ...]), which is not JSON once a URL is present.
+	if err := raw.Unmarshal(&urls); err != nil {
 		return nil, fmt.Errorf("invalid media probe result: %w", err)
 	}
 	if urls == nil {

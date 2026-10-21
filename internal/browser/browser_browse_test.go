@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -44,6 +45,50 @@ func TestIsVideoMediaResponse(t *testing.T) {
 	}
 	if isVideoMediaResponse(&proto.NetworkResponseReceived{Response: &proto.NetworkResponse{URL: "https://cdn.example/image", MIMEType: "image/jpeg"}}) {
 		t.Fatal("image response must not be treated as video media")
+	}
+}
+
+func TestCaptureMediaURLsDecodesBrowserArray(t *testing.T) {
+	for _, tc := range []struct {
+		name, value string
+		want        []string
+		wantError   bool
+	}{
+		{name: "one URL", value: `["https://cdn.example/video.mp4?x=1&y=2"]`, want: []string{"https://cdn.example/video.mp4?x=1&y=2"}},
+		{name: "multiple URLs", value: `["https://cdn.example/主视频", "https://cdn.example/video?label=\"alternate\""]`, want: []string{"https://cdn.example/主视频", `https://cdn.example/video?label="alternate"`}},
+		{name: "empty array", value: `[]`, want: []string{}},
+		{name: "null", value: `null`, wantError: true},
+		{name: "object", value: `{}`, wantError: true},
+		{name: "string", value: `"https://cdn.example/video"`, wantError: true},
+		{name: "non-string member", value: `[42]`, wantError: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			client := &scriptedCDP{events: make(chan *cdp.Event), call: func(_ context.Context, method string, _ any) ([]byte, error) {
+				switch method {
+				case "Runtime.evaluate":
+					return []byte(`{"result":{"type":"object","objectId":"test-window"}}`), nil
+				case "Runtime.callFunctionOn":
+					return []byte(`{"result":{"type":"object","value":` + tc.value + `}}`), nil
+				default:
+					return []byte(`{}`), nil
+				}
+			}}
+			defer close(client.events)
+			b := rod.New().ControlURL("").NoDefaultDevice().Client(client)
+			if err := b.Connect(); err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			page, err := b.Context(ctx).PageFromTarget("media-array")
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := captureMediaURLs(page)
+			if (err != nil) != tc.wantError || !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("captureMediaURLs() = %v, %v; want %v, error=%v", got, err, tc.want, tc.wantError)
+			}
+		})
 	}
 }
 

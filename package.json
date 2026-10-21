@@ -1,6 +1,6 @@
 {
   "name": "digcrawl-skill",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Install DigCrawl, its Agent Skill, and local MCP configuration",
   "license": "MIT",
   "type": "module",

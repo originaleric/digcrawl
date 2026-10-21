@@ -236,6 +236,40 @@ func TestChromeReadTailFailureAcceptance(t *testing.T) {
 	if _, err := read(context.Background(), &BrowserBrowseRequest{}); err != nil {
 		t.Fatal(err)
 	}
+	for _, tc := range []struct {
+		name, script string
+		want         string
+	}{
+		{name: "no_player"},
+		{
+			name: "video_URL_array",
+			// Keep playback deterministic; this case verifies the actual CDP
+			// array returned by the probe, without a codec or network dependency.
+			script: `() => {
+  const video = document.createElement('video');
+  video.style.cssText = 'width:100px;height:100px';
+  video.src = '/video.mp4?part=1&quality=hd';
+  video.play = () => Promise.resolve();
+  document.body.appendChild(video);
+  return {};
+}`,
+			want: server.URL + "/video.mp4?part=1&quality=hd",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resp, err := read(context.Background(), &BrowserBrowseRequest{MetadataScript: tc.script, CaptureMedia: true})
+			if err != nil || resp == nil || resp.Text != "confirmed article body" {
+				t.Fatalf("media read: resp=%+v err=%v", resp, err)
+			}
+			if tc.want == "" {
+				if len(resp.MediaURLs) != 0 {
+					t.Fatalf("unexpected media without a player: %v", resp.MediaURLs)
+				}
+			} else if len(resp.MediaURLs) != 1 || resp.MediaURLs[0] != tc.want {
+				t.Fatalf("media URLs=%v, want [%s]", resp.MediaURLs, tc.want)
+			}
+		})
+	}
 	m.mu.Lock()
 	healthy := m.active
 	m.mu.Unlock()
