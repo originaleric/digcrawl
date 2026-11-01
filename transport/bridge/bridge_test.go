@@ -18,21 +18,6 @@ import (
 	"github.com/originaleric/digcrawl/runtime/version"
 )
 
-// The failing child is a native executable on every platform. It reports the
-// private startup diagnostic without depending on a shell interpreter.
-func TestMain(m *testing.M) {
-	if strings.TrimSuffix(filepath.Base(os.Args[0]), ".exe") == "bridge-failure" {
-		for i, arg := range os.Args {
-			if arg == "--startup-status" && i+1 < len(os.Args) {
-				_ = os.WriteFile(os.Args[i+1], []byte("configured Chrome profile is already owned by another local DigCrawl bridge"), 0o600)
-				break
-			}
-		}
-		os.Exit(1)
-	}
-	os.Exit(m.Run())
-}
-
 // bridgeSocketTempDir keeps fixtures within the Unix socket path limit while
 // using a temporary root that exists on the current CI platform.
 func bridgeSocketTempDir(t *testing.T) string {
@@ -182,6 +167,10 @@ func TestServeKeepsBridgeAvailableAcrossIdleGaps(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("bridge did not stop after cancellation")
+	}
+	r, err := readRecovery(socket)
+	if err != nil || r.Unclean || r.Attempts != 0 {
+		t.Fatalf("controlled shutdown state=%+v, err=%v", r, err)
 	}
 }
 
@@ -388,14 +377,17 @@ func TestNewExecutorReportsPrivateStartupStatus(t *testing.T) {
 		t.Fatal(err)
 	}
 	executable := filepath.Join(dir, "bridge-failure")
-	if runtime.GOOS == "windows" {
-		executable += ".exe"
-	}
-	data, err := os.ReadFile(os.Args[0])
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(executable, data, 0o700); err != nil {
+	script := `#!/bin/sh
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "--startup-status" ]; then
+    printf '%s' 'configured Chrome profile is already owned by another local DigCrawl bridge' > "$2"
+    exit 1
+  fi
+  shift
+done
+exit 1
+`
+	if err := os.WriteFile(executable, []byte(script), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	// This matches the production startup budget plus a small scheduling margin:
@@ -403,7 +395,7 @@ func TestNewExecutorReportsPrivateStartupStatus(t *testing.T) {
 	// busy local test runner schedules a child in an arbitrary three seconds.
 	ctx, cancel := context.WithTimeout(context.Background(), startupTimeout+2*time.Second)
 	defer cancel()
-	_, err = NewExecutor(ctx, executable, profile, &config.Config{})
+	_, err := NewExecutor(ctx, executable, profile, &config.Config{})
 	if err == nil || !strings.Contains(err.Error(), "configured Chrome profile is already owned") {
 		t.Fatalf("startup error=%v, want private startup diagnostic", err)
 	}

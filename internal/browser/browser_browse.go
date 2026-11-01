@@ -36,6 +36,10 @@ type BrowserBrowseRequest struct {
 	CaptureMedia bool `json:"capture_media,omitempty" jsonschema:"description=是否探测页面播放媒体资源，仅视频读取链路按需启用"`
 	// MetadataScript 可选：页面加载后执行的 JS 表达式，应返回可 JSON 序列化的对象（平台结构化字段提取）。
 	MetadataScript string `json:"metadata_script,omitempty" jsonschema:"description=可选 JS 表达式，返回 JSON 对象作为 metadata"`
+	// OCR image bytes stay inside this invocation; they are never wire metadata.
+	ImageMaxBytes int64    `json:"-"`
+	ImageMaxItems int      `json:"-"`
+	ImageDomains  []string `json:"-"`
 	// Internal options preserve browser.snapshot's existing filter/depth contract.
 	snapshotFilter   string
 	snapshotMaxDepth int
@@ -43,18 +47,22 @@ type BrowserBrowseRequest struct {
 
 // BrowserBrowseResponse 本地浏览器抓取响应
 type BrowserBrowseResponse struct {
-	URL            string         `json:"url" jsonschema:"description=最终抓取的 URL"`
-	Title          string         `json:"title" jsonschema:"description=页面标题"`
-	TabID          string         `json:"tab_id,omitempty" jsonschema:"description=标签页ID（可用于后续操作复用）"`
-	Text           string         `json:"text,omitempty" jsonschema:"description=提取的正文纯文本"`
-	Markdown       string         `json:"markdown,omitempty" jsonschema:"description=转换后的正文 Markdown"`
-	ScreenshotBase string         `json:"screenshot_base64,omitempty" jsonschema:"description=页面截图 base64（action=screenshot 时返回）"`
-	Elements       []AXNode       `json:"elements,omitempty" jsonschema:"description=可交互元素列表（mode=snapshot时返回）"`
-	Summary        string         `json:"summary,omitempty" jsonschema:"description=页面摘要（mode=summary时返回）"`
-	Metadata       map[string]any `json:"metadata,omitempty" jsonschema:"description=MetadataScript 提取的结构化字段"`
-	Diagnostics    map[string]any `json:"browser_diagnostics,omitempty"`
-	MediaURLs      []string       `json:"media_urls,omitempty" jsonschema:"description=浏览器探测到的 HTTP 媒体资源地址"`
-	snapshotRefs   map[string]int64
+	URL             string              `json:"url" jsonschema:"description=最终抓取的 URL"`
+	Title           string              `json:"title" jsonschema:"description=页面标题"`
+	TabID           string              `json:"tab_id,omitempty" jsonschema:"description=标签页ID（可用于后续操作复用）"`
+	Text            string              `json:"text,omitempty" jsonschema:"description=提取的正文纯文本"`
+	Markdown        string              `json:"markdown,omitempty" jsonschema:"description=转换后的正文 Markdown"`
+	ScreenshotBase  string              `json:"screenshot_base64,omitempty" jsonschema:"description=页面截图 base64（action=screenshot 时返回）"`
+	Elements        []AXNode            `json:"elements,omitempty" jsonschema:"description=可交互元素列表（mode=snapshot时返回）"`
+	Summary         string              `json:"summary,omitempty" jsonschema:"description=页面摘要（mode=summary时返回）"`
+	Metadata        map[string]any      `json:"metadata,omitempty" jsonschema:"description=MetadataScript 提取的结构化字段"`
+	Diagnostics     map[string]any      `json:"browser_diagnostics,omitempty"`
+	MediaURLs       []string            `json:"media_urls,omitempty" jsonschema:"description=浏览器探测到的 HTTP 媒体资源地址"`
+	ContentCoverage map[string]any      `json:"content_coverage,omitempty"`
+	ImageData       []map[string]string `json:"-"`
+	ImagesSkipped   int                 `json:"-"`
+	ImagesTruncated bool                `json:"-"`
+	snapshotRefs    map[string]int64
 }
 
 // BrowserBrowse 使用本地 go-rod 浏览器读取动态页面或截图
@@ -305,6 +313,20 @@ func browserBrowseAttempt(ctx context.Context, req *BrowserBrowseRequest, manage
 			if err != nil {
 				return nil, newBrowseError(ErrorBrowserContentNotFound, "extract_content", "提取页面正文失败", err, false)
 			}
+			if isFeishuDocument(finalURL) && (req.ContentSelector == "" || req.ContentSelector == "body") {
+				budget := browseEnrichmentBudget(ctx, 14*time.Second)
+				fullHTML, fullText := "", ""
+				coverage := map[string]any{"scope": "rendered_document", "reached_end": false, "reason": "budget_exhausted"}
+				if budget > 0 {
+					enrichmentCtx, finish := context.WithTimeout(ctx, budget)
+					fullHTML, fullText, coverage = readFeishuDocument(page.Context(enrichmentCtx))
+					finish()
+				}
+				resp.ContentCoverage = coverage
+				if fullHTML != "" {
+					htmlContent, textContent = fullHTML, fullText
+				}
+			}
 			converter := htmlmd.NewConverter("", true, nil)
 			md, err := converter.ConvertString(htmlContent)
 			if err != nil {
@@ -333,6 +355,21 @@ func browserBrowseAttempt(ctx context.Context, req *BrowserBrowseRequest, manage
 			return nil, newBrowseError(ErrorBrowserContentNotFound, "metadata", "提取页面结构化信息失败", err, false)
 		}
 		resp.Metadata = meta
+	}
+	if req.ImageMaxItems > 0 && req.ImageMaxBytes > 0 {
+		budget := browseEnrichmentBudget(ctx, 15*time.Second)
+		if budget > 0 {
+			imageCtx, finish := context.WithTimeout(ctx, budget)
+			imageDomains := req.ImageDomains
+			if len(imageDomains) == 0 {
+				imageDomains = sourceDomains
+			}
+			resp.ImageData, resp.ImagesSkipped = capturePageImages(page.Context(imageCtx), req.ImageMaxItems, req.ImageMaxBytes, imageDomains)
+			finish()
+		} else {
+			resp.ImageData = []map[string]string{{"source": "page_images", "error": "budget_exhausted"}}
+		}
+		resp.ImagesTruncated = resp.ImagesSkipped > 0
 	}
 	if req.CaptureMedia {
 		// Keep navigation-time Media responses as a fallback. Some players fetch
@@ -745,4 +782,16 @@ func extractSummary(page *rod.Page, waitSelectorTimeoutSec int) (string, error) 
 		return "", fmt.Errorf("未能提取页面摘要")
 	}
 	return result, nil
+}
+
+// Auxiliary document/image work must leave time for final source validation and
+// page release. A child timeout never cancels the successful reader's context.
+func browseEnrichmentBudget(ctx context.Context, maximum time.Duration) time.Duration {
+	if deadline, ok := ctx.Deadline(); ok {
+		available := time.Until(deadline) - 2*time.Second
+		if available < maximum {
+			return available
+		}
+	}
+	return maximum
 }

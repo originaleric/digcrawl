@@ -136,7 +136,7 @@ export function codexConfig(source, binary, profile) {
     if (header.test(line)) skip = digcrawl.test(line);
     return !skip;
   });
-  const replacement = { command: binary, args: ['mcp', '--idle-timeout', '15m', '--config', profile] };
+  const replacement = { command: binary, args: ['mcp', '--idle-timeout', '0', '--config', profile] };
   const output = `${lines.join('\n').trimEnd()}\n\n[mcp_servers.digcrawl]\ncommand = ${JSON.stringify(binary)}\nargs = ${JSON.stringify(replacement.args)}\n`;
   const expected = structuredClone(before);
   expected.mcp_servers ||= {};
@@ -199,7 +199,7 @@ export async function install(options = {}, context = {}) {
   const platform = context.platform || process.platform;
   const home = context.home || os.homedir();
   const log = context.log || console.log;
-  const version = (options.version || '1.0.0').replace(/^v/, '');
+  const version = (options.version || '1.0.2').replace(/^v/, '');
   const asset = assetName(version, platform, context.arch || process.arch);
   const dirs = locations(env, platform, home);
   if (options.installDir) {

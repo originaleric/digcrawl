@@ -15,7 +15,6 @@
 
 <p align="center">
   <a href="./LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/License-MIT-blue.svg"></a>
-  <a href="https://www.npmjs.com/package/digcrawl-skill"><img alt="npm: digcrawl-skill" src="https://img.shields.io/npm/v/digcrawl-skill.svg"></a>
   <img alt="Local-first" src="https://img.shields.io/badge/runtime-local--first-111111">
   <img alt="CLI, MCP, HTTP" src="https://img.shields.io/badge/interfaces-CLI%20%7C%20MCP%20%7C%20HTTP-0071e3">
 </p>
@@ -41,34 +40,28 @@ Read and summarize this link: <URL>
 
 ## Quick Start
 
-**Install with npx** (macOS / Linux / Windows; Node.js 20.19+):
+With Node.js 20.19+:
 
 ```bash
-npx digcrawl-skill install
+npx digcrawl-skill@latest install
 ```
 
-Installs the program, complete Skill, and default profile. Configures Codex and installs the Claude Code Skill when detected.
+Or install with the shell script on macOS / Linux:
 
-**Or use the install script** (macOS / Linux; no Node.js or Go required):
+**Install in your terminal** (macOS / Linux, no Go required):
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/originaleric/digcrawl/main/scripts/install.sh | sh
 ```
 
-Both methods verify downloads. Restart your agent and open a new chat after installation.
+The installer verifies downloads and installs the program, complete Skill, and default profile.
 
 <details>
-<summary>Choose an agent, install locations, and alternatives</summary>
-
-```bash
-npx digcrawl-skill install codex
-npx digcrawl-skill install claude-code
-npx digcrawl-skill status
-```
+<summary>Install location, other hosts, and Windows</summary>
 
 - Configures Codex automatically and installs the Claude Code Skill when detected. See [MCP setup](./.agents/skills/digcrawl/mcp/README.md) for other hosts.
 - Installs to `~/.local/bin`; add it to `PATH` if the command is not found.
-- Windows users can also download a [Release](https://github.com/originaleric/digcrawl/releases). See [installation](./USAGE.md#1-安装) for version pinning and source builds.
+- For Windows, download a [Release](https://github.com/originaleric/digcrawl/releases). See [installation](./USAGE.md#1-installation) for version pinning and source builds.
 
 </details>
 
@@ -87,7 +80,7 @@ npx digcrawl-skill status
 - **Video and content platforms**: Douyin, Toutiao, Bilibili, Kuaishou, YouTube.
 - **Web and feeds**: Web pages, RSS, Atom, sitemaps, platform lists, and profiles.
 
-See [source details](./USAGE.md#支持的内容来源) for platform capabilities and login requirements.
+See [source details](./USAGE.md#supported-content-sources) for platform capabilities and login requirements.
 
 ## Collect, Export, and Watch
 
@@ -110,7 +103,7 @@ digcrawl watchlist run --once --config config/config.yaml
 digcrawl watchlist serve --config config/config.yaml
 ```
 
-Transcription and OCR require the relevant dependencies; see [video analysis](./USAGE.md#直接视频解析) and [Collect](./collect/README.md).
+Transcription and OCR require the relevant dependencies; see [video analysis](./USAGE.md#direct-video-analysis) and [Collect](./collect/README.md).
 
 </details>
 
@@ -320,7 +313,7 @@ digcrawl browser login --config "<profile path used by MCP>" --platform youtube
 
 Sign in through the dedicated Chrome window and return to YouTube, then press Enter in the original terminal. DigCrawl closes the window and synchronizes the session. On Windows, close all dedicated Chrome windows before pressing Enter.
 
-Use the same profile as MCP; your everyday browser session is not copied automatically. Credentials and cookies stay on your machine. Preserve any Google sign-in rejection; see [sign-in guidance](./USAGE.md#平台登录与健康检查).
+Use the same profile as MCP; your everyday browser session is not copied automatically. Credentials and cookies stay on your machine. Preserve any Google sign-in rejection; see [sign-in guidance](./USAGE.md#platform-sign-in-and-health-checks).
 
 </details>
 
@@ -347,7 +340,7 @@ digcrawl browser login --config "<profile path used by MCP>" --platform xiaohong
 
 When running the command yourself, press Enter in that terminal after signing in. Use the same profile as MCP; your everyday browser session is not copied automatically. Credentials and cookies stay on your machine.
 
-See [sign-in guidance](./USAGE.md#平台登录与健康检查) for other platforms and troubleshooting.
+See [sign-in guidance](./USAGE.md#platform-sign-in-and-health-checks) for other platforms and troubleshooting.
 
 </details>
 
@@ -360,7 +353,7 @@ Install the complete [Skill directory](./.agents/skills/digcrawl/), then configu
 - [Claude Code example](./.agents/skills/digcrawl/claude-code/.mcp.json.example)
 - [Other MCP hosts](./.agents/skills/digcrawl/mcp/README.md)
 
-Use absolute program and profile paths, and copy the whole Skill rather than only `SKILL.md`. See [setup](./USAGE.md#6-ide-集成mcp) for profile initialization.
+Use absolute program and profile paths, and copy the whole Skill rather than only `SKILL.md`. See [setup](./USAGE.md#6-ide-integration-mcp) for profile initialization.
 
 </details>
 
@@ -373,7 +366,7 @@ Use absolute program and profile paths, and copy the whole Skill rather than onl
 
 ### Browser recovery and diagnostics
 
-Follow the returned error guidance or see [browser troubleshooting](./USAGE.md#浏览器超时或反复失败).
+Follow the returned error guidance or see [browser troubleshooting](./USAGE.md#browser-timeouts-or-repeated-failures).
 
 <details>
 <summary>Check the local environment</summary>
@@ -400,10 +393,12 @@ See [Runtime](./runtime/README.md), [Transport](./transport/README.md), and [Pro
 
 **For users**
 
-- [Installation and usage](./USAGE.md) · [Product guide](./docs/DigCrawl功能与使用手册.md) · [Browser troubleshooting](./USAGE.md#浏览器超时或反复失败)
+- [Installation and usage](./USAGE.md) · [Product guide](./docs/DigCrawl功能与使用手册.md) · [Browser troubleshooting](./USAGE.md#browser-timeouts-or-repeated-failures)
 - [Agent Skill](./.agents/skills/digcrawl/) · [MCP setup](./.agents/skills/digcrawl/mcp/README.md)
 
 **For developers**
+
+- [CI](./.github/workflows/test.yml) runs only through manual `workflow_dispatch`; the Test workflow covers Linux, macOS, and Windows. Release publishing remains triggered by version tags.
 
 - [HTTP / stdio](./transport/README.md) · [Go SDK](./client/README.md) · [Configuration examples](./config/)
 - [Collect](./collect/README.md) · [Runtime](./runtime/README.md) · [Protocol](./protocol/README.md)

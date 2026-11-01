@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/originaleric/digcrawl/client"
@@ -67,6 +68,7 @@ type Executor struct {
 	// exists so the local RPC boundary can be exercised with a short test budget
 	// without weakening the production timeout.
 	artifactTimeout time.Duration
+	manualStart     bool
 }
 
 // NewExecutor connects to the bridge for profile, starting it on demand when
@@ -74,6 +76,15 @@ type Executor struct {
 // profile file rather than its spelling, so symlink aliases cannot create
 // duplicate Bridge owners.
 func NewExecutor(ctx context.Context, executable, profile string, cfg *config.Config) (*Executor, error) {
+	return newExecutor(ctx, executable, profile, cfg, false)
+}
+
+// NewExecutorAfterRestart permits one operator-requested start without refunding
+// the automatic recovery budget. Only the explicit CLI restart uses this path.
+func NewExecutorAfterRestart(ctx context.Context, executable, profile string, cfg *config.Config) (*Executor, error) {
+	return newExecutor(ctx, executable, profile, cfg, true)
+}
+func newExecutor(ctx context.Context, executable, profile string, cfg *config.Config, manual bool) (*Executor, error) {
 	if cfg == nil {
 		return nil, errors.New("bridge requires a profile configuration")
 	}
@@ -95,11 +106,12 @@ func NewExecutor(ctx context.Context, executable, profile string, cfg *config.Co
 	if err != nil {
 		return nil, err
 	}
-	e := &Executor{executable: executable, profile: profile, socket: socket, cfg: cfg}
+	e := &Executor{executable: executable, profile: profile, socket: socket, cfg: cfg, manualStart: manual}
 	manifest, err := e.ensure(ctx)
 	if err != nil {
 		return nil, err
 	}
+	e.manualStart = false
 	e.manifest = manifest
 	e.artifacts = remoteArtifactStore{executor: e}
 	return e, nil
@@ -144,7 +156,10 @@ func (e *Executor) Execute(ctx context.Context, call *protocol.ToolCall) *protoc
 	if err != nil {
 		// Do not retry a call here. The bridge could have executed it and died
 		// while writing the response, so replay would break at-most-once intent.
-		return bridgeErrorResult(call.ID, fmt.Errorf("local bridge call failed: %w", err))
+		result := bridgeErrorResult(call.ID, fmt.Errorf("local bridge call failed: %w", err))
+		result.Error.Details["stage"] = "dispatch"
+		result.Error.Details["execution_state"] = "unknown"
+		return result
 	}
 	return &result
 }
@@ -167,7 +182,7 @@ func bridgeErrorResult(id string, err error) *protocol.ToolResult {
 		Type:   protocol.TypeToolResult,
 		ID:     id,
 		Status: "error",
-		Error:  &protocol.ToolError{Code: "LOCAL_BRIDGE_UNAVAILABLE", Message: err.Error(), Details: map[string]any{"handled": true, "retryable": false, "next_actions": []map[string]any{{"type": "restart_bridge", "executor": "user_or_agent", "precondition": "close old MCP clients, restart with the installed binary, then reconnect"}}}},
+		Error:  &protocol.ToolError{Code: "LOCAL_BRIDGE_UNAVAILABLE", Message: err.Error(), Details: bridgeRecoveryDetails(err)},
 	}
 }
 
@@ -179,6 +194,9 @@ func (e *Executor) ensure(ctx context.Context) (protocol.ToolManifest, error) {
 func (e *Executor) clientAndManifest(ctx context.Context) (*client.Client, protocol.ToolManifest, error) {
 	if e == nil {
 		return nil, protocol.ToolManifest{}, errors.New("nil local bridge executor")
+	}
+	if bridgeStopping(e.socket) {
+		return nil, protocol.ToolManifest{}, ErrBridgeStopping
 	}
 	if c, manifest, err := probe(ctx, e.socket); err == nil {
 		if err := checkBuild(manifest); err != nil {
@@ -206,6 +224,9 @@ func (e *Executor) startOrWait(ctx context.Context) error {
 	if _, manifest, err := probe(ctx, e.socket); err == nil {
 		return checkBuild(manifest)
 	}
+	if bridgeStopping(e.socket) {
+		return ErrBridgeStopping
+	}
 	status, err := os.CreateTemp(filepath.Dir(e.socket), ".startup-status-*")
 	if err != nil {
 		return err
@@ -218,6 +239,9 @@ func (e *Executor) startOrWait(ctx context.Context) error {
 	// listener, browser, or child process tree. Keeping no second transition
 	// lock avoids another state that can outlive the operation it represents.
 	cmd := exec.Command(e.executable, "bridge", "serve", "--managed-worker", "--config", e.profile, "--socket", e.socket, "--startup-status", startupStatus.path)
+	if e.manualStart {
+		cmd.Args = append(cmd.Args, "--explicit-restart")
+	}
 	detachBridgeProcess(cmd)
 	// A persistent Bridge must not inherit the stdio proxy's pipes. In
 	// particular, io.Discard and an in-memory stderr writer make os/exec
@@ -278,6 +302,11 @@ func Stop(ctx context.Context, profile string) (bool, error) {
 	if err = yaml.Unmarshal(data, &profileConfig); err != nil {
 		return false, err
 	}
+	clearIntent, err := stopIntent(socket)
+	if err != nil {
+		return false, err
+	}
+	defer clearIntent()
 	stopped := false
 	for {
 		if err := ctx.Err(); err != nil {
@@ -301,6 +330,15 @@ func Stop(ctx context.Context, profile string) (bool, error) {
 			stopped = stopped || legacyStopped
 			if err := browser.WaitProfileRelease(ctx, profileConfig.LocalBrowser.UserDataDir); err != nil {
 				return false, fmt.Errorf("previous Bridge profile remains unavailable; end the owning session before restart: %w", err)
+			}
+			// The managed stop path may use SIGKILL, so the worker cannot always
+			// acknowledge a controlled exit itself. Only a controller that actually
+			// stopped owned work and verified all release barriers may do so here.
+			// Stopping an already-absent crashed worker must not reset recovery state.
+			if stopped {
+				if err := markBridgeStopped(socket); err != nil {
+					return false, fmt.Errorf("record controlled Bridge stop: %w", err)
+				}
 			}
 			removeBridgeOwner(socket)
 			if err := os.Remove(socket); err != nil && !os.IsNotExist(err) {
@@ -347,7 +385,7 @@ func waitForBridgeOrExit(ctx context.Context, socket string, exited <-chan error
 		// after the caller's deadline and erase the actionable cause.
 		if stderr != nil {
 			if detail := strings.TrimSpace(stderr.String()); detail != "" {
-				return nil, protocol.ToolManifest{}, fmt.Errorf("local bridge reported startup failure: %s", detail)
+				return nil, protocol.ToolManifest{}, bridgeStartupError(detail)
 			}
 		}
 		if c, manifest, err := probe(ctx, socket); err == nil {
@@ -377,7 +415,7 @@ func waitForBridgeOrExit(ctx context.Context, socket string, exited <-chan error
 				detail = strings.TrimSpace(stderr.String())
 			}
 			if detail != "" {
-				return nil, protocol.ToolManifest{}, fmt.Errorf("local bridge exited during startup: %w: %s", exitErr, detail)
+				return nil, protocol.ToolManifest{}, bridgeStartupError(detail)
 			}
 			return nil, protocol.ToolManifest{}, fmt.Errorf("local bridge exited during startup: %w", exitErr)
 		case <-time.After(50 * time.Millisecond):
@@ -451,6 +489,15 @@ func ensurePrivateDir(dir string) error {
 // between a readiness probe and a tool request, so stdio-session reclamation
 // owns process cleanup while this singleton owns stable local transport.
 func Serve(ctx context.Context, cfg *config.Config, socket string) error {
+	return serve(ctx, cfg, socket, false)
+}
+
+// ServeAfterExplicitRestart is the internal CLI operator-start path. It keeps
+// automatic budget reservations intact while permitting this requested attempt.
+func ServeAfterExplicitRestart(ctx context.Context, cfg *config.Config, socket string) error {
+	return serve(ctx, cfg, socket, true)
+}
+func serve(ctx context.Context, cfg *config.Config, socket string, manual bool) error {
 	if cfg == nil {
 		return errors.New("bridge requires configuration")
 	}
@@ -467,6 +514,9 @@ func Serve(ctx context.Context, cfg *config.Config, socket string) error {
 		return err
 	}
 	defer lock.Close()
+	if err := reserveBridgeStart(ctx, socket, manual); err != nil {
+		return recoveryError(err)
+	}
 	// The worker normally follows startOrWait, which already observed the
 	// profile. Keep the same gate at the lock-owning boundary: a crashed stop
 	// must not be bypassed by the next worker invocation. A bounded startup
@@ -507,8 +557,10 @@ func Serve(ctx context.Context, cfg *config.Config, socket string) error {
 		return fmt.Errorf("start local bridge runtime: %w", err)
 	}
 	gateway := httpgw.NewServer(rt, rt.ArtifactStore(), "")
+	handler, finishObservations := observeBridgeResponses(socket, privateBridgeHandler(gateway))
+	defer finishObservations()
 	server := &http.Server{
-		Handler:           privateBridgeHandler(gateway),
+		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       120 * time.Second,
 	}
@@ -520,12 +572,16 @@ func Serve(ctx context.Context, cfg *config.Config, socket string) error {
 		_ = server.Close()
 	}()
 	err = server.Serve(listener)
+	finishObservations()
 	shutdown, cancel := context.WithTimeout(context.Background(), bridgeBrowserCleanupTimeout)
 	defer cancel()
 	if closeErr := browser.ShutdownImmediately(shutdown); closeErr != nil && (err == nil || errors.Is(err, http.ErrServerClosed)) {
 		err = fmt.Errorf("stop bridge-owned browser: %w", closeErr)
 	}
-	if errors.Is(err, http.ErrServerClosed) {
+	if errors.Is(err, http.ErrServerClosed) && ctx.Err() != nil {
+		if err := markBridgeStopped(socket); err != nil {
+			return fmt.Errorf("record completed Bridge shutdown: %w", err)
+		}
 		return nil
 	}
 	return err
@@ -580,4 +636,45 @@ func (s remoteArtifactStore) Get(ctx context.Context, id string) ([]byte, string
 		return nil, "", err
 	}
 	return c.FetchArtifact(artifactCtx, id)
+}
+
+// The lifecycle-lock-owning Bridge alone updates its recovery record. Serialize
+// successful response observations from concurrent requests within that owner.
+func observeBridgeResponses(socket string, next http.Handler) (http.Handler, func()) {
+	var mu sync.Mutex
+	var last time.Time
+	stopped := false
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		observed := &bridgeResponseWriter{ResponseWriter: w, status: http.StatusOK}
+		next.ServeHTTP(observed, r)
+		if r.Context().Err() != nil || observed.status >= 400 {
+			return
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		now := time.Now().UTC()
+		if !stopped && now.Sub(last) >= time.Second {
+			_ = noteBridgeHealthy(socket, now)
+			last = now
+		}
+	})
+	return handler, func() { mu.Lock(); stopped = true; mu.Unlock() }
+}
+
+type bridgeResponseWriter struct {
+	http.ResponseWriter
+	status int
+}
+
+func (w *bridgeResponseWriter) WriteHeader(status int) {
+	w.status = status
+	w.ResponseWriter.WriteHeader(status)
+}
+func bridgeStartupError(detail string) error {
+	for _, known := range []error{ErrRecoveryExhausted, ErrBridgeStopping, ErrBuildMismatch, ErrBrowserProfileInUse} {
+		if strings.HasSuffix(detail, known.Error()) {
+			return known
+		}
+	}
+	return errors.New("local Bridge startup failed; run doctor and inspect local ownership/configuration")
 }

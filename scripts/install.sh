@@ -223,7 +223,7 @@ write_codex_mcp_config() {
   fi
   printf '%s\n' '[mcp_servers.digcrawl]' >>"$config_tmp"
   printf 'command = "%s"\n' "$(toml_escape "$install_dir/digcrawl")" >>"$config_tmp"
-  printf 'args = ["mcp", "--idle-timeout", "15m", "--config", "%s"]\n' "$(toml_escape "$skill_profile")" >>"$config_tmp"
+  printf 'args = ["mcp", "--idle-timeout", "0", "--config", "%s"]\n' "$(toml_escape "$skill_profile")" >>"$config_tmp"
 
   if [ "$config_existed" = 1 ] && ! cmp -s "$config_source" "$codex_config"; then
     rm -f "$config_tmp" "$config_source"

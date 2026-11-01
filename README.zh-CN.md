@@ -15,7 +15,6 @@
 
 <p align="center">
   <a href="./LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/License-MIT-blue.svg"></a>
-  <a href="https://www.npmjs.com/package/digcrawl-skill"><img alt="npm: digcrawl-skill" src="https://img.shields.io/npm/v/digcrawl-skill.svg"></a>
   <img alt="Local-first" src="https://img.shields.io/badge/runtime-local--first-111111">
   <img alt="CLI, MCP, HTTP" src="https://img.shields.io/badge/interfaces-CLI%20%7C%20MCP%20%7C%20HTTP-0071e3">
 </p>
@@ -41,34 +40,28 @@
 
 ## 快速开始
 
-**使用 npx 安装**（macOS / Linux / Windows，需要 Node.js 20.19+）：
+已安装Node.js 20.19+：
 
 ```bash
-npx digcrawl-skill install
+npx digcrawl-skill@latest install
 ```
 
-自动安装程序、完整 Skill 与默认配置，并配置 Codex；检测到 Claude Code 时安装其 Skill。
+macOS / Linux也可使用脚本安装：
 
-**或使用安装脚本**（macOS / Linux，不需要 Node.js 或 Go）：
+**在终端安装**（macOS / Linux，不需要 Go）：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/originaleric/digcrawl/main/scripts/install.sh | sh
 ```
 
-两种方式都会校验下载文件。安装后重启 Agent，并打开新对话。
+脚本会校验下载文件，安装程序、完整 Skill 与默认配置。
 
 <details>
-<summary>指定 Agent、安装位置与其他方式</summary>
-
-```bash
-npx digcrawl-skill install codex
-npx digcrawl-skill install claude-code
-npx digcrawl-skill status
-```
+<summary>安装位置、其他宿主与 Windows</summary>
 
 - 自动配置 Codex；检测到 Claude Code 时安装其 Skill。其他宿主见 [MCP 接入](./.agents/skills/digcrawl/mcp/README.md)。
 - 程序安装到 `~/.local/bin`；如提示找不到命令，请将该目录加入 `PATH`。
-- Windows 也可下载 [Release](https://github.com/originaleric/digcrawl/releases)。指定版本与源码构建见[安装说明](./USAGE.md#1-安装)。
+- Windows 下载 [Release](https://github.com/originaleric/digcrawl/releases)；指定版本与源码构建见[安装说明](./USAGE.zh-CN.md#1-安装)。
 
 </details>
 
@@ -87,7 +80,7 @@ npx digcrawl-skill status
 - **视频与内容平台**：抖音、头条、B站、快手、YouTube。
 - **网页与订阅**：通用网页、RSS、Atom、sitemap、平台列表与主页。
 
-各平台的内容范围与登录要求见[平台说明](./USAGE.md#支持的内容来源)。
+各平台的内容范围与登录要求见[平台说明](./USAGE.zh-CN.md#支持的内容来源)。
 
 ## 采集、导出与监控
 
@@ -110,7 +103,7 @@ digcrawl watchlist run --once --config config/config.yaml
 digcrawl watchlist serve --config config/config.yaml
 ```
 
-转写与画面识别需配置相应依赖，详见[视频解析](./USAGE.md#直接视频解析)；批量采集见 [Collect](./collect/README.md)。
+转写与画面识别需配置相应依赖，详见[视频解析](./USAGE.zh-CN.md#直接视频解析)；批量采集见 [Collect](./collect/README.md)。
 
 </details>
 
@@ -320,7 +313,7 @@ digcrawl browser login --config "<MCP 实际使用的 profile 路径>" --platfor
 
 在专用 Chrome 中登录并返回 YouTube，再在原终端按 Enter；程序关闭窗口后同步会话。Windows 用户需先关闭该专用 Chrome 的全部窗口再按 Enter。
 
-使用与 MCP 相同的配置；日常浏览器的登录不会自动同步。登录信息与 Cookie 留在本机。若 Google 拒绝登录，请保留错误，参见[登录说明](./USAGE.md#平台登录与健康检查)。
+使用与 MCP 相同的配置；日常浏览器的登录不会自动同步。登录信息与 Cookie 留在本机。若 Google 拒绝登录，请保留错误，参见[登录说明](./USAGE.zh-CN.md#平台登录与健康检查)。
 
 </details>
 
@@ -347,7 +340,7 @@ digcrawl browser login --config "<MCP 实际使用的 profile 路径>" --platfor
 
 手动执行命令时，登录后在原终端按 Enter 保存。使用与 MCP 相同的配置；日常浏览器的登录不会自动同步。登录信息与 Cookie 留在本机。
 
-更多平台与排障见[登录说明](./USAGE.md#平台登录与健康检查)。
+更多平台与排障见[登录说明](./USAGE.zh-CN.md#平台登录与健康检查)。
 
 </details>
 
@@ -360,7 +353,7 @@ digcrawl browser login --config "<MCP 实际使用的 profile 路径>" --platfor
 - [Claude Code 示例](./.agents/skills/digcrawl/claude-code/.mcp.json.example)
 - [其他 MCP 宿主](./.agents/skills/digcrawl/mcp/README.md)
 
-使用程序与配置文件的绝对路径；不要只复制 `SKILL.md`。配置初始化见[接入指南](./USAGE.md#6-ide-集成mcp)。
+使用程序与配置文件的绝对路径；不要只复制 `SKILL.md`。配置初始化见[接入指南](./USAGE.zh-CN.md#6-ide-集成mcp)。
 
 </details>
 
@@ -373,7 +366,7 @@ digcrawl browser login --config "<MCP 实际使用的 profile 路径>" --platfor
 
 ### 浏览器恢复与诊断
 
-遇到读取失败，请按错误提示操作，或查看[浏览器排障](./USAGE.md#浏览器超时或反复失败)。
+遇到读取失败，请按错误提示操作，或查看[浏览器排障](./USAGE.zh-CN.md#浏览器超时或反复失败)。
 
 <details>
 <summary>检查本地环境</summary>
@@ -400,10 +393,12 @@ digcrawl doctor --config "$HOME/.config/digcrawl/digcrawl-skill.yaml"
 
 **使用者**
 
-- [安装与使用](./USAGE.md) · [功能手册](./docs/DigCrawl功能与使用手册.md) · [浏览器排障](./USAGE.md#浏览器超时或反复失败)
+- [安装与使用](./USAGE.zh-CN.md) · [功能手册](./docs/DigCrawl功能与使用手册.md) · [浏览器排障](./USAGE.zh-CN.md#浏览器超时或反复失败)
 - [Agent Skill](./.agents/skills/digcrawl/) · [MCP 接入](./.agents/skills/digcrawl/mcp/README.md)
 
 **开发者**
+
+- [CI](./.github/workflows/test.yml) 仅通过 `workflow_dispatch` 手动运行，Test工作流覆盖Linux、macOS和Windows；Release发布仍由版本tag触发。
 
 - [HTTP / stdio](./transport/README.md) · [Go SDK](./client/README.md) · [配置样例](./config/)
 - [Collect](./collect/README.md) · [Runtime](./runtime/README.md) · [Protocol](./protocol/README.md)

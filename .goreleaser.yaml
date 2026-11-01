@@ -36,6 +36,8 @@ archives:
       - LICENSE
       - README.md
       - README.zh-CN.md
+      - USAGE.md
+      - USAGE.zh-CN.md
       - src: .agents/skills/digcrawl/SKILL.md
         dst: skills/digcrawl
         strip_parent: true

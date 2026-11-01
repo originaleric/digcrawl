@@ -220,3 +220,14 @@ func TestPageChangeGuidanceAndDiagnosticPreserveReason(t *testing.T) {
 		t.Fatalf("actions=%v", actions)
 	}
 }
+
+func TestAuxiliaryBrowseBudgetLeavesSourceValidationTime(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+	defer cancel()
+	if budget := browseEnrichmentBudget(ctx, 15*time.Second); budget > 0 {
+		t.Fatalf("auxiliary work consumed validation reserve: %s", budget)
+	}
+	if budget := browseEnrichmentBudget(context.Background(), 15*time.Second); budget != 15*time.Second {
+		t.Fatalf("maximum=%s", budget)
+	}
+}

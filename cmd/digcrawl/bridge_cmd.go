@@ -41,6 +41,7 @@ func runBridge(args []string) {
 
 func runBridgeServe(args []string) {
 	fs := flag.NewFlagSet("bridge serve", flag.ExitOnError)
+	explicitRestart := fs.Bool("explicit-restart", false, "internal operator-requested start")
 	managedWorker := fs.Bool("managed-worker", false, "internal bridge worker")
 	configPath := fs.String("config", "", "path to profile")
 	socketPath := fs.String("socket", "", "private Unix socket path")
@@ -64,7 +65,11 @@ func runBridgeServe(args []string) {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	if err := bridge.Serve(ctx, cfg, *socketPath); err != nil && !errors.Is(err, bridge.ErrAlreadyRunning) {
+	serve := bridge.Serve
+	if *explicitRestart {
+		serve = bridge.ServeAfterExplicitRestart
+	}
+	if err := serve(ctx, cfg, *socketPath); err != nil && !errors.Is(err, bridge.ErrAlreadyRunning) {
 		reportFailure(err)
 		log.Fatalf("bridge: %v", err)
 	}
@@ -102,7 +107,7 @@ func runBridgeStop(args []string, restart bool) {
 	// gets its own complete budget after the old Bridge has released ownership.
 	startCtx, cancelStart := context.WithTimeout(context.Background(), bridgeStartTimeout)
 	defer cancelStart()
-	if _, err := bridge.NewExecutor(startCtx, bridgeExecutable(), *configPath, cfg); err != nil {
+	if _, err := bridge.NewExecutorAfterRestart(startCtx, bridgeExecutable(), *configPath, cfg); err != nil {
 		log.Fatalf("bridge restart: %v", err)
 	}
 	log.Printf("DigCrawl Bridge restarted for %s", filepath.Clean(*configPath))
@@ -122,7 +127,7 @@ func writeBridgeStartupFailure(path string, cause error) {
 	// Keep only controlled failure text in the cross-process handoff. YAML
 	// parse errors and raw exceptions can include credentials or signed URLs.
 	message := "local Bridge startup failed; run doctor --config <actual profile> and check configuration and local ownership"
-	for _, known := range []error{bridge.ErrBrowserProfileInUse, bridge.ErrAlreadyRunning, bridge.ErrBuildMismatch} {
+	for _, known := range []error{bridge.ErrBrowserProfileInUse, bridge.ErrAlreadyRunning, bridge.ErrBuildMismatch, bridge.ErrRecoveryExhausted, bridge.ErrBridgeStopping} {
 		if errors.Is(cause, known) {
 			message = known.Error()
 			break

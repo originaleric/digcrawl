@@ -22,10 +22,10 @@ MCP stdio 子进程只转发到同 profile 的私有 Bridge，Runtime 与浏览�
 
 客户端先校验 manifest 的 `build_id` 与 Runtime 版本，构建不匹配时要求关闭旧 MCP 连接、用已安装二进制执行 `digcrawl bridge restart --config <实际 profile>` 后重新连接。doctor 通过已有 Bridge 检查实际浏览器操作，不另起浏览器。
 
-浏览器读取层拥有总预算和最多一次故障重试，平台 fallback 共用该预算。Collector 不重放浏览器相关整项 handler；MCP 保留 `error` 的 code/message 契约，并通过同级 `error_details` 交付 `handled`、故障阶段、恢复结果、`next_actions` 和诊断编号。带 progress token 的调用会收到开始和结束通知。具体恢复步骤见 [USAGE.md](../USAGE.md#浏览器超时或反复失败)。
+浏览器读取层拥有总预算和最多一次故障重试，平台 fallback 共用该预算。Collector 不重放浏览器相关整项 handler；MCP 保留 `error` 的 code/message 契约，并通过同级 `error_details` 交付 `handled`、故障阶段、恢复结果、`next_actions` 和诊断编号。带 progress token 的调用会收到开始和结束通知。具体恢复步骤见 [USAGE.zh-CN.md](../USAGE.zh-CN.md#浏览器超时或反复失败)。
 
 ## 宿主 HTTP 客户端
 
 业务宿主若需**主动请求**用户本机 Gateway（而非 Collector 反向连接），请使用仓库顶层 [`client/`](../client/) 包，而非 `transport` 下的实现。
 
-完整说明见 [USAGE.md](../USAGE.md)。
+完整说明见 [USAGE.zh-CN.md](../USAGE.zh-CN.md)。

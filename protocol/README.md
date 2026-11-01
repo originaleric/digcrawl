@@ -16,4 +16,4 @@ DigCrawl 工具网关的**线协议与类型定义**，与传输形态（HTTP / 
 - [`types.go`](types.go) — 结构体定义
 - [`wire.go`](wire.go) — JSON 序列化与消息类型常量
 
-使用说明见仓库根目录 [USAGE.md](../USAGE.md)。
+使用说明见仓库根目录 [USAGE.zh-CN.md](../USAGE.zh-CN.md)。

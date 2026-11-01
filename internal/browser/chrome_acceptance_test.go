@@ -2,6 +2,8 @@ package browser
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"github.com/go-rod/rod/lib/launcher"
 	"github.com/go-rod/rod/lib/proto"
@@ -424,4 +426,83 @@ func TestChromeExternalCDPOwnershipAcceptance(t *testing.T) {
 	}
 
 	t.Log("external owner preserved; failed target cleanup quarantined replacement; targeted manual cleanup leaves zero targets")
+}
+
+func TestChromeSessionImageAcceptance(t *testing.T) {
+	if os.Getenv("DIGCRAWL_BROWSER_ACCEPTANCE") != "1" {
+		t.Skip("real Chrome acceptance is opt-in")
+	}
+	headless := true
+	cfg := normalizeLocalBrowserConfig(config.LocalBrowserConfig{ChromePath: os.Getenv("DIGCRAWL_CHROME_PATH"), Headless: &headless, UserDataDir: t.TempDir(), MaxConcurrency: 1, TotalTimeoutSec: 30, NavigateTimeoutSec: 10, WaitSelectorTimeoutSec: 5})
+	previous := *config.Get()
+	config.Get().LocalBrowser = cfg
+	config.Get().Gateway.AllowedDomains = nil
+	defer func() { *config.Get() = previous }()
+	m := &browserManager{cfg: cfg, slots: make(chan struct{}, 1), sessions: make(map[uint64]*browserSession), stopCh: make(chan struct{})}
+	defer m.shutdownImmediately(context.Background())
+	const png64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aF1sAAAAASUVORK5CYII="
+	image, _ := base64.StdEncoding.DecodeString(png64)
+	var authenticated atomic.Int32
+	var stallCapture atomic.Bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/image" {
+			c, e := r.Cookie("session")
+			if e != nil || c.Value != "fixture" {
+				w.WriteHeader(401)
+				return
+			}
+			authenticated.Add(1)
+			if stallCapture.Load() && r.Header.Get("Sec-Fetch-Dest") != "image" {
+				select {
+				case <-r.Context().Done():
+					return
+				case <-time.After(8 * time.Second):
+				}
+			}
+			w.Header().Set("Content-Type", "image/png")
+			w.Write(image)
+			return
+		}
+		http.SetCookie(w, &http.Cookie{Name: "session", Value: "fixture", Path: "/", HttpOnly: true})
+		w.Header().Set("Content-Type", "text/html")
+		io.WriteString(w, `<html><head><title>Session images</title></head><body><article><p>body remains</p><img style="width:120px;height:120px" src="/image"><img id="blob" style="width:120px;height:120px"></article><script>
+  const bytes=Uint8Array.from(atob('`+png64+`'),c=>c.charCodeAt(0));const img=document.querySelector('#blob');img.onload=()=>{img.id='ready'};img.src=URL.createObjectURL(new Blob([bytes],{type:'image/png'}));</script></body></html>`)
+	}))
+	defer server.Close()
+	resp, err := browserBrowseWithSessionRunner(context.Background(), &BrowserBrowseRequest{URL: server.URL, Mode: "full", ContentSelector: "article", WaitSelector: "#ready", ImageMaxItems: 4, ImageMaxBytes: 4096}, func() *browserManager { return m }, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.ImageData) != 2 || authenticated.Load() < 2 {
+		t.Fatalf("images=%+v authenticated fetches=%d", resp.ImageData, authenticated.Load())
+	}
+	for _, img := range resp.ImageData {
+		if img["error"] != "" || !strings.HasPrefix(img["data"], "data:image/png;base64,") {
+			t.Fatalf("image=%+v", img)
+		}
+	}
+	encoded, _ := json.Marshal(resp)
+	if strings.Contains(string(encoded), "data:image/") || strings.Contains(string(encoded), "fixture") {
+		t.Fatal("inline bytes or cookie escaped browser result")
+	}
+	// Auxiliary fetches must not cancel an already successful body read.
+	stallCapture.Store(true)
+	config.Get().LocalBrowser.TotalTimeoutSec = 4
+	resp, err = browserBrowseWithSessionRunner(context.Background(), &BrowserBrowseRequest{URL: server.URL, Mode: "full", ContentSelector: "article", WaitSelector: "#ready", ImageMaxItems: 1, ImageMaxBytes: 4096}, func() *browserManager { return m }, nil)
+	if err != nil || resp == nil || !strings.Contains(resp.Text, "body remains") {
+		t.Fatalf("auxiliary timeout discarded body: %v", err)
+	}
+	if len(resp.ImageData) != 1 || resp.ImageData[0]["error"] != "budget_exhausted" {
+		t.Fatalf("auxiliary timeout not visible: %+v", resp.ImageData)
+	}
+	stallCapture.Store(false)
+	config.Get().LocalBrowser.TotalTimeoutSec = 30
+	// The same real document also exercises byte and count limits.
+	resp, err = browserBrowseWithSessionRunner(context.Background(), &BrowserBrowseRequest{URL: server.URL, Mode: "full", ContentSelector: "article", WaitSelector: "#ready", ImageMaxItems: 1, ImageMaxBytes: 8}, func() *browserManager { return m }, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !resp.ImagesTruncated || len(resp.ImageData) != 1 || resp.ImageData[0]["error"] != "too_large" {
+		t.Fatalf("limits=%+v", resp)
+	}
 }

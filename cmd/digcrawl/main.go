@@ -235,7 +235,7 @@ func runDevHost(args []string) {
 func runMCP(args []string) {
 	fs := flag.NewFlagSet("mcp", flag.ExitOnError)
 	configPath := fs.String("config", "", "path to profile (default: user skill profile)")
-	idleTimeout := fs.Duration("idle-timeout", mcpgw.DefaultStdioIdleTimeout, "exit after this much inactive stdio time (explicit 0 disables recovery)")
+	idleTimeout := fs.Duration("idle-timeout", mcpgw.DefaultStdioIdleTimeout, "exit after tool inactivity; default keeps initialized host connection (explicit 0 also disables initialization recovery)")
 	_ = fs.Parse(args)
 	idleTimeoutExplicit := false
 	fs.Visit(func(f *flag.Flag) {

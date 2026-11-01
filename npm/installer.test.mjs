@@ -59,11 +59,11 @@ async function sandbox() {
   delete env.DIGCRAWL_CODEX_CONFIG;
   delete env.DIGCRAWL_SKILL_DIR;
   delete env.FAIL_BRIDGE;
-  const name = assetName('1.0.0');
   const hash = createHash('sha256').update(archive).digest('hex');
   const requests = [];
   const fetchImpl = async url => {
     requests.push(url);
+    const name = assetName(url.split('/').at(-2));
     return new Response(url.endsWith('/checksums.txt') ? `${hash}  ${name}\n` : archive);
   };
   return { env, home, cwd: home, log: () => {}, fetchImpl, requests };
@@ -89,7 +89,7 @@ test('fresh install and update use stable paths, preserve profile and other MCP 
   await install({ version: '1.0.0' }, context);
   const first = await fs.readFile(config, 'utf8');
   assert.ok(first.includes('# Keep this comment'));
-  assert.deepEqual(structuredClone(parse(first).mcp_servers.digcrawl), { command: dirs.binary, args: ['mcp', '--idle-timeout', '15m', '--config', dirs.profile] });
+  assert.deepEqual(structuredClone(parse(first).mcp_servers.digcrawl), { command: dirs.binary, args: ['mcp', '--idle-timeout', '0', '--config', dirs.profile] });
   assert.equal(parse(first).mcp_servers.other.command, 'other');
   for (const dir of [dirs.skill, path.join(dirs.codexHome, 'skills', 'digcrawl'), path.join(dirs.claudeHome, 'skills', 'digcrawl')]) {
     for (const file of skillFiles) assert.equal(await fs.readFile(path.join(dir, file), 'utf8'), `fixture ${file}`);
@@ -129,6 +129,7 @@ test('failed Bridge stop preserves the installed executable and user settings', 
 test('program-only and explicit Claude installations respect host scope', async () => {
   const only = await sandbox();
   const dirs = await install({ skipAgents: true }, only);
+  assert.ok(only.requests.every(url => url.includes('/v1.0.2/')));
   await assert.rejects(fs.stat(dirs.profile), { code: 'ENOENT' });
   await assert.rejects(fs.stat(dirs.codexHome), { code: 'ENOENT' });
   const claude = await sandbox();
@@ -203,7 +204,7 @@ test('npm tarball contains only the public installer and documents; npx entry re
   const packed = JSON.parse(result.stdout)[0];
   assert.deepEqual(packed.files.map(f => f.path).sort(), ['LICENSE', 'README.md', 'README.zh-CN.md', 'npm/cli.mjs', 'npm/install.mjs', 'package.json'].sort());
   const pkg = JSON.parse(await fs.readFile(new URL('../package.json', import.meta.url), 'utf8'));
-  assert.equal(pkg.digcrawlRelease, '1.0.0');
+  assert.equal(pkg.digcrawlRelease, '1.0.2');
   assert.equal(pkg.scripts.postinstall, undefined);
   const extracted = path.join(root, 'packed');
   await fs.mkdir(extracted);

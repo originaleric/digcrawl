@@ -618,3 +618,31 @@ func TestToolResultToMCPUsesRuntimeBoundInlineLimit(t *testing.T) {
 		t.Fatalf("configured inline limit must reject an artifact MCP cannot retrieve: %#v", result)
 	}
 }
+
+func TestDefaultCLILifecycleKeepsInitializedSessionUntilEOF(t *testing.T) {
+	stdin, client := io.Pipe()
+	defer client.Close()
+	done := make(chan error, 1)
+	go func() {
+		server := mcpserver.NewMCPServer("test", "1.0.0")
+		done <- serveStdioWithGuardOptions(context.Background(), server, stdin, io.Discard, 0, newIdleGuard(), true, 30*time.Millisecond, DefaultStdioSessionIdleTimeout)
+	}()
+	writeMCPInitialize(t, client, "any-host")
+	select {
+	case err := <-done:
+		t.Fatalf("initialized default connection exited: %v", err)
+	case <-time.After(120 * time.Millisecond):
+	}
+	if _, err := io.WriteString(client, `{"jsonrpc":"2.0","id":2,"method":"ping"}`+"\n"); err != nil {
+		t.Fatal(err)
+	}
+	client.Close()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("EOF did not stop initialized session")
+	}
+}

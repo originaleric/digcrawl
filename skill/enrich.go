@@ -41,6 +41,9 @@ type EnhanceOptions struct {
 	// They are OCR-only process inputs: their absolute paths never leave this
 	// package in output metadata or result payloads.
 	LocalImages []LocalImageInput
+	// InlineImages are bounded, session-resolved OCR inputs; never exported.
+	InlineImages   []ocr.ImageRef
+	ResolvedImages bool
 }
 
 // LocalImageInput associates one retained local image with the remote source
@@ -89,9 +92,9 @@ func Enhance(ctx context.Context, out map[string]any, cfg config.SkillConfig, op
 	var downloaded []map[string]any
 	var ocrDownloaded []map[string]any
 	localDownloaded := localVideoEntries(opts.LocalVideoPaths)
-	localImageRefs := localImageOCRRefs(opts.LocalImages)
+	localImageRefs := append(append([]ocr.ImageRef(nil), opts.InlineImages...), localImageOCRRefs(opts.LocalImages)...)
 	asrAttempted := false
-	if assetsDir != "" && opts.IncludeOCR && !localImagesCoverAllOCRMedia(out, opts.LocalImages) {
+	if assetsDir != "" && opts.IncludeOCR && !opts.ResolvedImages && len(opts.InlineImages) == 0 && !localImagesCoverAllOCRMedia(out, opts.LocalImages) {
 		downloadOpts := AssetDownloadOptions{
 			MaxBytes:      cfg.Media.MaxBytes,
 			TimeoutSec:    cfg.Media.TimeoutSec,
@@ -142,7 +145,7 @@ func Enhance(ctx context.Context, out map[string]any, cfg config.SkillConfig, op
 			}
 			out["platform_metadata"] = meta
 		}
-		ocrOpts := ocr.EnrichOptions{Downloaded: downloaded, ExtraImages: append(localImageRefs, videoFrameRefs...)}
+		ocrOpts := ocr.EnrichOptions{ResolvedImages: opts.ResolvedImages, Downloaded: downloaded, ExtraImages: append(localImageRefs, videoFrameRefs...)}
 		if assetsDir != "" {
 			ocrOpts.AssetsDir = assetsDir
 		}
@@ -178,6 +181,8 @@ func markOCROutcome(out map[string]any) {
 	if err := ocr.RequestedFailure(out); err != nil {
 		meta["ocr_status"] = "degraded"
 		meta["ocr_failure_reason"] = "provider_unavailable"
+	} else if meta["ocr_status"] == "degraded" || meta["ocr_status"] == "no_images" {
+		// Per-image failures/truncation remain visible even when another image succeeded.
 	} else if strings.TrimSpace(stringValue(meta["ocr_video_frames_error"])) != "" {
 		meta["ocr_status"] = "degraded"
 		meta["ocr_failure_reason"] = "frame_extraction_failed"
@@ -343,7 +348,7 @@ func validateEnhancementRequest(out map[string]any, cfg config.SkillConfig, opts
 	// OCR. A Skill directory is only needed when this execution itself acquires
 	// page assets or ASR candidates.
 	localVideoInputs := localVideoEntries(opts.LocalVideoPaths)
-	needsOCRAssetDownload := opts.IncludeOCR && (!localImagesCoverAllOCRMedia(out, opts.LocalImages) || (videoFrameOCR && len(localVideoInputs) == 0))
+	needsOCRAssetDownload := opts.IncludeOCR && (!opts.ResolvedImages && len(opts.InlineImages) == 0 && !localImagesCoverAllOCRMedia(out, opts.LocalImages) || (videoFrameOCR && len(localVideoInputs) == 0))
 	needsAssetsDir := cfg.Media.DownloadMedia && (needsOCRAssetDownload || (requiresASR && len(localVideoInputs) == 0))
 	if needsAssetsDir {
 		if err := validateSkillAssetsRoot(cfg.Media.Dir); err != nil {
