@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -377,18 +378,28 @@ func TestNewExecutorReportsPrivateStartupStatus(t *testing.T) {
 		t.Fatal(err)
 	}
 	executable := filepath.Join(dir, "bridge-failure")
-	script := `#!/bin/sh
-while [ "$#" -gt 0 ]; do
-  if [ "$1" = "--startup-status" ]; then
-    printf '%s' 'configured Chrome profile is already owned by another local DigCrawl bridge' > "$2"
-    exit 1
-  fi
-  shift
-done
-exit 1
+	if runtime.GOOS == "windows" {
+		executable += ".exe"
+	}
+	// Use a native helper so Windows exercises the same startup-status path.
+	fixture := filepath.Join(dir, "bridge-failure.go")
+	source := `package main
+import "os"
+func main() {
+ for i, arg := range os.Args {
+  if arg == "--startup-status" && i+1 < len(os.Args) {
+   if err := os.WriteFile(os.Args[i+1], []byte("configured Chrome profile is already owned by another local DigCrawl bridge"), 0600); err != nil { panic(err) }
+   os.Exit(1)
+  }
+ }
+ os.Exit(1)
+}
 `
-	if err := os.WriteFile(executable, []byte(script), 0o700); err != nil {
+	if err := os.WriteFile(fixture, []byte(source), 0o600); err != nil {
 		t.Fatal(err)
+	}
+	if output, err := exec.Command("go", "build", "-o", executable, fixture).CombinedOutput(); err != nil {
+		t.Fatalf("build startup helper: %v: %s", err, output)
 	}
 	// This matches the production startup budget plus a small scheduling margin:
 	// the assertion is about a deterministic private diagnostic, not whether a
