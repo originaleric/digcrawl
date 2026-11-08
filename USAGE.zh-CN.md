@@ -10,23 +10,6 @@ DigCrawl 是面向任意 Agent 编排系统的**本地工具网关**：在用户
 
 ## 1. 安装
 
-### 使用 npx 安装
-
-已安装 Node.js 20.19+ 的用户可在 macOS、Linux 或 Windows 运行：
-
-```bash
-npx digcrawl-skill@latest install
-npx digcrawl-skill install codex
-npx digcrawl-skill install claude-code
-npx digcrawl-skill install --all
-npx digcrawl-skill install --skip-agent-setup
-npx digcrawl-skill status
-```
-
-安装程序、完整Skill和默认profile，自动配置Codex；检测到Claude Code时安装其Skill。npm `digcrawl-skill@1.0.2` 固定对应GitHub Release `v1.0.2`；指定程序版本用 `install --version vX.Y.Z`。支持Release提供的macOS / Linux amd64、arm64和Windows amd64。
-
-程序安装至 `~/.local/bin/digcrawl`（Windows为 `digcrawl.exe`），MCP使用绝对路径，不依赖npm缓存或 `PATH`。安装器不修改shell配置，保留已有profile和登录会话，更新前停止该profile的Bridge；安装后重启Agent并重新连接。可用 `--install-dir`、`--skip-codex`，以及 `DIGCRAWL_INSTALL_DIR`、`DIGCRAWL_SKILL_DIR`、`CODEX_HOME`、`DIGCRAWL_CODEX_CONFIG`、`CLAUDE_CONFIG_DIR` 自定义路径。Profile与Skill路径遵循下方脚本安装说明。
-
 ### 从 Release 安装（推荐给开源用户）
 
 常规用户不需要安装 Go。Release 提供 macOS Apple Silicon / Intel、Linux x86_64 / arm64 和 Windows x86_64 二进制。
@@ -61,39 +44,28 @@ digcrawl doctor --config "$HOME/.config/digcrawl/digcrawl-skill.yaml"
 
 ### 浏览器能力（按需）
 
-使用浏览器类工具时需本机 Chrome/Chromium。`ChromePath` 留空时 DigCrawl 会优先发现系统浏览器，再发现当前可用的 Playwright `chrome-headless-shell`；不要把 `chromium_headless_shell-<版本>` 这类会随 Playwright 更新而变化的路径写死到配置中。在 macOS sandbox 或 CI-like headless 环境中，可使用 Playwright `chrome-headless-shell` 作为兜底，并按需要配置启动参数。
+DigCrawl 后台只使用自己管理的 `chrome-headless-shell`；人工登录使用应用身份独立的 Chrome for Testing。不会搜索或回退到日常 Chrome、系统 Chromium、Rod 下载或共享 Playwright 缓存。浏览器缺失或校验失败时会明确失败。
 
-### 本机 Headless Chromium（推荐兜底）
-
-当系统 Chrome、Chrome for Testing 或 Rod 自动下载的 Chromium 无法 headless 启动时，可安装 Playwright 的 `chrome-headless-shell`：
+安装器准备固定版本运行时。源码运行或离线环境可执行：
 
 ```bash
-mkdir -p "$HOME/.cache/digcrawl-playwright"
-cd "$HOME/.cache/digcrawl-playwright"
-
-npm_config_cache=/private/tmp/npm-cache \
-PLAYWRIGHT_BROWSERS_PATH="$HOME/.cache/ms-playwright" \
-npx -y playwright install chromium
-
-export DIGCRAWL_PLAYWRIGHT_BROWSERS_PATH="$HOME/.cache/ms-playwright"
+digcrawl browser install
+# 离线：目录包含 runtime-lock.json 对应平台、版本和校验值的两个官方 ZIP
+digcrawl browser install --archive-dir /absolute/path/to/archives
 ```
 
-安装后保持 `LocalBrowser.ChromePath: ""`，DigCrawl 会动态选择当前可用的 shell。macOS sandbox 下通常还需要 `--single-process` / `--no-zygote` 以及禁用 crashpad：
+运行时默认放在 `$XDG_DATA_HOME/digcrawl/browsers`，未设置时为 `~/.local/share/digcrawl/browsers`；可用 `DIGCRAWL_BROWSER_DIR` 指定独立目录。保持 `LocalBrowser.ChromePath: ""`，旧桌面路径会被拒绝。`DIGCRAWL_CHROME_PATH`、`CHROME_PATH` 和 `CHROME_BIN` 不再选择后台程序。兼容参数由程序设置，禁止通过 ExtraArgs 改写浏览器、profile 或调试端口。
 
-```yaml
-LocalBrowser:
-  ChromePath: ""
-  Headless: true
-  UserDataDir: "/private/tmp/digcrawl-pw-headless-profile"
-  ExtraArgs:
-    - "--single-process"
-    - "--no-zygote"
-    - "--disable-dev-shm-usage"
-    - "--disable-crash-reporter"
-    - "--disable-crashpad"
-    - "--disable-breakpad"
-    - "--disable-features=Crashpad"
+升级旧安装时，先检查，再明确迁移每份实际配置（包括宿主内嵌的 DigCrawl）：
+
+```bash
+digcrawl browser migrate --config /absolute/path/to/profile.yaml
+digcrawl browser migrate --config /absolute/path/to/profile.yaml --apply
 ```
+
+迁移仅停止经归属核验的旧 Bridge，清除该配置的旧 ChromePath，并保留原配置的私有备份。新 profile 使用 UserDataDir 下的 `digcrawl-isolated` 子目录；CookieStoreDir 保留不变，不复制日常浏览器数据。不兼容的会话需在专用登录窗口重新登录。迁移后更新并重启全部调用方；旧二进制不会因新版安装自动改变行为。旧 CDP 服务需用新版脚本重新安装，`DIGCRAWL_BIN` 指向新版 CLI；外部 CDP 仅接受可验证的专用运行时与专用 profile。
+
+Homebrew Cask 的安装前步骤也调用同一套 `browser install --migrate-default`，准备专用运行时后才迁移标准 profile；不会绕过 macOS 的签名或隔离保护。直接命令也支持 `DIGCRAWL_BROWSER_ARCHIVE_DIR` 离线目录。登录窗口中的 Chrome for Testing 测试版提示是官方发行版的说明；请在目标网站的网页内登录，不需要启用浏览器账号同步。
 
 ### 从源码运行（仅开发者）
 
@@ -183,7 +155,7 @@ go install ./cmd/digcollect
 |------|------|
 | `Enabled` | 为 `false` 时禁用浏览器及依赖它的 Provider |
 | `AllowedDomains` | 独立 snapshot/action 与页面上下文 API fetch 的本地域名约束；通用 `browser.browse` 使用 `Gateway.AllowedDomains`，平台 provider 另外检查调用、配置或平台默认域名策略 |
-| `ChromePath` | 指定 Chrome/Chromium/headless shell 可执行文件路径；为空时自动发现系统浏览器或当前可用的 Playwright 缓存，不应写死版本化缓存路径 |
+| `ChromePath` | 保持为空，使用固定版本专用运行时；桌面浏览器路径会被拒绝 |
 | `Headless` | 是否无头模式 |
 | `CookieStoreDir` | 按域名持久化 Cookie，便于登录态采集 |
 | `CDPMode` / `CDPPort` | 后台抓取启动浏览器时开启 CDP 调试端口；`browser login` 始终使用私有动态端点，避免接管其他本机浏览器 |
@@ -200,7 +172,7 @@ go install ./cmd/digcollect
 
 `digcrawl mcp` 首次被调用时，会为该 profile 启动一个私有 Unix socket Bridge。多个 Codex MCP stdio 子进程只转发协议，Bridge 才是唯一创建 Runtime 和 Chrome 的进程；因此没有固定 CDP 端口、没有 launchd/systemd 常驻浏览器，也不会因 MCP 重连重复争抢浏览器。配置文件的符号链接会归并到同一个 Bridge；而同一个持久化 `UserDataDir` 在任意时刻只能由一个 Bridge 使用。若确实需要两套独立配置，请给它们配置不同的 `UserDataDir`，避免权限、超时和登录态混用。Bridge 不使用空闲退出计时器：它会持续服务，直到异常退出或执行 `digcrawl bridge stop --config <profile>`；需要立即重启则用 `digcrawl bridge restart --config <profile>`。停止/重启不是平滑交接：它会立即取消在途 MCP 读取，待 Bridge 自己管理的 Chrome 已释放后才允许下一实例启动。Release 安装器使用已验证的临时新二进制，在替换安装目标前先停掉标准 Skill profile 的旧 Bridge，因此下一次 MCP 调用不会继续执行旧二进制。
 
-Bridge 默认忽略 profile 中遗留的 `CDPMode`、`CDPConnectExisting` 与 `CDPPort`，直接管理 `ChromePath`（未配置时优先发现系统 Chrome）。这样旧的 CDP 服务短暂不可用、端口被占用或返回伪 HTTP 成功，都不再决定 MCP 是否可读页面。`digcrawl doctor --config <profile>` 分别检查浏览器依赖、Bridge 传输、运行构建与实际浏览器操作；实际操作通过已有 Bridge 创建并关闭测试页面，不启动第二个浏览器。首次 MCP 连接前若 Bridge 尚未运行，这项检查会明确报告未执行。
+Bridge 默认忽略 profile 中遗留的 `CDPMode`、`CDPConnectExisting` 与 `CDPPort`，直接管理经过验证的专用无头运行时。这样旧的 CDP 服务短暂不可用、端口被占用或返回伪 HTTP 成功，都不再决定 MCP 是否可读页面。`digcrawl doctor --config <profile>` 分别检查浏览器依赖、Bridge 传输、运行构建与实际浏览器操作；实际操作通过已有 Bridge 创建并关闭测试页面，不启动第二个浏览器。首次 MCP 连接前若 Bridge 尚未运行，这项检查会明确报告未执行。
 
 Codex 的 MCP proxy 是 stdio 协议所需的宿主子进程，各代理共享上述Bridge。初始化后的代理默认随宿主管道存活；未初始化管道默认在1分钟空闲后回收，显式 `--idle-timeout 0` 则关闭这项回收。正数空闲期限及旧配置迁移见[连接保活与OCR故障诊断](#mcp-连接保活与-ocr-故障诊断)。
 
@@ -1093,9 +1065,11 @@ digcrawl browser login --platform instagram
 digcrawl browser login --platform youtube
 ```
 
-YouTube 登录使用普通 Chrome 的独立 profile：登录阶段不连接 CDP、不注入脚本。用户点击“登录”，完成 Google 登录并返回 YouTube，再确认保存；DigCrawl 正常关闭该专用 Chrome、等待 profile 释放后，才启动后台会话同步。Windows 用户需先关闭该专用 Chrome 的全部窗口，再确认。`youtube.video.read` 默认复用该配置目录中的 YouTube 会话；不会复制日常浏览器会话，也不会将 Google 域的 Cookie 写入 YouTube Cookie 存储。登录不保证消除平台的验证要求；若仍返回 `LOGIN_REQUIRED` 或 `CAPTCHA_REQUIRED`，按原错误处理。该会话接入用于浏览器读取，`yt-dlp` 媒体下载不自动继承它。
+YouTube 登录使用专用 Chrome for Testing 的独立 profile：登录阶段不连接 CDP、不注入脚本。用户点击“登录”，完成 Google 登录并返回 YouTube，再确认保存；DigCrawl 正常关闭该专用 Chrome、等待 profile 释放后，才启动后台会话同步。Windows 用户需先关闭该专用 Chrome 的全部窗口，再确认。`youtube.video.read` 默认复用该配置目录中的 YouTube 会话；不会复制日常浏览器会话，也不会将 Google 域的 Cookie 写入 YouTube Cookie 存储。登录不保证消除平台的验证要求；若仍返回 `LOGIN_REQUIRED` 或 `CAPTCHA_REQUIRED`，按原错误处理。该会话接入用于浏览器读取，`yt-dlp` 媒体下载不自动继承它。
 
 登录后可检查会话，并可选试读一个 URL：
+
+`browser check` 使用临时独立浏览器 profile，读取相同的 Cookie 存储。MCP Bridge 持有持久 profile 时也可执行检查；命令确认浏览器释放后才删除临时 profile。
 
 ```bash
 digcrawl browser check --platform youtube \
@@ -1370,20 +1344,7 @@ MCP 返回操作前后的进度通知需要宿主随请求提供 progress token�
 
 ### Headless Chrome / Chromium 启动失败
 
-如果报错包含 `Failed to get the debug url`、`can't find a browser binary`、`CreateUniqueTempDir`、`Crashpad` 或 `MachPortRendezvousServer`，优先使用上文的 Playwright `chrome-headless-shell` 方案，并在 `LocalBrowser.ExtraArgs` 中加入：
-
-```yaml
-ExtraArgs:
-  - "--single-process"
-  - "--no-zygote"
-  - "--disable-dev-shm-usage"
-  - "--disable-crash-reporter"
-  - "--disable-crashpad"
-  - "--disable-breakpad"
-  - "--disable-features=Crashpad"
-```
-
-同时建议把 `UserDataDir` 指向 `/private/tmp/...` 这类当前进程可写目录。若需要复用登录态，则使用有头登录路径单独维护平台 Cookie，headless 采集路径使用稳定 profile。
+运行 `digcrawl browser runtime` 检查固定版本与完整性；依赖缺失时执行 `digcrawl browser install`。遇到完整性损坏时，先迁移/停止对应所有者，再执行 `digcrawl browser install --repair` 保留并替换损坏目录。不要改为使用日常 Chrome，也不要删除用户浏览器的锁或数据。旧路径配置用上面的 migrate 命令处理。
 
 ### Collect 通用网页内容不完整
 

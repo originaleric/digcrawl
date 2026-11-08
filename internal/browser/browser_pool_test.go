@@ -69,49 +69,26 @@ func TestNormalizeLocalBrowserConfigKeepsExplicitChromePath(t *testing.T) {
 	}
 }
 
-func TestNormalizeLocalBrowserConfigFallsBackWhenExplicitChromePathIsStale(t *testing.T) {
+func TestNormalizeLocalBrowserConfigRetainsStaleOverrideForExplicitRejection(t *testing.T) {
 	stale := filepath.Join(t.TempDir(), "removed-chrome")
 	fallback := browserTestExecutablePath(t.TempDir(), "env-chrome")
 	writeExecutable(t, fallback)
 	t.Setenv("DIGCRAWL_CHROME_PATH", fallback)
 
 	cfg := normalizeLocalBrowserConfig(config.LocalBrowserConfig{ChromePath: stale})
-	if cfg.ChromePath != fallback {
-		t.Fatalf("stale ChromePath should fall back to discovered browser %q, got %q", fallback, cfg.ChromePath)
+	if cfg.ChromePath != stale {
+		t.Fatalf("stale explicit path must not silently select another browser, got %q", cfg.ChromePath)
 	}
 }
 
-func TestNormalizeLocalBrowserConfigUsesEnvChromePath(t *testing.T) {
+func TestNormalizeLocalBrowserConfigDoesNotUseDesktopEnvOverride(t *testing.T) {
 	path := browserTestExecutablePath(t.TempDir(), "chrome")
 	writeExecutable(t, path)
 	t.Setenv("DIGCRAWL_CHROME_PATH", path)
 
 	cfg := normalizeLocalBrowserConfig(config.LocalBrowserConfig{})
-	if cfg.ChromePath != path {
-		t.Fatalf("expected env ChromePath %q, got %q", path, cfg.ChromePath)
-	}
-}
-
-func TestFirstExecutablePathPrefersInstalledBrowserOverPlaywrightShell(t *testing.T) {
-	root := t.TempDir()
-	headlessShell := filepath.Join(root, playwrightHeadlessShellRelPath())
-	installed := browserTestExecutablePath(root, "Google Chrome")
-	writeExecutable(t, headlessShell)
-	writeExecutable(t, installed)
-
-	if got := firstExecutablePath([]string{installed}, []string{headlessShell}); got != installed {
-		t.Fatalf("expected installed browser %q, got %q", installed, got)
-	}
-}
-
-func TestFirstExecutablePathUsesNewestPlaywrightHeadlessShellWhenNeeded(t *testing.T) {
-	root := t.TempDir()
-	older := filepath.Join(root, playwrightHeadlessShellRelPathVersion("1217"))
-	newer := filepath.Join(root, playwrightHeadlessShellRelPathVersion("1223"))
-	writeExecutable(t, older)
-	writeExecutable(t, newer)
-	if got := firstExecutablePath(nil, []string{newer, older}); got != newer {
-		t.Fatalf("expected newest Playwright headless shell %q, got %q", newer, got)
+	if cfg.ChromePath == path {
+		t.Fatalf("desktop environment override must not select background runtime: %q", path)
 	}
 }
 
@@ -175,8 +152,8 @@ func TestCheckAvailableProbesConfiguredExistingCDP(t *testing.T) {
 		t.Fatal(err)
 	}
 	existing := true
-	if err := CheckAvailable(config.LocalBrowserConfig{CDPConnectExisting: &existing, CDPPort: port}); err != nil {
-		t.Fatalf("attached CDP health check: %v", err)
+	if err := CheckAvailable(config.LocalBrowserConfig{CDPConnectExisting: &existing, CDPPort: port}); err == nil {
+		t.Fatal("a JSON endpoint alone must not prove isolated CDP ownership")
 	}
 }
 
@@ -321,25 +298,6 @@ func TestConnectCDPBrowserHonorsDeadlineDuringStalledHandshake(t *testing.T) {
 	}
 }
 
-func TestDiscoverInteractiveChromePathPrefersVisibleExecutable(t *testing.T) {
-	path := browserTestExecutablePath(t.TempDir(), "Chrome")
-	writeExecutable(t, path)
-	if got := discoverInteractiveChromePath(path); got != path {
-		t.Fatalf("interactive path=%q want %q", got, path)
-	}
-}
-
-func TestDiscoverInteractiveChromePathRejectsHeadlessShell(t *testing.T) {
-	path := browserTestExecutablePath(t.TempDir(), "chrome-headless-shell")
-	writeExecutable(t, path)
-	for _, key := range []string{"DIGCRAWL_CHROME_PATH", "CHROME_PATH", "CHROME_BIN"} {
-		t.Setenv(key, path)
-	}
-	if got := discoverInteractiveChromePath(path); got == path {
-		t.Fatalf("headless shell must not be selected for interactive login: %q", got)
-	}
-}
-
 func writeExecutable(t *testing.T, path string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -358,18 +316,7 @@ func browserTestExecutablePath(dir, name string) string {
 }
 
 func playwrightHeadlessShellRelPath() string {
-	return playwrightHeadlessShellRelPathVersion("9999")
-}
-
-func playwrightHeadlessShellRelPathVersion(version string) string {
-	switch runtime.GOOS {
-	case "darwin":
-		return "chromium_headless_shell-" + version + "/chrome-headless-shell-mac-arm64/chrome-headless-shell"
-	case "windows":
-		return "chromium_headless_shell-" + version + "/chrome-headless-shell-win64/chrome-headless-shell.exe"
-	default:
-		return "chromium_headless_shell-" + version + "/chrome-headless-shell-linux-x64/chrome-headless-shell"
-	}
+	return runtimeExecutableRelative("chrome-headless-shell", browserRuntimePlatform())
 }
 
 func containsArg(args []string, want string) bool {

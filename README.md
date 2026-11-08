@@ -292,7 +292,7 @@ Read this agent video and extract its description and chapters. https://www.yout
 
 ### YouTube Sign-In
 
-On `LOGIN_REQUIRED`, ask your agent to open a dedicated, ordinary Chrome window:
+On `LOGIN_REQUIRED`, ask your agent to open the dedicated Chrome for Testing sign-in window:
 
 ```text
 Open the DigCrawl sign-in window for YouTube.
@@ -365,6 +365,8 @@ Use absolute program and profile paths, and copy the whole Skill rather than onl
 - Access failures and rate limits are reported explicitly; error pages are not treated as content.
 
 ### Browser recovery and diagnostics
+
+Background rendering uses a dedicated headless runtime; sign-in uses a separately identified headed browser. Dependency failures never fall back to daily Chrome. Source installations must run `digcrawl browser install`; migrate legacy configurations and embedded copies using the [upgrade instructions](./USAGE.md#browser-capabilities-optional).
 
 Follow the returned error guidance or see [browser troubleshooting](./USAGE.md#browser-timeouts-or-repeated-failures).
 

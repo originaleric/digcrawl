@@ -13,10 +13,6 @@ func TestFeishuDocumentAcceptance(t *testing.T) {
 	if os.Getenv("DIGCRAWL_FEISHU_ACCEPTANCE") != "1" {
 		t.Skip("remote Feishu acceptance is opt-in")
 	}
-	documentURL := os.Getenv("DIGCRAWL_FEISHU_URL")
-	if documentURL == "" {
-		t.Skip("set DIGCRAWL_FEISHU_URL to an authorized test document")
-	}
 	headless := true
 	cfg := normalizeLocalBrowserConfig(config.LocalBrowserConfig{ChromePath: os.Getenv("DIGCRAWL_CHROME_PATH"), Headless: &headless, UserDataDir: t.TempDir(), MaxConcurrency: 1, TotalTimeoutSec: 60, NavigateTimeoutSec: 20, WaitSelectorTimeoutSec: 5})
 	previous := *config.Get()
@@ -25,7 +21,7 @@ func TestFeishuDocumentAcceptance(t *testing.T) {
 	defer func() { *config.Get() = previous }()
 	m := &browserManager{cfg: cfg, slots: make(chan struct{}, 1), sessions: make(map[uint64]*browserSession), stopCh: make(chan struct{})}
 	defer m.shutdownImmediately(context.Background())
-	resp, err := browserBrowseWithSessionRunner(context.Background(), &BrowserBrowseRequest{URL: documentURL, Mode: "full"}, func() *browserManager { return m }, nil)
+	resp, err := browserBrowseWithSessionRunner(context.Background(), &BrowserBrowseRequest{URL: "https://flip.feishu.cn/wiki/Zz8lwC7DDiPl7dkw0hvc2Ms6nSd", Mode: "full"}, func() *browserManager { return m }, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

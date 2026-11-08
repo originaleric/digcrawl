@@ -23,16 +23,6 @@ import (
 	"github.com/originaleric/digcrawl/transport/bridge"
 )
 
-// The Bridge fixture is a copy of the native test executable so child launch
-// and process ownership use the same argument shape on Unix and Windows.
-func TestMain(m *testing.M) {
-	if strings.TrimSuffix(filepath.Base(os.Args[0]), ".exe") == "digcrawl-bridge-test-helper" && len(os.Args) > 1 && os.Args[1] == "bridge" {
-		run(append([]string{"digcrawl"}, os.Args[1:]...))
-		os.Exit(0)
-	}
-	os.Exit(m.Run())
-}
-
 func TestMCPStdioHelper(t *testing.T) {
 	if os.Getenv("DIGCRAWL_MCP_STDIO_HELPER") != "1" {
 		return
@@ -321,19 +311,36 @@ func TestConcurrentExecutorsLeaveOneManagedBridgeWorker(t *testing.T) {
 
 func writeMCPBridgeExecutable(t *testing.T) string {
 	t.Helper()
-	name := "digcrawl-bridge-test-helper"
+	path := filepath.Join(t.TempDir(), "custom-digcrawl-worker")
 	if runtime.GOOS == "windows" {
-		name += ".exe"
+		path += ".exe"
 	}
-	path := filepath.Join(t.TempDir(), name)
-	data, err := os.ReadFile(os.Args[0])
+	source, err := os.Open(os.Args[0])
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(path, data, 0o700); err != nil {
+	defer source.Close()
+	target, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0700)
+	if err != nil {
 		t.Fatal(err)
 	}
+	_, copyErr := io.Copy(target, source)
+	closeErr := target.Close()
+	if copyErr != nil || closeErr != nil {
+		t.Fatal(copyErr, closeErr)
+	}
 	return path
+}
+
+// Spawn native worker argv rather than a shell/test-flag wrapper. The copied
+// test binary has the same build identity and executes the production CLI
+// entry point, so ownership checks exercise exactly the supported process form.
+func TestMain(m *testing.M) {
+	if len(os.Args) > 1 && (os.Args[1] == "bridge" || os.Args[1] == "mcp") {
+		run(os.Args)
+		os.Exit(0)
+	}
+	os.Exit(m.Run())
 }
 
 func waitForMCPTestBridge(t *testing.T, profilePath string) {

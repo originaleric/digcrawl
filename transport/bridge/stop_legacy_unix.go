@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -49,7 +50,11 @@ func stopBridgeOwner(ctx context.Context, socket string) (bool, error) {
 	if pid == 0 {
 		return false, ErrBridgeOwnerNotFound
 	}
-	return terminateExactBridgeProcess(pid)
+	info, err := verifiedBridgeProcess(ctx, pid, socket)
+	if err != nil || !info.Verified {
+		return false, ErrBridgeOwnerNotFound
+	}
+	return terminateExactBridgeProcess(ctx, pid, info.identity)
 }
 
 // recordedBridgeOwnerIsCurrent turns the small owner file into a checked
@@ -78,6 +83,13 @@ func recordedBridgeOwnerIsCurrent(ctx context.Context, socket string, owner brid
 		if identity != owner.identity {
 			return false, nil
 		}
+		// An upgrade may have unlinked the old executable. The private owner
+		// record's start identity remains authoritative for its exact group.
+	} else {
+		info, err := verifiedBridgeProcess(ctx, owner.pid, socket)
+		if err != nil || !info.Verified {
+			return false, err
+		}
 	}
 	pgid, err := bridgeProcessGroup(owner.pid)
 	if errors.Is(err, syscall.ESRCH) {
@@ -96,7 +108,7 @@ func recordedBridgeOwnerIsCurrent(ctx context.Context, socket string, owner brid
 // A Bridge predating the private-session launch may share its parent's group.
 // For that migration-only shape we kill only the verified PID, never a shared
 // process group that could contain the host or an unrelated process.
-func terminateExactBridgeProcess(pid int) (bool, error) {
+func terminateExactBridgeProcess(ctx context.Context, pid int, expected string) (bool, error) {
 	pgid, err := bridgeProcessGroup(pid)
 	if err != nil && !errors.Is(err, syscall.ESRCH) {
 		return false, fmt.Errorf("inspect local bridge process group: %w", err)
@@ -109,6 +121,10 @@ func terminateExactBridgeProcess(pid int) (bool, error) {
 	if pgid == pid {
 		// POSIX kill accepts a negative PGID to target only that group.
 		target = -pgid
+	}
+	current, identityErr := bridgeProcessIdentity(ctx, pid)
+	if identityErr != nil || expected == "" || current != expected {
+		return false, ErrBridgeOwnerNotFound
 	}
 	if err := signalBridgeProcess(target, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) && !errors.Is(err, os.ErrProcessDone) {
 		return false, fmt.Errorf("force-stop local bridge: %w", err)
@@ -123,15 +139,126 @@ func bridgePID(processes, socket string) int {
 	needle := "--socket " + socket
 	for _, line := range strings.Split(processes, "\n") {
 		fields := strings.Fields(line)
-		if len(fields) < 2 || !strings.Contains(line, "bridge serve") || !hasSocketArgument(line, needle) {
+		if len(fields) < 2 || !hasSocketArgument(line, needle) {
 			continue
 		}
+		command := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), fields[0]))
+		marker := strings.Index(command, " bridge serve ")
+		if marker < 0 {
+			continue
+		}
+		// This is only candidate selection. Native executable and start identity
+		// are verified before signalling; spaces/dashes are valid path bytes.
 		pid, err := strconv.Atoi(fields[0])
 		if err == nil && pid > 0 {
 			return pid
 		}
 	}
 	return 0
+}
+
+func verifiedBridgeProcess(ctx context.Context, pid int, socket string) (OwnerDiagnostic, error) {
+	info := OwnerDiagnostic{PID: pid}
+	identity, err := bridgeProcessIdentity(ctx, pid)
+	if err != nil {
+		return info, err
+	}
+
+	command, err := exec.CommandContext(ctx, "ps", "-p", strconv.Itoa(pid), "-o", "pid=,command=").Output()
+	if err != nil {
+		return info, err
+	}
+	executable, err := exec.CommandContext(ctx, "ps", "-p", strconv.Itoa(pid), "-o", "comm=").Output()
+	if err != nil {
+		return info, err
+	}
+	info.Executable = strings.TrimSpace(string(executable))
+	identityPath := info.Executable
+	if runtime.GOOS == "linux" {
+		// Linux ps comm is only a basename. /proc also permits checking the
+		// actual mapped executable after an on-disk upgrade/unlink.
+		identityPath = "/proc/" + strconv.Itoa(pid) + "/exe"
+		actual, err := os.Readlink(identityPath)
+		if err != nil {
+			return info, err
+		}
+		info.Executable = strings.TrimSuffix(actual, " (deleted)")
+	}
+	if !isBridgeExecutable(identityPath) {
+		return info, nil
+	}
+	if bridgePID(string(command), socket) != pid {
+		return info, nil
+	}
+	// Match the OS-reported executable to the command prefix, including paths
+	// with spaces. Never interpret a nested shell command as a worker.
+	raw := strings.TrimSpace(string(command))
+	fields := strings.Fields(raw)
+	if len(fields) < 2 {
+		return info, nil
+	}
+	raw = strings.TrimSpace(strings.TrimPrefix(raw, fields[0]))
+	current, err := bridgeProcessIdentity(ctx, pid)
+	if err != nil {
+		return info, err
+	}
+	if current != identity {
+		return info, nil
+	}
+	info.identity = identity
+	info.Verified = strings.HasPrefix(raw, info.Executable+" bridge serve ") || strings.HasPrefix(raw, "\""+info.Executable+"\" bridge serve ")
+	if !info.Verified {
+		marker := strings.Index(raw, " bridge serve ")
+		if marker > 0 {
+			prefix := strings.Trim(raw[:marker], "\"")
+			info.Verified = isBridgeExecutable(prefix)
+		}
+	}
+	return info, nil
+}
+
+func InspectOwners(ctx context.Context, profile string) ([]OwnerDiagnostic, error) {
+	socket, err := SocketPath(profile)
+	if err != nil {
+		return nil, err
+	}
+	return inspectSocketOwners(ctx, socket)
+}
+func inspectSocketOwners(ctx context.Context, socket string) ([]OwnerDiagnostic, error) {
+	output, err := exec.CommandContext(ctx, "ps", "-ax", "-o", "pid=,command=").Output()
+	if err != nil {
+		return nil, err
+	}
+	var result []OwnerDiagnostic
+	for _, line := range strings.Split(string(output), "\n") {
+		if !hasSocketArgument(line, "--socket "+socket) || !strings.Contains(line, "bridge serve") {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			continue
+		}
+		pid, e := strconv.Atoi(fields[0])
+		if e != nil || pid == os.Getpid() {
+			continue
+		}
+		info, e := verifiedBridgeProcess(ctx, pid, socket)
+		if e != nil {
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			if errors.Is(syscall.Kill(pid, 0), syscall.ESRCH) {
+				continue
+			}
+			result = append(result, OwnerDiagnostic{PID: pid})
+			continue
+		}
+		result = append(result, info)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return result, nil
 }
 
 // waitForBridgeGroupRelease waits only for members of a previously recorded
@@ -192,18 +319,21 @@ func bridgeGroupReleased(pgid int) (bool, error) {
 // Bridge paths do not need shell parsing here: this migration guard only
 // accepts the normal unquoted `--socket <path>` command emitted by DigCrawl.
 func hasSocketArgument(command, needle string) bool {
-	for offset := 0; ; {
-		index := strings.Index(command[offset:], needle)
-		if index < 0 {
-			return false
+	for _, candidate := range []string{needle, strings.Replace(needle, "--socket ", "--socket=", 1)} {
+		for offset := 0; ; {
+			index := strings.Index(command[offset:], candidate)
+			if index < 0 {
+				break
+			}
+			index += offset
+			end := index + len(candidate)
+			if (index == 0 || command[index-1] == ' ' || command[index-1] == '\t') && (end == len(command) || command[end] == ' ' || command[end] == '\t') {
+				return true
+			}
+			offset = end
 		}
-		index += offset
-		end := index + len(needle)
-		if end == len(command) || command[end] == ' ' || command[end] == '\t' {
-			return true
-		}
-		offset = end
 	}
+	return false
 }
 
 // Called under the lifecycle lock, including when old workers predate that
@@ -231,6 +361,13 @@ func stopLegacyBridgeCandidates(ctx context.Context, socket string) (bool, error
 		if bridgePID(string(current), socket) != pid {
 			continue
 		}
+		info, verifyErr := verifiedBridgeProcess(ctx, pid, socket)
+		if verifyErr != nil {
+			return stopped, verifyErr
+		}
+		if !info.Verified {
+			continue
+		}
 		pgid, err := bridgeProcessGroup(pid)
 		if errors.Is(err, syscall.ESRCH) {
 			continue
@@ -238,7 +375,7 @@ func stopLegacyBridgeCandidates(ctx context.Context, socket string) (bool, error
 		if err != nil {
 			return stopped, err
 		}
-		signalled, err := terminateExactBridgeProcess(pid)
+		signalled, err := terminateExactBridgeProcess(ctx, pid, info.identity)
 		if err != nil {
 			return stopped, err
 		}

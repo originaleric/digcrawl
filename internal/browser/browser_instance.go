@@ -2,6 +2,7 @@ package browser
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -9,8 +10,7 @@ import (
 	"time"
 
 	"github.com/go-rod/rod"
-	"github.com/go-rod/rod/lib/launcher"
-	"github.com/go-rod/rod/lib/launcher/flags"
+
 	"github.com/originaleric/digcrawl/config"
 )
 
@@ -25,6 +25,7 @@ type BrowserInstance struct {
 	tabManager  *TabManager
 	tabExecutor *TabExecutor
 	cfg         config.LocalBrowserConfig
+	connection  *browserConnection
 }
 
 // InstanceManager 管理多个浏览器实例
@@ -33,6 +34,7 @@ type InstanceManager struct {
 	instances map[string]*BrowserInstance
 	baseDir   string
 	cfg       config.LocalBrowserConfig
+	stopped   bool
 }
 
 var (
@@ -62,6 +64,9 @@ func GetInstanceManager() *InstanceManager {
 func (im *InstanceManager) CreateInstance(ctx context.Context, name string) (*BrowserInstance, error) {
 	im.mu.Lock()
 	defer im.mu.Unlock()
+	if im.stopped {
+		return nil, fmt.Errorf("browser instance manager is stopped")
+	}
 
 	// 生成实例ID
 	instanceID := fmt.Sprintf("inst_%d", time.Now().UnixNano())
@@ -78,30 +83,25 @@ func (im *InstanceManager) CreateInstance(ctx context.Context, name string) (*Br
 	// 创建 TabExecutor
 	executor := NewTabExecutor(im.cfg.MaxConcurrency)
 
-	// 启动浏览器
-	l := launcher.New().
-		Context(ctx).
-		NoSandbox(true).
-		Headless(*im.cfg.Headless).
-		Set(flags.Flag("disable-gpu")).
-		UserDataDir(profileDir) // 设置用户数据目录
-	if im.cfg.ChromePath != "" {
-		l = l.Bin(im.cfg.ChromePath)
-	}
-	l = applyBackgroundLauncherPolicy(l, im.cfg.ExtraArgs)
-
-	controlURL, err := l.Launch()
+	// Share the pool's runtime validation, connection setup and release barrier.
+	cfg := ManagedConfig(im.cfg)
+	cfg.UserDataDir = profileDir
+	cfg.CDPPort = 0
+	manager := &browserManager{cfg: cfg}
+	connection, err := manager.openBrowserConnection(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("启动浏览器实例失败: %w", err)
+		if connection != nil {
+			cleanup, cancel := context.WithTimeout(context.Background(), browserShutdownTimeout)
+			defer cancel()
+			if closeErr := connection.closeResources(cleanup); closeErr != nil {
+				// Retain the exact owner so StopInstance can retry cleanup.
+				im.instances[instanceID] = &BrowserInstance{ID: instanceID, Name: name, ProfileDir: profileDir, connection: connection}
+				return nil, fmt.Errorf("instance %s startup failed: %v; cleanup incomplete: %w", instanceID, err, closeErr)
+			}
+		}
+		return nil, err
 	}
-
-	browser := rod.New().
-		Context(ctx).
-		ControlURL(controlURL).
-		Timeout(time.Duration(im.cfg.TotalTimeoutSec) * time.Second)
-	if err := browser.Connect(); err != nil {
-		return nil, fmt.Errorf("连接浏览器实例失败: %w", err)
-	}
+	browser := connection.browser
 
 	// 创建 TabManager
 	tabTTL := time.Duration(im.cfg.TotalTimeoutSec*2) * time.Second
@@ -111,6 +111,7 @@ func (im *InstanceManager) CreateInstance(ctx context.Context, name string) (*Br
 		ID:          instanceID,
 		Name:        name,
 		Browser:     browser,
+		connection:  connection,
 		ProfileDir:  profileDir,
 		CreatedAt:   time.Now(),
 		LastUsed:    time.Now(),
@@ -125,22 +126,19 @@ func (im *InstanceManager) CreateInstance(ctx context.Context, name string) (*Br
 
 // GetInstance 获取指定实例
 func (im *InstanceManager) GetInstance(instanceID string) (*BrowserInstance, error) {
-	im.mu.RLock()
-	defer im.mu.RUnlock()
-
+	im.mu.Lock()
+	defer im.mu.Unlock()
 	instance, exists := im.instances[instanceID]
 	if !exists {
 		return nil, fmt.Errorf("实例 %s 不存在", instanceID)
 	}
-
-	// 检查浏览器是否仍然有效
-	if _, err := instance.Browser.Version(); err != nil {
-		// 浏览器已断开，需要重新连接或移除
-		im.mu.RUnlock()
-		im.mu.Lock()
-		delete(im.instances, instanceID)
-		im.mu.Unlock()
-		return nil, fmt.Errorf("实例 %s 的浏览器已断开", instanceID)
+	if instance.Browser == nil {
+		return nil, fmt.Errorf("instance %s requires cleanup", instanceID)
+	}
+	probe, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := instance.connection.probe(probe); err != nil {
+		return nil, fmt.Errorf("实例 %s 的浏览器已断开; run StopInstance to release its owner: %w", instanceID, err)
 	}
 
 	instance.LastUsed = time.Now()
@@ -169,12 +167,10 @@ func (im *InstanceManager) StopInstance(instanceID string) error {
 		return fmt.Errorf("实例 %s 不存在", instanceID)
 	}
 
-	delete(im.instances, instanceID)
-
-	// 关闭浏览器
-	if instance.Browser != nil {
-		_ = instance.Browser.Close()
+	if err := closeInstanceConnection(instance); err != nil {
+		return err
 	}
+	delete(im.instances, instanceID)
 
 	return nil
 }
@@ -197,15 +193,14 @@ func (im *InstanceManager) CleanupStaleInstances(maxAge time.Duration) int {
 		}
 	}
 
+	closed := 0
 	for _, id := range toDelete {
-		instance := im.instances[id]
-		delete(im.instances, id)
-		if instance.Browser != nil {
-			_ = instance.Browser.Close()
+		if err := closeInstanceConnection(im.instances[id]); err == nil {
+			delete(im.instances, id)
+			closed++
 		}
 	}
-
-	return len(toDelete)
+	return closed
 }
 
 // GetDefaultInstance 获取或创建默认实例
@@ -239,4 +234,32 @@ func (im *InstanceManager) Stats() InstanceStats {
 		TotalInstances: len(im.instances),
 		MaxConcurrency: im.cfg.MaxConcurrency,
 	}
+}
+
+func closeInstanceConnection(instance *BrowserInstance) error {
+	if instance.connection == nil {
+		return fmt.Errorf("instance %s has no verified process owner", instance.ID)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), browserShutdownTimeout)
+	defer cancel()
+	return instance.connection.closeResources(ctx)
+}
+
+func (im *InstanceManager) shutdown(ctx context.Context) error {
+	im.mu.Lock()
+	defer im.mu.Unlock()
+	im.stopped = true
+	var failures []error
+	for id, instance := range im.instances {
+		if instance.connection == nil {
+			failures = append(failures, fmt.Errorf("instance %s has no verified owner", id))
+			continue
+		}
+		if err := instance.connection.closeResources(ctx); err != nil {
+			failures = append(failures, fmt.Errorf("instance %s: %w", id, err))
+			continue
+		}
+		delete(im.instances, id)
+	}
+	return errors.Join(failures...)
 }

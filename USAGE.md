@@ -10,23 +10,6 @@ This guide covers installation, configuration, CLI commands, Collect workflows, 
 
 ## 1. Installation
 
-### Install with npx
-
-With Node.js 20.19+ on macOS, Linux, or Windows:
-
-```bash
-npx digcrawl-skill@latest install
-npx digcrawl-skill install codex
-npx digcrawl-skill install claude-code
-npx digcrawl-skill install --all
-npx digcrawl-skill install --skip-agent-setup
-npx digcrawl-skill status
-```
-
-The installer installs the program, complete Skill, and default profile, configures Codex, and installs the Claude Code Skill when detected. npm `digcrawl-skill@1.0.2` pins GitHub Release `v1.0.2`; use `install --version vX.Y.Z` to select another program version. Supported release targets are macOS / Linux amd64 and arm64, and Windows amd64.
-
-The program is installed to `~/.local/bin/digcrawl` (`digcrawl.exe` on Windows). MCP uses absolute paths and does not depend on the npm cache or `PATH`. The installer does not edit shell configuration. Existing profiles and login sessions are preserved; the profile's Bridge is stopped before an update. Restart your agent and reconnect after installation. Custom paths are available through `--install-dir`, `--skip-codex`, `DIGCRAWL_INSTALL_DIR`, `DIGCRAWL_SKILL_DIR`, `CODEX_HOME`, `DIGCRAWL_CODEX_CONFIG`, and `CLAUDE_CONFIG_DIR`. Profile and Skill locations follow the script installation below.
-
 ### Install a release (recommended for users)
 
 Go is not required to use a release. Binaries are available for macOS Apple Silicon / Intel, Linux x86_64 / arm64, and Windows x86_64.
@@ -59,41 +42,48 @@ digcrawl doctor --config "$HOME/.config/digcrawl/digcrawl-skill.yaml"
 
 After the installer registers or repairs Codex, restart Codex Desktop and create a new task to reload the MCP tool catalog. Existing tasks do not retroactively load MCP servers that were unavailable when they started.
 
-### Browser capabilities (optional)
+### Install with npx
 
-Browser tools require local Chrome/Chromium. With `ChromePath` empty, DigCrawl first discovers a system browser, then an available Playwright `chrome-headless-shell`. Do not hard-code paths such as `chromium_headless_shell-<version>` that change with Playwright updates. In a macOS sandbox or CI-like headless environment, Playwright `chrome-headless-shell` can serve as a fallback with suitable launch arguments.
-
-### Local Headless Chromium (recommended fallback)
-
-If system Chrome, Chrome for Testing, or Rod's automatically downloaded Chromium cannot start headlessly, install Playwright's `chrome-headless-shell`:
+With Node.js 20.19+ on macOS, Linux, or Windows:
 
 ```bash
-mkdir -p "$HOME/.cache/digcrawl-playwright"
-cd "$HOME/.cache/digcrawl-playwright"
-
-npm_config_cache=/private/tmp/npm-cache \
-PLAYWRIGHT_BROWSERS_PATH="$HOME/.cache/ms-playwright" \
-npx -y playwright install chromium
-
-export DIGCRAWL_PLAYWRIGHT_BROWSERS_PATH="$HOME/.cache/ms-playwright"
+npx digcrawl-skill@latest install
+npx digcrawl-skill install codex
+npx digcrawl-skill install claude-code
+npx digcrawl-skill install --all
+npx digcrawl-skill install --skip-agent-setup
+npx digcrawl-skill status
 ```
 
-Leave `LocalBrowser.ChromePath: ""` after installation so DigCrawl selects the available shell dynamically. A macOS sandbox typically also needs `--single-process` / `--no-zygote` and crashpad disabled:
+The installer installs the program, complete Skill, and default profile, configures Codex, and installs the Claude Code Skill when detected. npm `digcrawl-skill@1.0.2` pins GitHub Release `v1.0.2`; use `install --version vX.Y.Z` to select another program version. Supported release targets are macOS / Linux amd64 and arm64, and Windows amd64.
 
-```yaml
-LocalBrowser:
-  ChromePath: ""
-  Headless: true
-  UserDataDir: "/private/tmp/digcrawl-pw-headless-profile"
-  ExtraArgs:
-    - "--single-process"
-    - "--no-zygote"
-    - "--disable-dev-shm-usage"
-    - "--disable-crash-reporter"
-    - "--disable-crashpad"
-    - "--disable-breakpad"
-    - "--disable-features=Crashpad"
+The program is installed to `~/.local/bin/digcrawl` (`digcrawl.exe` on Windows). MCP uses absolute paths and does not depend on the npm cache or `PATH`. The installer does not edit shell configuration. Existing profiles and login sessions are preserved; the profile's Bridge is stopped before an update. Restart your agent and reconnect after installation. Custom paths are available through `--install-dir`, `--skip-codex`, `DIGCRAWL_INSTALL_DIR`, `DIGCRAWL_SKILL_DIR`, `CODEX_HOME`, `DIGCRAWL_CODEX_CONFIG`, and `CLAUDE_CONFIG_DIR`. Profile and Skill locations follow the script installation below.
+
+
+### Browser capabilities (optional)
+
+Background rendering uses only DigCrawl's managed `chrome-headless-shell`; manual sign-in uses separately identified Chrome for Testing. Desktop Chrome, system Chromium, Rod downloads and shared Playwright caches are never fallbacks. Missing or invalid runtime dependencies produce an actionable error.
+
+The installer prepares the pinned runtime. Source and offline installations use:
+
+```bash
+digcrawl browser install
+# Offline: supply both official ZIPs matching this platform and runtime-lock.json
+digcrawl browser install --archive-dir /absolute/path/to/archives
 ```
+
+The runtime lives in `$XDG_DATA_HOME/digcrawl/browsers`, or `~/.local/share/digcrawl/browsers` when unset. `DIGCRAWL_BROWSER_DIR` selects a separate managed directory. Keep `LocalBrowser.ChromePath: ""`; legacy desktop overrides are rejected. `DIGCRAWL_CHROME_PATH`, `CHROME_PATH` and `CHROME_BIN` no longer choose a background executable. Compatibility arguments are supplied by DigCrawl; ExtraArgs cannot override browser, profile or debugging ownership.
+
+Inspect and explicitly migrate each actual configuration, including embedded host copies:
+
+```bash
+digcrawl browser migrate --config /absolute/path/to/profile.yaml
+digcrawl browser migrate --config /absolute/path/to/profile.yaml --apply
+```
+
+Migration stops only verified old Bridge owners, clears the legacy ChromePath and retains a private original-profile backup. New browser profiles use the `digcrawl-isolated` child of UserDataDir. CookieStoreDir stays unchanged; daily browser data is never copied. Incompatible sessions require signing in again in the dedicated window. Update and restart every caller: installing a new CLI does not change running old binaries. Reinstall legacy CDP services using the updated scripts, with `DIGCRAWL_BIN` pointing to the updated CLI. External CDP must prove it uses the isolated runtime and profile.
+
+Homebrew Cask pre-install steps call the same `browser install --migrate-default` entry point. Runtime readiness precedes standard-profile migration; macOS signing and quarantine protections are not bypassed. Direct installation also honors `DIGCRAWL_BROWSER_ARCHIVE_DIR`. The dedicated login window can show Chrome for Testing’s vendor testing notice; sign in on the target website without enabling browser account synchronization.
 
 ### Build from source (developers only)
 
@@ -183,7 +173,7 @@ See [`config/config.yaml`](config/config.yaml) in the repository. The main secti
 |------|------|
 | `Enabled` | `false` disables the browser and providers that depend on it |
 | `AllowedDomains` | Local domain constraints for standalone snapshot/action and page-context API fetch; generic `browser.browse` uses `Gateway.AllowedDomains`, while platform providers also check call, configuration, or platform-default domain policy |
-| `ChromePath` | Chrome/Chromium/headless shell executable; empty enables system-browser or current Playwright cache discovery. Do not hard-code versioned cache paths |
+| `ChromePath` | Leave empty for the pinned isolated runtime; desktop executable overrides are rejected |
 | `Headless` | Whether to run headlessly |
 | `CookieStoreDir` | Per-domain persistent Cookie storage for signed-in collection |
 | `CDPMode` / `CDPPort` | Enable a CDP debug port for background browser launches; `browser login` always uses a private dynamic endpoint to avoid taking over another local browser |
@@ -200,7 +190,7 @@ See [`config/config.yaml`](config/config.yaml) in the repository. The main secti
 
 The first `digcrawl mcp` call starts a private Unix socket Bridge for that profile. Multiple Codex MCP stdio subprocesses only forward protocol messages; the Bridge alone creates the Runtime and Chrome. There is no fixed CDP port or launchd/systemd browser service, and reconnecting MCP does not make independent browsers compete for the profile. Configuration symlinks resolve to the same Bridge, and a persistent `UserDataDir` can be used by only one Bridge at a time. Give separate configurations different `UserDataDir` values to avoid mixing permissions, timeouts, and sessions. The Bridge has no idle exit timer: it runs until a failure or `digcrawl bridge stop --config <profile>`. Use `digcrawl bridge restart --config <profile>` for an immediate restart. Stop/restart cancels in-flight MCP reads immediately and allows the next instance only after the Bridge-managed Chrome has released its resources. The release installer uses a verified temporary new binary to stop the standard Skill profile's old Bridge before replacing the installation target, so the next MCP call does not continue using an old Bridge build.
 
-By default, the Bridge ignores legacy `CDPMode`, `CDPConnectExisting`, and `CDPPort` settings in the profile and manages `ChromePath` directly, preferring system Chrome when unset. An unavailable legacy CDP service, occupied port, or misleading HTTP success no longer determines whether MCP can read pages. `digcrawl doctor --config <profile>` checks browser dependencies, Bridge transport, running build, and actual browser operations separately. The operation check opens and closes a test page through the existing Bridge rather than launching a second browser. Before the first MCP connection, an absent Bridge is explicitly reported as not tested.
+By default, the Bridge ignores legacy `CDPMode`, `CDPConnectExisting`, and `CDPPort` settings in the profile and manages only the verified isolated headless runtime. An unavailable legacy CDP service, occupied port, or misleading HTTP success no longer determines whether MCP can read pages. `digcrawl doctor --config <profile>` checks browser dependencies, Bridge transport, running build, and actual browser operations separately. The operation check opens and closes a test page through the existing Bridge rather than launching a second browser. Before the first MCP connection, an absent Bridge is explicitly reported as not tested.
 
 The Codex MCP proxy is the host subprocess required by stdio; proxies share the Bridge described above. Initialized proxies follow the host pipe's lifetime by default. Uninitialized pipes are reclaimed after one minute of inactivity unless explicit `--idle-timeout 0` disables that guard. See [connection lifetime and OCR troubleshooting](#mcp-connection-lifetime-and-ocr-troubleshooting) for positive idle deadlines and migration from old settings.
 
@@ -1093,9 +1083,11 @@ digcrawl browser login --platform instagram
 digcrawl browser login --platform youtube
 ```
 
-YouTube sign-in uses a dedicated profile in normal Chrome without CDP or script injection during login. Click "Sign in", complete Google authentication, return to YouTube, then confirm saving. DigCrawl closes its Chrome and waits for profile release before starting background session synchronization. Windows users must close every window of that dedicated Chrome before confirming. `youtube.video.read` reuses the YouTube session in that configuration directory by default. It does not copy your everyday browser session or write Google-domain Cookies to YouTube Cookie storage. Login does not guarantee removal of platform checks; preserve `LOGIN_REQUIRED` or `CAPTCHA_REQUIRED` if still returned. This session is for browser reads; `yt-dlp` downloads do not inherit it automatically.
+YouTube sign-in uses a dedicated profile in Chrome for Testing without CDP or script injection during login. Click "Sign in", complete Google authentication, return to YouTube, then confirm saving. DigCrawl closes its Chrome and waits for profile release before starting background session synchronization. Windows users must close every window of that dedicated Chrome before confirming. `youtube.video.read` reuses the YouTube session in that configuration directory by default. It does not copy your everyday browser session or write Google-domain Cookies to YouTube Cookie storage. Login does not guarantee removal of platform checks; preserve `LOGIN_REQUIRED` or `CAPTCHA_REQUIRED` if still returned. This session is for browser reads; `yt-dlp` downloads do not inherit it automatically.
 
 After signing in, check the session and optionally trial-read a URL:
+
+`browser check` uses a temporary isolated browser profile and the same saved Cookie store. It can run while the MCP Bridge owns its persistent profile; it verifies browser release before removing the temporary profile.
 
 ```bash
 digcrawl browser check --platform youtube \
@@ -1370,20 +1362,7 @@ MCP progress notifications before/after operations require the host to supply a 
 
 ### Headless Chrome / Chromium startup failure
 
-For errors containing `Failed to get the debug url`, `can't find a browser binary`, `CreateUniqueTempDir`, `Crashpad`, or `MachPortRendezvousServer`, prefer the Playwright `chrome-headless-shell` setup above and add these `LocalBrowser.ExtraArgs`:
-
-```yaml
-ExtraArgs:
-  - "--single-process"
-  - "--no-zygote"
-  - "--disable-dev-shm-usage"
-  - "--disable-crash-reporter"
-  - "--disable-crashpad"
-  - "--disable-breakpad"
-  - "--disable-features=Crashpad"
-```
-
-Also point `UserDataDir` to a directory writable by the current process, such as `/private/tmp/...`. For reusable signed-in sessions, maintain platform Cookies through the separate visible login path and use a stable profile for headless collection.
+Run `digcrawl browser runtime` to check the pinned dependency and integrity, then `digcrawl browser install` for missing dependencies. For a damaged version, first migrate/stop its owners, run `digcrawl browser install --repair` to preserve and replace the damaged directory. Never substitute daily Chrome or delete its locks/data. Use the migration command above for legacy executable overrides.
 
 ### Incomplete generic web content in Collect
 

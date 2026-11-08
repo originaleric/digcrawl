@@ -331,6 +331,19 @@ func Stop(ctx context.Context, profile string) (bool, error) {
 			if err := browser.WaitProfileRelease(ctx, profileConfig.LocalBrowser.UserDataDir); err != nil {
 				return false, fmt.Errorf("previous Bridge profile remains unavailable; end the owning session before restart: %w", err)
 			}
+			isolated := browser.ManagedConfig(config.LocalBrowserConfig{UserDataDir: profileConfig.LocalBrowser.UserDataDir}).UserDataDir
+			if isolated != profileConfig.LocalBrowser.UserDataDir {
+				if err := browser.WaitProfileRelease(ctx, isolated); err != nil {
+					return false, fmt.Errorf("isolated browser profile remains unavailable: %w", err)
+				}
+			}
+			remaining, inspectErr := inspectSocketOwners(ctx, socket)
+			if inspectErr != nil {
+				return false, inspectErr
+			}
+			if len(remaining) > 0 {
+				return false, fmt.Errorf("unresolved Bridge candidates remain; inspect browser migrate output; unknown owners are not terminated")
+			}
 			// The managed stop path may use SIGKILL, so the worker cannot always
 			// acknowledge a controlled exit itself. Only a controller that actually
 			// stopped owned work and verified all release barriers may do so here.
@@ -528,6 +541,15 @@ func serve(ctx context.Context, cfg *config.Config, socket string, manual bool) 
 	if err != nil {
 		return err
 	}
+	// A legacy worker can outlive a deleted/replaced cache lock inode. The
+	// lock remains the arbiter; this read-only gate prevents overwriting that
+	// worker's socket/profile until an explicit verified migration stops it.
+	ownerCtx, cancelOwners := context.WithTimeout(ctx, startupTimeout)
+	err = waitForPriorBridgeOwners(ownerCtx, socket)
+	cancelOwners()
+	if err != nil {
+		return err
+	}
 	if err := writeBridgeOwner(socket); err != nil {
 		return err
 	}
@@ -677,4 +699,30 @@ func bridgeStartupError(detail string) error {
 		}
 	}
 	return errors.New("local Bridge startup failed; run doctor and inspect local ownership/configuration")
+}
+
+// Losing concurrent starters exit when they cannot claim the lifecycle lock.
+// Let those candidates drain, but never replace a persistent predecessor's
+// socket after its cache lock inode was removed outside the running process.
+func waitForPriorBridgeOwners(ctx context.Context, socket string) error {
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		owners, err := inspectSocketOwners(ctx, socket)
+		if err != nil {
+			return fmt.Errorf("inspect prior Bridge owners: %w", err)
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if len(owners) == 0 {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("prior Bridge process still references this socket; run browser migrate --config <actual profile> --apply before replacement: %w", ctx.Err())
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
 }

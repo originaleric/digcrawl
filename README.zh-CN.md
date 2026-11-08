@@ -292,7 +292,7 @@ digcrawl watchlist serve --config config/config.yaml
 
 ### YouTube 登录流程
 
-遇到 `LOGIN_REQUIRED`，让 Agent 打开专用的普通 Chrome 窗口：
+遇到 `LOGIN_REQUIRED`，让 Agent 打开应用身份独立的 Chrome for Testing 登录窗口：
 
 ```text
 帮我打开 DigCrawl 的 YouTube 登录窗口。
@@ -365,6 +365,8 @@ digcrawl browser login --config "<MCP 实际使用的 profile 路径>" --platfor
 - 无法访问或触发频控时明确提示，不将错误页面当作正文。
 
 ### 浏览器恢复与诊断
+
+后台使用专用无头程序，登录使用独立的有窗口浏览器，依赖故障不会回退到日常 Chrome。源码安装请先运行 `digcrawl browser install`；旧配置和嵌入方请按 [升级迁移说明](./USAGE.zh-CN.md#浏览器能力按需) 处理。
 
 遇到读取失败，请按错误提示操作，或查看[浏览器排障](./USAGE.zh-CN.md#浏览器超时或反复失败)。
 

@@ -2,7 +2,7 @@ import * as fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { isDeepStrictEqual } from 'node:util';
 import { extract } from 'tar';
 import { unzipSync } from 'fflate';
@@ -147,7 +147,7 @@ export function codexConfig(source, binary, profile) {
   return output;
 }
 
-async function prepareCodex(file, dirs) {
+async function prepareCodex(file, dirs, resources) {
   try {
     const info = await fs.lstat(file);
     if (info.isSymbolicLink()) file = await fs.realpath(file); // preserve dotfiles links, reject dangling links
@@ -157,41 +157,114 @@ async function prepareCodex(file, dirs) {
     try { if ((await fs.lstat(file)).isSymbolicLink()) throw new Error('Codex configuration symlink target is missing'); }
     catch (missing) { if (missing.code !== 'ENOENT') throw missing; }
   }
+  resources.push(path.dirname(file));
   const original = await exists(file) ? await fs.readFile(file, 'utf8') : null;
   const output = codexConfig(original || '', dirs.binary, dirs.profile);
   const mode = original === null ? 0o600 : (await fs.stat(file)).mode & 0o777;
-  return async () => {
+  return async guard => {
+    guard.check();
     const current = await exists(file) ? await fs.readFile(file, 'utf8') : null;
     if (current !== original) throw new Error('Codex configuration changed during installation; retry');
     await fs.mkdir(path.dirname(file), { recursive: true });
     const stage = `${file}.digcrawl-${randomUUID()}`;
     try {
       await fs.writeFile(stage, output, { flag: 'wx', mode });
+      guard.check();
       await fs.rename(stage, file);
+      guard.check();
     } finally { await fs.rm(stage, { force: true }); }
     return file;
   };
 }
 
-async function replaceDirectory(source, target) {
+async function replaceDirectory(source, target, guard) {
+  guard.check();
   await fs.mkdir(path.dirname(target), { recursive: true });
   const stage = `${target}.stage-${randomUUID()}`;
   const backup = `${target}.previous-${randomUUID()}`;
-  let saved = false;
+  let saved = false, published = false;
   try {
     await fs.cp(source, stage, { recursive: true, force: false, errorOnExist: true });
+    guard.check();
     try { await fs.rename(target, backup); saved = true; }
     catch (error) { if (error.code !== 'ENOENT') throw error; }
-    try { await fs.rename(stage, target); }
-    catch (error) { if (saved) await fs.rename(backup, target); throw error; }
+    guard.check();
+    await fs.rename(stage, target); published = true;
+    guard.check();
     if (saved) await fs.rm(backup, { recursive: true, force: true });
+  } catch (error) {
+    // Never overwrite a replacement owner's data while trying to roll back.
+    if (saved) {
+      try { guard.check(); } catch { throw new Error(`Installation lock lost; previous Skill retained at ${backup}`, { cause: error }); }
+      if (!published) await fs.rename(backup, target);
+    }
+    throw error;
   } finally { await fs.rm(stage, { recursive: true, force: true }); }
 }
 
-function run(binary, args, env) {
-  const result = spawnSync(binary, args, { env, stdio: 'inherit', timeout: 120_000, windowsHide: true });
+function run(binary, args, env, timeout = 120_000) {
+  const result = spawnSync(binary, args, { env, stdio: 'inherit', timeout, windowsHide: true });
   if (result.error) throw result.error;
-  if (result.status !== 0) throw new Error(`${path.basename(binary)} ${args[0]} failed (${result.status ?? result.signal})`);
+  if (result.status !== 0) throw new Error(`${path.basename(binary)} ${args.slice(0, 2).join(' ')} failed (${result.status ?? result.signal})`);
+}
+
+// The existing Go lock protects the full installation. Its stdin belongs to
+// this process, so parent termination cancels preparation and releases the OS
+// lock. Persistent lock files are never interpreted as live owners.
+async function prepareBrowserWithInstallLock(binary, args, env, resources) {
+  const child = spawn(binary, [...args, ...resources.flatMap(directory => ['--installer-lock', directory])], { env, stdio: ['pipe', 'pipe', 'inherit'], windowsHide: true });
+  const interrupted = new AbortController();
+  let exited = false, releasing = false, acknowledged = false;
+  const check = () => {
+    if (exited || child.exitCode !== null || child.signalCode !== null || interrupted.signal.aborted) throw new Error('Installation lock owner exited');
+  };
+  child.once('exit', () => { exited = true; if (!releasing) interrupted.abort(); });
+  const done = new Promise(resolve => child.once('close', (code, signal) => resolve({ code, signal })));
+  child.stdin.on('error', () => {});
+  let pending = '';
+  child.stdout.on('data', chunk => {
+    pending += chunk.toString();
+    acknowledged ||= pending.includes('DIGCRAWL_INSTALL_RELEASED\n');
+    if (pending.length > 8192) pending = pending.slice(-8192);
+  });
+  try {
+    await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => { child.kill(); reject(new Error('Browser preparation timed out')); }, 35 * 60_000);
+      const finish = fn => value => { clearTimeout(timer); fn(value); };
+      child.once('error', finish(reject));
+      child.once('close', finish(() => reject(new Error('Browser preparation / installation lock unavailable'))));
+      child.stdout.on('data', () => {
+        const newline = pending.indexOf('\n');
+        if (newline >= 0) {
+          if (pending.slice(0,newline).replace(/\r$/, '') === 'DIGCRAWL_INSTALL_READY_V2') finish(resolve)();
+          else finish(reject)(new Error('Unsupported installer lock protocol; use the matching updated CLI release'));
+        }
+      });
+    });
+    check();
+  } catch (error) { child.stdin.end(); await done; throw error; }
+  return {
+    check,
+    async run(executable, argv) {
+      check();
+      await new Promise((resolve, reject) => {
+        const operation = spawn(executable, argv, { env, stdio: 'inherit', signal: interrupted.signal, timeout: 120_000, windowsHide: true });
+        let failure;
+        operation.once('error', error => { failure = error; });
+        operation.once('close', (code, signal) => failure ? reject(failure) : code === 0 ? resolve() : reject(new Error(`${path.basename(executable)} ${argv.slice(0,2).join(' ')} failed (${code ?? signal})`)));
+      });
+      check();
+    },
+    async close(completed = false) {
+      if (completed) { check(); releasing = true; child.stdin.end('release\n'); }
+      else child.stdin.end();
+      const timer = setTimeout(() => child.kill('SIGKILL'), 10_000);
+      try {
+        const result = await done;
+        if (completed && (result.code !== 0 || !acknowledged)) throw new Error('Installation lock release was not acknowledged');
+      } finally { clearTimeout(timer); }
+    },
+  };
 }
 
 export async function install(options = {}, context = {}) {
@@ -199,7 +272,7 @@ export async function install(options = {}, context = {}) {
   const platform = context.platform || process.platform;
   const home = context.home || os.homedir();
   const log = context.log || console.log;
-  const version = (options.version || '1.0.2').replace(/^v/, '');
+  const version = (options.version || '1.0.3').replace(/^v/, '');
   const asset = assetName(version, platform, context.arch || process.arch);
   const dirs = locations(env, platform, home);
   if (options.installDir) {
@@ -233,39 +306,52 @@ export async function install(options = {}, context = {}) {
     await unpack(archivePath, unpacked, binaryName);
     const stagedBinary = path.join(unpacked, binaryName);
     await fs.mkdir(dirs.installDir, { recursive: true });
-    try { lock = await fs.open(path.join(dirs.installDir, '.digcrawl-install.lock'), 'wx', 0o600); }
-    catch (error) { if (error.code === 'EEXIST') throw new Error('Another installation is active (.digcrawl-install.lock)'); throw error; }
-    const writeConfig = codex ? await prepareCodex(await selectCodexConfig(env, dirs, context.cwd || process.cwd()), dirs) : null;
+    const resources=[dirs.installDir,path.dirname(dirs.profile)];
+    if (agents) resources.push(path.dirname(dirs.skill));
+    if (codex) resources.push(path.join(dirs.codexHome,'skills'));
+    if (claude) resources.push(path.join(dirs.claudeHome,'skills'));
+    const writeConfig = codex ? await prepareCodex(await selectCodexConfig(env, dirs, context.cwd || process.cwd()), dirs, resources) : null;
+    const browserArgs = ['browser', 'install'];
+    if (env.DIGCRAWL_BROWSER_ARCHIVE_DIR) browserArgs.push('--archive-dir', env.DIGCRAWL_BROWSER_ARCHIVE_DIR);
+    lock = await prepareBrowserWithInstallLock(stagedBinary, browserArgs, env, resources);
     // The verified new program stops the old Bridge before executable replacement.
     // On Windows this also releases the executable file lock.
-    if (await exists(dirs.profile)) run(stagedBinary, ['bridge', 'stop', '--config', dirs.profile], env);
+    lock.check();
+    try { if ((await fs.lstat(dirs.binary)).isSymbolicLink()) throw new Error('Refusing to replace a managed binary symlink; use its package manager or another install directory'); }
+    catch(error) { if(error.code !== 'ENOENT') throw error; }
+    if (await exists(dirs.profile)) await lock.run(stagedBinary, ['browser', 'migrate', '--config', dirs.profile, '--apply']);
     const stage = path.join(dirs.installDir, `.digcrawl-${randomUUID()}${platform === 'win32' ? '.exe' : ''}`);
     try {
       await fs.copyFile(stagedBinary, stage);
       await fs.chmod(stage, 0o755);
+      lock.check();
       await fs.rename(stage, dirs.binary);
     } finally { await fs.rm(stage, { force: true }); }
-    run(dirs.binary, ['version'], env);
+    // Retire a legacy worker restarted by an old MCP client during replacement.
+    // Subsequent starts now resolve this path to the isolated-runtime CLI.
+    if (await exists(dirs.profile)) await lock.run(dirs.binary, ['browser', 'migrate', '--config', dirs.profile, '--apply']);
+    await lock.run(dirs.binary, ['version']);
     if (agents) {
-      if (!await exists(dirs.profile)) run(dirs.binary, ['init', '--profile', 'skill'], env);
-      run(dirs.binary, ['config', 'validate', '--config', dirs.profile], env);
+      if (!await exists(dirs.profile)) await lock.run(dirs.binary, ['init', '--profile', 'skill']);
+      await lock.run(dirs.binary, ['config', 'validate', '--config', dirs.profile]);
       const skill = path.join(unpacked, 'skills', 'digcrawl');
-      await replaceDirectory(skill, dirs.skill);
-      if (claude) await replaceDirectory(skill, path.join(dirs.claudeHome, 'skills', 'digcrawl'));
+      await replaceDirectory(skill, dirs.skill, lock);
+      if (claude) await replaceDirectory(skill, path.join(dirs.claudeHome, 'skills', 'digcrawl'), lock);
       if (codex) {
-        await replaceDirectory(skill, path.join(dirs.codexHome, 'skills', 'digcrawl'));
-        log(`Codex MCP configured: ${await writeConfig()}`);
+        await replaceDirectory(skill, path.join(dirs.codexHome, 'skills', 'digcrawl'), lock);
+        log(`Codex MCP configured: ${await writeConfig(lock)}`);
       }
       log(`Skill installed: ${dirs.skill}`);
       log(`MCP stdio: ${JSON.stringify({ command: dirs.binary, args: ['mcp', '--config', dirs.profile] })}`);
       log('Restart your agent and open a new chat to load DigCrawl.');
     }
+    await lock.close(true);
+    lock = null;
     log(`Installed: ${dirs.binary}`);
     log(`To run digcrawl directly, add ${dirs.installDir} to PATH if needed.`);
     return dirs;
   } finally {
-    if (lock) { await lock.close(); await fs.rm(path.join(dirs.installDir, '.digcrawl-install.lock'), { force: true }); }
-    await fs.rm(temp, { recursive: true, force: true });
+    try { if (lock) await lock.close(); } finally { await fs.rm(temp, { recursive: true, force: true }); }
   }
 }
 

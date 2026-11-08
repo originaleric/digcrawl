@@ -29,6 +29,13 @@ ln -s /usr/bin/true "${TEST_ROOT}/bin/google-chrome"
 CAPTURE_CHROME="${TEST_ROOT}/capture-chrome"
 printf '%s\n' '#!/usr/bin/env bash' 'printf "%s\\n" "$@" > "${DIGCRAWL_TEST_ARGS_OUTPUT:?}"' > "${CAPTURE_CHROME}"
 chmod 700 "${CAPTURE_CHROME}"
+cat > "${TEST_ROOT}/bin/digcrawl" <<'STUB'
+#!/bin/sh
+[ "$1 $2" = "browser runtime" ] || exit 1
+if [ "${3:-}" = "--expect" ]; then printf '%s\n' "$4"; else printf '%s\n' "${TEST_ROOT}/bin/google-chrome"; fi
+STUB
+chmod 700 "${TEST_ROOT}/bin/digcrawl"
+export DIGCRAWL_BIN="${TEST_ROOT}/bin/digcrawl"
 export TEST_ROOT SERVICE_SCRIPT
 
 # Assert the effective Chrome invocation, rather than merely checking that a
@@ -59,7 +66,7 @@ bash -c '
     esac
   }
   curl() { test -f "$test_home/ready" || return 22; printf "{\"webSocketDebuggerUrl\":\"ws://127.0.0.1:9323/devtools/browser/test\"}"; }
-  ps() { test -f "$test_home/ready" || return 0; printf "%s\n" "chrome --remote-debugging-port=9323 --user-data-dir=$test_home/.local/share/digcrawl/cdp-browser --no-first-run --mute-audio"; }
+  ps() { test -f "$test_home/ready" || return 0; printf "%s\n" "chrome --remote-debugging-port=9323 --user-data-dir=$test_home/.local/share/digcrawl/cdp-browser/digcrawl-isolated --no-first-run --mute-audio"; }
   export -f uname systemctl curl ps
   HOME="$test_home" DIGCRAWL_CHROME_PATH="$TEST_ROOT/Chrome With Space" "$SERVICE_SCRIPT" install
   unit="$test_home/.config/systemd/user/digcrawl-cdp-browser.service"
@@ -116,7 +123,7 @@ bash -c '
     esac
   }
   curl() { test -f "$test_home/ready" || return 22; printf "{\"webSocketDebuggerUrl\":\"ws://127.0.0.1:9323/devtools/browser/test\"}"; }
-  ps() { test -f "$test_home/ready" || return 0; printf "%s\\n" "chrome --remote-debugging-port=9323 --user-data-dir=$test_home/.local/share/digcrawl/cdp-browser --no-first-run --mute-audio"; }
+  ps() { test -f "$test_home/ready" || return 0; printf "%s\\n" "chrome --remote-debugging-port=9323 --user-data-dir=$test_home/.local/share/digcrawl/cdp-browser/digcrawl-isolated --no-first-run --mute-audio"; }
   export -f uname systemctl curl ps
   HOME="$test_home" PATH="$TEST_ROOT/bin:$PATH" "$SERVICE_SCRIPT" install
   metadata="$test_home/.local/state/digcrawl/cdp-browser-services/digcrawl-cdp-browser.tsv"
@@ -146,7 +153,7 @@ bash -c '
     esac
   }
   curl() { test -f "$test_home/ready" || return 22; printf "{\"webSocketDebuggerUrl\":\"ws://127.0.0.1:19432/devtools/browser/test\"}"; }
-  ps() { test -f "$test_home/ready" || return 0; printf "%s\n" "chrome --remote-debugging-port=$managed_port --user-data-dir=$test_home/.local/share/digcrawl/cdp-browser --no-first-run --mute-audio"; }
+  ps() { test -f "$test_home/ready" || return 0; printf "%s\n" "chrome --remote-debugging-port=$managed_port --user-data-dir=$test_home/.local/share/digcrawl/cdp-browser/digcrawl-isolated --no-first-run --mute-audio"; }
   export -f uname systemctl curl ps
   HOME="$test_home" DIGCRAWL_CDP_BROWSER_SERVICE_NAME="digcrawl-video" DIGCRAWL_CDP_PORT=19432 DIGCRAWL_CHROME_PATH="$TEST_ROOT/Chrome With Space" "$SERVICE_SCRIPT" install
   test ! -e "$test_home/ready"
@@ -186,7 +193,7 @@ bash -c '
     esac
   }
   curl() { test -f "$test_home/ready" || return 22; printf "{\"webSocketDebuggerUrl\":\"ws://127.0.0.1:19433/devtools/browser/test\"}"; }
-  ps() { test -f "$test_home/chrome" || return 0; printf "%s\n" "Google Chrome --remote-debugging-port=$managed_port --user-data-dir=$test_home/.local/share/digcrawl/cdp-browser --no-first-run --mute-audio"; }
+  ps() { test -f "$test_home/chrome" || return 0; printf "%s\n" "Google Chrome --remote-debugging-port=$managed_port --user-data-dir=$test_home/.local/share/digcrawl/cdp-browser/digcrawl-isolated --no-first-run --mute-audio"; }
   # launchd unregisters before its Chrome child necessarily releases the old
   # profile. An install that changes the port must wait for this old process,
   # not probe only the replacement port.
@@ -231,7 +238,7 @@ bash -c '
     esac
   }
   curl() { test -f "$test_home/ready" || return 22; printf "{\"webSocketDebuggerUrl\":\"ws://127.0.0.1:9323/devtools/browser/test\"}"; }
-  ps() { test -f "$test_home/chrome" || return 0; printf "%s\n" "Google Chrome --remote-debugging-port=9323 --user-data-dir=$test_home/.local/share/digcrawl/cdp-browser --no-first-run --mute-audio"; }
+  ps() { test -f "$test_home/chrome" || return 0; printf "%s\n" "Google Chrome --remote-debugging-port=9323 --user-data-dir=$test_home/.local/share/digcrawl/cdp-browser/digcrawl-isolated --no-first-run --mute-audio"; }
   # launchd removes the CDP listener before Chrome has released its profile.
   # The first wait iteration must observe that main process, then this fake
   # completes its graceful exit.
@@ -368,10 +375,10 @@ if bash -c '
   export test_home
   export FAKE_CHROME_COMMAND
   for FAKE_CHROME_COMMAND in \
-	"chrome --remote-debugging-port=9323 --user-data-dir=$test_home/.local/share/digcrawl/cdp-browser --no-first-run" \
-    "chrome --remote-debugging-port=93230 --user-data-dir=$test_home/.local/share/digcrawl/cdp-browser --no-first-run" \
-    "chrome --remote-debugging-port=9323 --user-data-dir=$test_home/.local/share/digcrawl/cdp-browser-other --no-first-run" \
-    "chrome --remote-debugging-port=9323 --user-data-dir=$test_home/.local/share/digcrawl/cdp-browser --no-first-run --type=renderer"; do
+	"chrome --remote-debugging-port=9323 --user-data-dir=$test_home/.local/share/digcrawl/cdp-browser/digcrawl-isolated --no-first-run" \
+    "chrome --remote-debugging-port=93230 --user-data-dir=$test_home/.local/share/digcrawl/cdp-browser/digcrawl-isolated --no-first-run" \
+    "chrome --remote-debugging-port=9323 --user-data-dir=$test_home/.local/share/digcrawl/cdp-browser/digcrawl-isolated-other --no-first-run" \
+    "chrome --remote-debugging-port=9323 --user-data-dir=$test_home/.local/share/digcrawl/cdp-browser/digcrawl-isolated --no-first-run --type=renderer"; do
     export FAKE_CHROME_COMMAND
     if HOME="$test_home" "$SERVICE_SCRIPT" status; then exit 0; fi
   done

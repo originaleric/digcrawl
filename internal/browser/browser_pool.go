@@ -10,10 +10,8 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
-	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -51,7 +49,8 @@ type browserManager struct {
 	openingErr    *error
 	// openFn is injected only by lifecycle tests. Keeping the state machine
 	// independent from Chromium makes teardown/replacement invariants testable.
-	openFn func(context.Context) (*browserConnection, error)
+	openFn           func(context.Context) (*browserConnection, error)
+	resolveRuntimeFn func() error // test-only fault fixtures; production always validates the pinned runtime
 	// acquireSessionFn/releaseSessionFn are narrow test seams for exercising
 	// request recovery without a real Chromium process. Production always uses
 	// acquire/release below, so connection ownership remains in this manager.
@@ -102,7 +101,7 @@ func getBrowserManager() *browserManager {
 // return their leases. The explicit Bridge lifecycle uses ShutdownImmediately
 // when it intentionally cancels those callers first.
 func Shutdown(ctx context.Context) error {
-	return getBrowserManager().shutdown(ctx)
+	return errors.Join(getBrowserManager().shutdown(ctx), GetInstanceManager().shutdown(ctx))
 }
 
 // ShutdownImmediately forcibly closes the browser owned by this process even
@@ -111,7 +110,7 @@ func Shutdown(ctx context.Context) error {
 // already been closed, so preserving that caller would only make a one-user
 // restart race its replacement. Attached CDP browsers remain untouched.
 func ShutdownImmediately(ctx context.Context) error {
-	return getBrowserManager().shutdownImmediately(ctx)
+	return errors.Join(getBrowserManager().shutdownImmediately(ctx), GetInstanceManager().shutdown(ctx))
 }
 
 func normalizeLocalBrowserConfig(cfg config.LocalBrowserConfig) config.LocalBrowserConfig {
@@ -134,13 +133,12 @@ func normalizeLocalBrowserConfig(cfg config.LocalBrowserConfig) config.LocalBrow
 		defaultHeadless := true
 		cfg.Headless = &defaultHeadless
 	}
-	// Playwright stores Chromium in a versioned cache directory. A path that was
-	// valid at configuration time can therefore disappear after `playwright
-	// install` or a dependency update. Treat a missing explicit path the same as
-	// an unset one so the discovery order below can select a current executable.
-	if !isExecutableFile(cfg.ChromePath) {
-		cfg.ChromePath = discoverLocalChromePathForMode(*cfg.Headless)
+	// Background launches use only the pinned DigCrawl runtime. A legacy
+	// explicit override is retained so the launch boundary can reject it visibly.
+	if strings.TrimSpace(cfg.ChromePath) == "" {
+		cfg.ChromePath, _ = RuntimeExecutable(false)
 	}
+	cfg.UserDataDir = isolatedBrowserProfile(cfg.UserDataDir)
 	if isHeadlessShellPath(cfg.ChromePath) {
 		cfg.ExtraArgs = appendMissingArgs(cfg.ExtraArgs, headlessShellCompatibilityArgs()...)
 	}
@@ -157,15 +155,31 @@ func CheckAvailable(cfg config.LocalBrowserConfig) error {
 		if port <= 0 {
 			port = 9222
 		}
-		if _, err := resolveExistingCDP(context.Background(), port); err != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		url, err := resolveExistingCDP(ctx, port)
+		if err != nil {
 			return err
 		}
+		b, transport, err := connectCDPBrowser(ctx, url, 5*time.Second)
+		if err != nil {
+			return err
+		}
+		defer safeCloseCDPTransport(transport)
+		if err := validateAttachedRuntime(ctx, b); err != nil {
+			return err
+		}
+
 		return nil
 	}
 	cfg = normalizeLocalBrowserConfig(cfg)
-	if cfg.ChromePath == "" || !isExecutableFile(cfg.ChromePath) {
-		return fmt.Errorf("no supported Chrome/Chromium executable found; set LocalBrowser.ChromePath or install Chrome/Chromium")
+	if err := validateOwnedRuntimePath(cfg.ChromePath, false); err != nil {
+		return err
 	}
+	if err := validateBrowserExtraArgs(cfg.ExtraArgs); err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -177,12 +191,10 @@ func ManagedConfig(cfg config.LocalBrowserConfig) config.LocalBrowserConfig {
 	managed := false
 	cfg.CDPConnectExisting = &managed
 	cfg.CDPMode = &managed
-	if !isExecutableFile(cfg.ChromePath) {
-		// Prefer an installed desktop Chrome for the bridge even when it runs
-		// headless. Unlike a versioned Playwright cache, that executable remains
-		// stable across dependency refreshes and can retain the user profile.
-		cfg.ChromePath = discoverLocalChromePathForMode(false)
+	if strings.TrimSpace(cfg.ChromePath) == "" {
+		cfg.ChromePath, _ = RuntimeExecutable(false)
 	}
+	cfg.UserDataDir = isolatedBrowserProfile(cfg.UserDataDir)
 	return cfg
 }
 
@@ -231,179 +243,6 @@ func resolveExistingCDP(parent context.Context, port int) (string, error) {
 		return "", fmt.Errorf("configured CDP endpoint %s returned no valid WebSocket debugger URL", endpoint)
 	}
 	return controlURL, nil
-}
-
-func discoverLocalChromePath() string {
-	return discoverLocalChromePathForMode(false)
-}
-
-func discoverLocalChromePathForMode(headless bool) string {
-	for _, key := range []string{"DIGCRAWL_CHROME_PATH", "CHROME_PATH", "CHROME_BIN"} {
-		if path := strings.TrimSpace(os.Getenv(key)); isExecutableFile(path) {
-			return path
-		}
-	}
-
-	installed := localChromeCandidates()
-	headlessShell := playwrightHeadlessShellCandidates()
-	if headless {
-		// Service crawls run headless and do not need an interactive browser.
-		// Prefer the Playwright headless shell there because desktop Chrome can
-		// be constrained by user-session, profile, or window-server state.
-		if path := firstExecutablePath(headlessShell, installed); path != "" {
-			return path
-		}
-	} else if path := firstExecutablePath(installed, headlessShell); path != "" {
-		return path
-	}
-
-	for _, name := range []string{
-		"google-chrome",
-		"google-chrome-stable",
-		"chromium",
-		"chromium-browser",
-		"chrome",
-		"microsoft-edge",
-		"brave-browser",
-	} {
-		if path, err := exec.LookPath(name); err == nil && isExecutableFile(path) {
-			return path
-		}
-	}
-	return ""
-}
-
-func firstExecutablePath(groups ...[]string) string {
-	for _, paths := range groups {
-		for _, path := range paths {
-			if isExecutableFile(path) {
-				return path
-			}
-		}
-	}
-	return ""
-}
-
-// discoverInteractiveChromePath finds a browser that can show a login window.
-// The headless shell remains valid for crawling, but cannot satisfy an
-// interactive login flow.
-func discoverInteractiveChromePath(preferred string) string {
-	if isExecutableFile(preferred) && !isHeadlessShellPath(preferred) {
-		return strings.TrimSpace(preferred)
-	}
-	for _, key := range []string{"DIGCRAWL_CHROME_PATH", "CHROME_PATH", "CHROME_BIN"} {
-		if path := strings.TrimSpace(os.Getenv(key)); isExecutableFile(path) && !isHeadlessShellPath(path) {
-			return path
-		}
-	}
-	for _, path := range localChromeCandidates() {
-		if isExecutableFile(path) {
-			return path
-		}
-	}
-	for _, name := range []string{
-		"google-chrome",
-		"google-chrome-stable",
-		"chromium",
-		"chromium-browser",
-		"chrome",
-		"microsoft-edge",
-		"brave-browser",
-	} {
-		if path, err := exec.LookPath(name); err == nil && isExecutableFile(path) {
-			return path
-		}
-	}
-	return ""
-}
-
-func playwrightHeadlessShellCandidates() []string {
-	roots := []string{}
-	for _, key := range []string{"DIGCRAWL_PLAYWRIGHT_BROWSERS_PATH", "PLAYWRIGHT_BROWSERS_PATH"} {
-		if root := strings.TrimSpace(os.Getenv(key)); root != "" {
-			roots = append(roots, root)
-		}
-	}
-	if home, _ := os.UserHomeDir(); home != "" {
-		roots = append(roots,
-			filepath.Join(home, "Library/Caches/ms-playwright"),
-			filepath.Join(home, ".cache/ms-playwright"),
-		)
-	}
-	seen := map[string]struct{}{}
-	var candidates []string
-	for _, root := range roots {
-		root = strings.TrimSpace(root)
-		if root == "" {
-			continue
-		}
-		var rel string
-		switch runtime.GOOS {
-		case "darwin":
-			rel = "chromium_headless_shell-*/chrome-headless-shell-mac-*/chrome-headless-shell"
-		case "windows":
-			rel = "chromium_headless_shell-*/chrome-headless-shell-win*/chrome-headless-shell.exe"
-		default:
-			rel = "chromium_headless_shell-*/chrome-headless-shell-linux*/chrome-headless-shell"
-		}
-		matches, _ := filepath.Glob(filepath.Join(root, rel))
-		sort.Strings(matches)
-		for i := len(matches) - 1; i >= 0; i-- {
-			if _, ok := seen[matches[i]]; ok {
-				continue
-			}
-			seen[matches[i]] = struct{}{}
-			candidates = append(candidates, matches[i])
-		}
-	}
-	return candidates
-}
-
-func localChromeCandidates() []string {
-	switch runtime.GOOS {
-	case "darwin":
-		home, _ := os.UserHomeDir()
-		candidates := []string{
-			"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-			"/Applications/Chromium.app/Contents/MacOS/Chromium",
-			"/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary",
-			"/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
-			"/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
-		}
-		if home != "" {
-			candidates = append(candidates,
-				filepath.Join(home, "Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
-				filepath.Join(home, "Applications/Chromium.app/Contents/MacOS/Chromium"),
-				filepath.Join(home, "Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge"),
-			)
-		}
-		return candidates
-	case "windows":
-		candidates := []string{}
-		for _, base := range []string{os.Getenv("PROGRAMFILES"), os.Getenv("PROGRAMFILES(X86)"), os.Getenv("LOCALAPPDATA")} {
-			base = strings.TrimSpace(base)
-			if base == "" {
-				continue
-			}
-			candidates = append(candidates,
-				filepath.Join(base, "Google/Chrome/Application/chrome.exe"),
-				filepath.Join(base, "Chromium/Application/chrome.exe"),
-				filepath.Join(base, "Microsoft/Edge/Application/msedge.exe"),
-				filepath.Join(base, "BraveSoftware/Brave-Browser/Application/brave.exe"),
-			)
-		}
-		return candidates
-	default:
-		return []string{
-			"/usr/bin/google-chrome",
-			"/usr/bin/google-chrome-stable",
-			"/usr/bin/chromium",
-			"/usr/bin/chromium-browser",
-			"/snap/bin/chromium",
-			"/usr/bin/microsoft-edge",
-			"/usr/bin/brave-browser",
-		}
-	}
 }
 
 func isExecutableFile(path string) bool {
@@ -741,6 +580,18 @@ func safeCloseCDPTransport(transport *cdp.WebSocket) {
 }
 
 func (m *browserManager) openBrowserConnection(ctx context.Context) (*browserConnection, error) {
+	if m.resolveRuntimeFn != nil {
+		if err := m.resolveRuntimeFn(); err != nil {
+			return nil, err
+		}
+	} else if m.cfg.CDPConnectExisting == nil || !*m.cfg.CDPConnectExisting {
+		if err := validateOwnedRuntimePath(m.cfg.ChromePath, false); err != nil {
+			return nil, err
+		}
+		if err := validateBrowserExtraArgs(m.cfg.ExtraArgs); err != nil {
+			return nil, err
+		}
+	}
 	operationCtx, cancel := browserOperationContext(ctx, 10*time.Second)
 	defer cancel()
 	owned := browserProcessOwned(m.cfg)
@@ -799,7 +650,7 @@ func (m *browserManager) openBrowserConnection(ctx context.Context) (*browserCon
 		if proxy := strings.TrimSpace(m.cfg.ProxyURL); proxy != "" {
 			started = started.Proxy(proxy)
 		}
-		started = applyBackgroundLauncherPolicy(started, m.cfg.ExtraArgs)
+		started = applyBackgroundLauncherPolicy(started, m.cfg.ExtraArgs).Headless(true)
 		controlURL, err = launchBrowser(started)
 	}
 	if err != nil {
@@ -814,6 +665,12 @@ func (m *browserManager) openBrowserConnection(ctx context.Context) (*browserCon
 		return c, err
 	}
 
+	if !owned {
+		if err := validateAttachedRuntime(operationCtx, browser); err != nil {
+			safeCloseCDPTransport(transport)
+			return nil, err
+		}
+	}
 	c := newBrowserConnection(browser, transport, started, owned, profileDir, cdpPort)
 	c.profileLock = profileLock
 	return c, nil
@@ -839,7 +696,7 @@ func launchBrowser(started *launcher.Launcher) (controlURL string, err error) {
 func ProfileDirForPlatform(baseDir, platform string) string {
 	baseDir = strings.TrimSpace(baseDir)
 	if baseDir == "" {
-		baseDir = "storage/digcrawl/browser_profiles"
+		baseDir = "storage/digcrawl/browser_profiles/digcrawl-isolated"
 	}
 	platform = strings.TrimSpace(platform)
 	if platform == "" {
@@ -925,4 +782,33 @@ func CheckOperation(ctx context.Context) error {
 	}
 	recordBrowseDiagnostic(ctx, err)
 	return err
+}
+
+// An explicitly attached service must prove it uses the same isolated runtime.
+// No Browser.close or forced cleanup is sent to a rejected external endpoint.
+func validateAttachedRuntime(ctx context.Context, b *rod.Browser) error {
+	expected, err := RuntimeExecutable(false)
+	if err != nil {
+		return err
+	}
+	result, err := (proto.BrowserGetBrowserCommandLine{}).Call(b.Context(ctx))
+	if err != nil {
+		return fmt.Errorf("cannot verify isolated CDP service; reinstall it with --enable-automation: %w", err)
+	}
+	if len(result.Arguments) == 0 {
+		return fmt.Errorf("CDP service has no verifiable browser command line")
+	}
+	actual, err := filepath.Abs(result.Arguments[0])
+	if err != nil || actual != expected {
+		return fmt.Errorf("external CDP uses an unapproved browser; desktop Chrome attachment is prohibited")
+	}
+	for _, arg := range result.Arguments {
+		if strings.HasPrefix(arg, "--user-data-dir=") {
+			dir := strings.TrimPrefix(arg, "--user-data-dir=")
+			if filepath.Base(filepath.Clean(dir)) == "digcrawl-isolated" {
+				return nil
+			}
+		}
+	}
+	return fmt.Errorf("external CDP service must use its dedicated digcrawl-isolated profile")
 }

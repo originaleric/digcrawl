@@ -78,6 +78,20 @@ homebrew_casks:
       - digcrawl
     binaries:
       - digcrawl
+    # Prepare before Homebrew replaces/removes the installed executable.
+    # The existing CLI owns dependency validation and standard-profile migration.
+    hooks:
+      pre:
+        # Keep the v2 Ruby hook for compatibility with older Homebrew clients.
+        install: |
+          system_command "#{staged_path}/digcrawl",
+                         args: ["browser", "install", "--migrate-default"],
+                         must_succeed: true
+      post:
+        install: |
+          system_command "#{staged_path}/digcrawl",
+                         args: ["browser", "install", "--migrate-default"],
+                         must_succeed: true
     repository:
       owner: originaleric
       name: homebrew-tap

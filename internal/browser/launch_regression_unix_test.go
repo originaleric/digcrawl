@@ -45,7 +45,7 @@ server.serve_forever()
 	}
 	headless := true
 	profile := filepath.Join(dir, "profile")
-	m := &browserManager{cfg: config.LocalBrowserConfig{ChromePath: bin, Headless: &headless, UserDataDir: profile}}
+	m := &browserManager{resolveRuntimeFn: func() error { return nil }, cfg: config.LocalBrowserConfig{ChromePath: bin, Headless: &headless, UserDataDir: profile}}
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 	start := time.Now()

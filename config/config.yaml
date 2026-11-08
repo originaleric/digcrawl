@@ -143,8 +143,8 @@ LocalBrowser:
     - www.threads.com
     - instagram.com
     - www.instagram.com
-  # 留空时自动发现当前可用的 Playwright Chromium / 本机 Chrome。
-  # 不要写入 chromium_headless_shell-xxxx 这类 Playwright 缓存路径：版本升级会替换目录。
+  # 保持为空，使用 digcrawl browser install 安装并校验的固定版本专用运行时。
+  # 不再搜索或回退到日常 Chrome / Playwright 缓存；旧配置用 browser migrate 迁移。
   ChromePath: ""
   Headless: true
   CookieStoreDir: "storage/digcrawl/browser_cookies"

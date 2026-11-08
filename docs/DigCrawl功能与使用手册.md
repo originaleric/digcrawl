@@ -250,7 +250,7 @@ video provider -> media download -> ffmpeg extract audio -> ASR -> summary agent
 ```yaml
 LocalBrowser:
   Enabled: true
-  ChromePath: "/path/to/chrome-headless-shell"
+  ChromePath: "" # 先执行 digcrawl browser install；不接受日常 Chrome 路径
   Headless: true
   CookieStoreDir: "storage/digcrawl/cookies"
   AllowedDomains:
