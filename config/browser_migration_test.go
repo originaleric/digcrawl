@@ -40,8 +40,16 @@ func TestBrowserMigrationPreservesSessionsAndOtherConfiguration(t *testing.T) {
 	if err != nil || string(backup) != string(original) {
 		t.Fatal("original profile backup changed")
 	}
-	info, _ := os.Stat(path + ".before-isolated-browser")
-	if info.Mode().Perm() != 0600 {
+	info, err := os.Lstat(path + ".before-isolated-browser")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !info.Mode().IsRegular() {
+		t.Fatal("backup is not a regular file")
+	}
+	// Windows reports the read-only attribute through mode bits; its ACLs
+	// cannot be validated by comparing POSIX permissions.
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0600 {
 		t.Fatal("private backup permissions")
 	}
 }
