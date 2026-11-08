@@ -55,7 +55,7 @@ npx digcrawl-skill install --skip-agent-setup
 npx digcrawl-skill status
 ```
 
-The installer installs the program, complete Skill, and default profile, configures Codex, and installs the Claude Code Skill when detected. npm `digcrawl-skill@1.0.2` pins GitHub Release `v1.0.2`; use `install --version vX.Y.Z` to select another program version. Supported release targets are macOS / Linux amd64 and arm64, and Windows amd64.
+The installer installs the program, complete Skill, and default profile, configures Codex, and installs the Claude Code Skill when detected. npm `digcrawl-skill@1.0.3` pins GitHub Release `v1.0.3`. Keep installer and program versions paired when pinning: for an older release, use its matching installer, such as `npx digcrawl-skill@1.0.2 install`. `install --version vX.Y.Z` selects the program version; it does not downgrade the installer or make newer installation commands compatible with older programs. Supported release targets are macOS / Linux amd64 and arm64, and Windows amd64.
 
 The program is installed to `~/.local/bin/digcrawl` (`digcrawl.exe` on Windows). MCP uses absolute paths and does not depend on the npm cache or `PATH`. The installer does not edit shell configuration. Existing profiles and login sessions are preserved; the profile's Bridge is stopped before an update. Restart your agent and reconnect after installation. Custom paths are available through `--install-dir`, `--skip-codex`, `DIGCRAWL_INSTALL_DIR`, `DIGCRAWL_SKILL_DIR`, `CODEX_HOME`, `DIGCRAWL_CODEX_CONFIG`, and `CLAUDE_CONFIG_DIR`. Profile and Skill locations follow the script installation below.
 

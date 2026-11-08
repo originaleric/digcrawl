@@ -42,6 +42,18 @@ digcrawl doctor --config "$HOME/.config/digcrawl/digcrawl-skill.yaml"
 
 安装器注册或修复 Codex 后，请重启 Codex Desktop 并新建 task，使其重新加载 MCP 工具目录；旧 task 不会追溯性地加载启动时不可用的 MCP server。
 
+### 使用 npx 安装
+
+安装 Node.js 20.19+ 后，macOS、Linux 和 Windows 均可执行：
+
+```bash
+npx digcrawl-skill@latest install
+```
+
+npm `digcrawl-skill@1.0.3` 默认安装 GitHub Release `v1.0.3`，准备独立浏览器运行时、完整 Skill 和缺失的默认 profile，并修复启用的宿主适配。固定旧版本时请配对使用对应安装器，例如 `npx digcrawl-skill@1.0.2 install`；`install --version vX.Y.Z` 只选择程序版本，不会降级安装器，也不能让新版安装命令兼容旧程序。
+
+程序固定安装到 `~/.local/bin`，MCP 使用绝对路径。可通过 `--install-dir`、`--skip-codex`、`--skip-agent-setup` 及上文环境变量定制范围，安装后需要重新连接宿主。已有 profile 与 Cookie 保留。
+
 ### 浏览器能力（按需）
 
 DigCrawl 后台只使用自己管理的 `chrome-headless-shell`；人工登录使用应用身份独立的 Chrome for Testing。不会搜索或回退到日常 Chrome、系统 Chromium、Rod 下载或共享 Playwright 缓存。浏览器缺失或校验失败时会明确失败。
