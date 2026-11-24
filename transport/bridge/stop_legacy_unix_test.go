@@ -298,34 +298,6 @@ func TestBridgeProcessGroupStopHelper(t *testing.T) {
 	os.Exit(1)
 }
 
-func TestMain(m *testing.M) {
-	temporaryHome := ""
-	if os.Getenv("DIGCRAWL_TEST_HOME") == "" {
-		root, err := os.MkdirTemp("/tmp", "dck-test-")
-		if err != nil {
-			panic(err)
-		}
-		_ = os.Setenv("HOME", root)
-		_ = os.Setenv("DIGCRAWL_TEST_HOME", root)
-		temporaryHome = root
-	}
-
-	helper := ""
-	if os.Getenv("DIGCRAWL_LEGACY_BRIDGE_HELPER") == "1" {
-		helper = "TestLegacyBridgeStopHelper"
-	}
-	if os.Getenv("DIGCRAWL_BRIDGE_GROUP_HELPER") == "1" {
-		helper = "TestBridgeProcessGroupStopHelper"
-	}
-	if helper != "" {
-		os.Args = []string{os.Args[0], "-test.run=^" + helper + "$"}
-	}
-	code := m.Run()
-	if temporaryHome != "" {
-		_ = os.RemoveAll(temporaryHome)
-	}
-	os.Exit(code)
-}
 func bridgeStopFixture(t *testing.T) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "digcrawl")

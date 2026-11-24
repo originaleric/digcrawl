@@ -19,6 +19,46 @@ import (
 	"github.com/originaleric/digcrawl/runtime/version"
 )
 
+// Every test process owns its runtime and cache roots. Windows resolves them
+// through APPDATA/LOCALAPPDATA rather than HOME, including child workers.
+func TestMain(m *testing.M) {
+	temporaryHome := ""
+	if os.Getenv("DIGCRAWL_TEST_HOME") == "" {
+		base := ""
+		if runtime.GOOS == "darwin" {
+			base = "/tmp"
+		}
+		root, err := os.MkdirTemp(base, "dck-test-")
+		if err != nil {
+			panic(err)
+		}
+		_ = os.Setenv("HOME", root)
+		if runtime.GOOS == "windows" {
+			_ = os.Setenv("USERPROFILE", root)
+			_ = os.Setenv("APPDATA", filepath.Join(root, "roaming"))
+			_ = os.Setenv("LOCALAPPDATA", filepath.Join(root, "local"))
+		}
+		_ = os.Setenv("DIGCRAWL_TEST_HOME", root)
+		temporaryHome = root
+	}
+
+	helper := ""
+	if os.Getenv("DIGCRAWL_LEGACY_BRIDGE_HELPER") == "1" {
+		helper = "TestLegacyBridgeStopHelper"
+	}
+	if os.Getenv("DIGCRAWL_BRIDGE_GROUP_HELPER") == "1" {
+		helper = "TestBridgeProcessGroupStopHelper"
+	}
+	if helper != "" {
+		os.Args = []string{os.Args[0], "-test.run=^" + helper + "$"}
+	}
+	code := m.Run()
+	if temporaryHome != "" {
+		_ = os.RemoveAll(temporaryHome)
+	}
+	os.Exit(code)
+}
+
 // bridgeSocketTempDir keeps fixtures within the Unix socket path limit while
 // using a temporary root that exists on the current CI platform.
 func bridgeSocketTempDir(t *testing.T) string {
@@ -233,9 +273,9 @@ func TestStopUsesGracefulInProcessControlRequest(t *testing.T) {
 		t.Fatalf("bridge did not become ready: %v", err)
 	}
 
-	// Stop includes native owner enumeration for both stable and legacy paths.
-	// In particular, cold Windows CIM calls need more than a two-second budget.
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	// Match the production CLI's 25-second stop budget: resource release also
+	// includes cold Windows CIM enumeration for stable and legacy owners.
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 	defer cancel()
 	stopped, err := Stop(ctx, profile)
 	if !stopped || err != nil {

@@ -347,6 +347,11 @@ func TestMain(m *testing.M) {
 			panic(err)
 		}
 		_ = os.Setenv("HOME", root)
+		if runtime.GOOS == "windows" {
+			_ = os.Setenv("USERPROFILE", root)
+			_ = os.Setenv("APPDATA", filepath.Join(root, "roaming"))
+			_ = os.Setenv("LOCALAPPDATA", filepath.Join(root, "local"))
+		}
 		_ = os.Setenv("DIGCRAWL_TEST_HOME", root)
 		temporaryHome = root
 	}
