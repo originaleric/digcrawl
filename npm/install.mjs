@@ -14,7 +14,7 @@ const MAX_EXPANDED = 200 * 1024 * 1024;
 const REQUIRED_SKILL_FILES = [
   'SKILL.md', 'agents/openai.yaml', 'claude-code/.mcp.json.example',
   'codex/config.toml.example', 'mcp/README.md',
-  'references/error-handling.md', 'references/tool-routing.md',
+  'references/error-handling.md', 'references/source-discovery.md', 'references/tool-routing.md',
 ];
 
 async function exists(file) {
@@ -274,7 +274,7 @@ export async function install(options = {}, context = {}) {
   const platform = context.platform || process.platform;
   const home = context.home || os.homedir();
   const log = context.log || console.log;
-  const version = (options.version || '1.0.4').replace(/^v/, '');
+  const version = (options.version || '1.0.5').replace(/^v/, '');
   const asset = assetName(version, platform, context.arch || process.arch);
   const dirs = locations(env, platform, home);
   if (options.installDir) {

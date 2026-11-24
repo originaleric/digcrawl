@@ -1,6 +1,6 @@
 {
   "name": "digcrawl-skill",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "description": "Install DigCrawl, its Agent Skill, and local MCP configuration",
   "license": "MIT",
   "type": "module",
@@ -24,7 +24,7 @@
   "publishConfig": {
     "access": "public"
   },
-  "digcrawlRelease": "1.0.4",
+  "digcrawlRelease": "1.0.5",
   "scripts": {
     "test": "node --test npm/installer.test.mjs"
   },

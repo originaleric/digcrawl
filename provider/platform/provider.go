@@ -38,6 +38,7 @@ func (p *Provider) Register(_ context.Context, reg *registry.Registry) error {
 	reg.Register(ToutiaoArticleReadEntry(domains, store, p.Config))
 	reg.Register(ToutiaoVideoReadEntry(domains, store, p.Config))
 	reg.Register(FeedReadEntry(domains, store))
+	reg.Register(SourceDiscoverEntry(domains, store))
 	reg.Register(RedditPostReadEntry(domains, store, p.Config))
 	reg.Register(RedditSubredditReadEntry(domains))
 	reg.Register(RedditUserReadEntry(domains))

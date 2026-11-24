@@ -6,6 +6,8 @@ Gateway:
   # operator wants to restrict DigCrawl to a smaller approved set.
   AllowedDomains: []
   AllowedTools:
+    # Read-only source discovery; the host owns scheduling and detail reads.
+    - source.discover
     - gateway.ping
     # One-time, confirmation-protected switch for local video ASR.
     - skill.asr.enable

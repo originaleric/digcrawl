@@ -56,6 +56,9 @@ archives:
       - src: .agents/skills/digcrawl/references/error-handling.md
         dst: skills/digcrawl/references
         strip_parent: true
+      - src: .agents/skills/digcrawl/references/source-discovery.md
+        dst: skills/digcrawl/references
+        strip_parent: true
       - src: .agents/skills/digcrawl/references/tool-routing.md
         dst: skills/digcrawl/references
         strip_parent: true

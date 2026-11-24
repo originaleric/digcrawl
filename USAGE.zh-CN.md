@@ -1011,6 +1011,42 @@ digcrawl collector --server http://127.0.0.1:8790 --token dev
 
 使用仓库级 `digcrawl` Skill 时，优先通过 `digcrawl init --profile skill` 创建用户目录中的最小 profile；也可复制 `config/digcrawl-skill.example.yaml` 自行维护。`init` 会生成 profile 同级、跨平台的绝对 `Skill.Media.Dir`、`VideoDownload.Dir` 与 `ImageDownload.Dir`，宿主配置只保存二进制和 profile 的绝对路径。图片文字和页面视觉理解优先由宿主 Agent 读取 MCP 返回的截图附件；`media` URL 只作来源引用。宿主也负责基于 Markdown、图片观察和 `asr_text` 完成总结。仅视频转写使用本地 `Skill.ASR`，用户明确请求时才需启用 `Skill.Media.DownloadMedia`、配置媒体目录和 ASR 依赖；下载的 MP4 默认只在本次理解期间存在。用户明确要求保存支持平台的视频时，host agent 应调用 `skill.media.configure`，以 `video_download_providers` 指定平台；命名项与已有策略合并，`false` 关闭一个平台，`{}` 清空策略，`media_dir` 仅接受绝对路径。图片保存使用同一工具的 `image_download_providers`、`image_download_dir`、`image_download_max_bytes`、`image_download_max_items` 和 `image_download_timeout_sec`；它同样只应在用户明确要求后启用，且不等同于开启 OCR。不要编辑 YAML，也不要用旧的 `retain_downloaded_video` / `max_bytes` 开启新平台保存；它们只兼容未声明 `VideoDownload` 的旧 YouTube profile。保存状态见 `platform_metadata.video_download_status`，成功文件只以相对于 `VideoDownload.Dir` 的路径返回，宿主不得要求或显示绝对路径。配置写入会同时受同进程准入和跨进程 profile 锁保护；若另一项本地配置更新尚未完成，请根据可重试的 `SKILL_PROFILE_BUSY` 稍后重试。`skill.asr.enable` 会在写入两个基础 opt-in 开关前检查 ffmpeg 与当前 provider，缺失依赖时不会写入配置。默认 Skill profile 不包含 OCR 或 LLM API Key，也不使用 DigFlow。
 
+### 通过 MCP 发现来源链接
+
+使用 `source.discover` 枚举 feed、sitemap、账号或列表中的链接，再由宿主将返回的 `canonical_url` 交给对应的详情读取工具。调度、去重、采集、总结和通知由宿主负责。
+
+先通过 MCP `tools/list` 或 HTTP `GET /manifest` 确认工具可用。本次构建生成的新 Skill profile 和配置示例包含 `source.discover`。已有自定义 profile 使用非空 `Gateway.AllowedTools` 时，需要运营者显式加入该工具。查询清单与调用工具应使用同一 profile，更新 binary 或 profile 后按既有升级重连流程加载。
+
+下面的对象是 MCP `tools/call` 请求的 `params`，请将示例 feed 地址替换为实际来源。
+
+```json
+{
+  "name": "source.discover",
+  "arguments": {
+    "url": "https://example.org/feed.xml",
+    "source_kind": "rss",
+    "limit": 20
+  }
+}
+```
+
+| 输入 | 含义 |
+|---|---|
+| `url` | 必填，来源 URL |
+| `source_kind` | 必填，取工具 schema 公布的种类，例如 `rss`、`sitemap`、`web_list`、`toutiao_author` |
+| `platform` | `source_kind=article` 时必填，例如 `web`、`toutiao`。其他种类可省略，填写时需与该种类的平台一致 |
+| `limit` | 每次返回的条目数，1–100，默认 100 |
+| `checkpoint` | 上次返回的原样 `next_checkpoint`，最长 2048 个字符 |
+
+输出包含 `items`、`coverage`、`reason`、`has_more`、`next_checkpoint` 和 `observed_at`。每个条目包含 `content_key`、`canonical_url`、`platform`、`title`、`author`、`published_at` 和 `observed_at`。来源未提供的标题、作者或发布时间可能为空。`source_kind=article` 返回调用方给定的详情 URL，正文需继续调用详情工具读取。
+
+当 `has_more=true` 时，保持 `url`、`source_kind` 和平台身份一致，将返回的 `next_checkpoint` 原样作为 `checkpoint` 继续调用。分页读取同一份已保存快照，后续页允许调整 `limit`。分页依赖已开启且可写的产物库，快照按 `Gateway.ArtifactTTLMinutes` 过期，读取后续页不会延长有效期。
+
+`coverage=complete` 表示已枚举给定的详情 URL 或当前有限的 RSS/sitemap 响应，上游已移除的旧条目不在该响应范围内。账号和网页列表通常以 `unknown` 表示可见快照，达到读取器条目上限时返回 `partial`。`unknown` 覆盖范围下的空列表仍无法确定历史覆盖情况。`has_more` 表示已保存快照是否还有后续页，与 `coverage` 分别判断。
+
+遇到 `CHECKPOINT_EXPIRED` 时，省略 checkpoint 重新发现，并在新扫描处理完成前保留宿主原有基线。`CHECKPOINT_UNAVAILABLE` 表示分页需要可用的产物库，`SOURCE_LIMIT_EXCEEDED` 表示快照超过条目数或字节预算。访问、登录、验证码和限流错误沿用现有处理方式。支持种类与恢复细节见[来源发现说明](./.agents/skills/digcrawl/references/source-discovery.md)。
+
+
 ---
 
 ## 7. stdio JSON 协议
@@ -1181,6 +1217,7 @@ collect-inbox/
 
 | 工具名 | 说明 |
 |--------|------|
+| `source.discover` | 只读来源链接发现、快照覆盖范围和分页 |
 | `wechat.article.read` | 微信公众号文章 |
 | `xiaohongshu.note.read` | 小红书笔记 |
 | `douyin.video.read` | 抖音视频页 |

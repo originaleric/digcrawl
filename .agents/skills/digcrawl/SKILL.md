@@ -5,7 +5,7 @@ description: Read web and supported social-platform links through a locally inst
 
 # DigCrawl
 
-Use the locally configured `digcrawl` MCP server for content retrieval. A normal read may refresh the user's local session state; it does not expose that state to the Agent. Do not archive, create watchlists, or perform browser actions through MCP. Handle an explicitly requested local video file or direct-media URL through the CLI workflow below, never by passing a local path to MCP.
+Use the locally configured `digcrawl` MCP server for content retrieval. A normal read may refresh the user's local session state; it does not expose that state to the Agent. Do not archive, create watchlists, or perform browser actions through MCP. For source/profile/list monitoring use the read-only `source.discover` tool described in `references/source-discovery.md`; watchlists and scheduling remain host-owned. Handle an explicitly requested local video file or direct-media URL through the CLI workflow below, never by passing a local path to MCP.
 
 ## Read a URL
 
@@ -59,3 +59,7 @@ Use `gateway.ping` only to diagnose whether the local DigCrawl server is availab
 Both examples require absolute paths to the local `digcrawl` binary and the user's profile. Direct users to run `digcrawl init --profile skill` after installing a release; it writes the default profile to `$XDG_CONFIG_HOME/digcrawl/digcrawl-skill.yaml` (or `~/.config/digcrawl/` when XDG is unset; `%APPDATA%\\DigCrawl\\` on Windows), including OS-native `VideoDownload.Dir` and `ImageDownload.Dir` paths beside that profile with no providers enabled. They can then run `digcrawl config validate --config <profile>` and `digcrawl doctor --config <profile>`. A copied `config/digcrawl-skill.example.yaml` remains an alternative for manual configuration. For an explicit video transcription request, use the consent flow for `skill.asr.enable`; it enables only `Skill.Media.DownloadMedia` and `Skill.ASR.Enabled` in that standard user profile. `skill.media.configure` changes provider saving only after the user explicitly asks. Image reading and summaries use the host Agent; the default profile has no OCR or LLM API configuration.
 
 Browser readiness is checked by `digcrawl doctor --config <actual profile>` through the existing Bridge, without starting a competing browser. Before the first MCP connection, an unreachable Bridge means the browser operation check was not executed. After an upgrade, close old DigCrawl MCP connections, run the installed `digcrawl bridge restart --config <actual profile>`, then reconnect. Build mismatches require this explicit step. Use `digcrawl doctor --diagnostic-id <returned ID>` for a bounded safe local summary.
+
+## Source discovery
+
+For a source, account, feed, or list URL, read `references/source-discovery.md` and call `source.discover`. Use tools/list to confirm availability. Account/list discovery is a visible snapshot, not proof of complete history. Never route an account URL to its single-post reader or bypass a discovery access error with browser.browse.

@@ -22,6 +22,7 @@ import (
 )
 
 var skillReadTools = []string{
+	"source.discover",
 	"gateway.ping",
 	"skill.asr.enable",
 	"skill.media.configure",
