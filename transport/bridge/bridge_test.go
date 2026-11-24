@@ -233,7 +233,9 @@ func TestStopUsesGracefulInProcessControlRequest(t *testing.T) {
 		t.Fatalf("bridge did not become ready: %v", err)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	// Stop includes native owner enumeration for both stable and legacy paths.
+	// In particular, cold Windows CIM calls need more than a two-second budget.
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	stopped, err := Stop(ctx, profile)
 	if !stopped || err != nil {
