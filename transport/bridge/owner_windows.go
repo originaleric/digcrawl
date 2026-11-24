@@ -11,3 +11,5 @@ func removeBridgeOwner(string)      {}
 func waitForRecordedBridgeGroupRelease(context.Context, string) error {
 	return nil
 }
+
+func recordBridgeBrowserProcesses(string) (func(), error) { return func() {}, nil }

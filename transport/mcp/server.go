@@ -6,7 +6,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"os"
 	"os/signal"
@@ -525,7 +524,14 @@ func toolResultToMCPWithInlineLimit(ctx context.Context, result *protocol.ToolRe
 		}
 	}
 	if len(result.Artifacts) > 0 {
-		output["artifacts"] = result.Artifacts
+		// Keep the established metadata shape and avoid duplicating binary data
+		// in structured/text output as well as MCP image/resource content.
+		metadata := append([]protocol.Artifact(nil), result.Artifacts...)
+		for i := range metadata {
+			metadata[i].InlineData = nil
+			metadata[i].InlineError = ""
+		}
+		output["artifacts"] = metadata
 	}
 	artifactContent, artifactErr := mcpArtifactContent(ctx, result.Artifacts, store, inlineLimit)
 	if result.Status == "error" {
@@ -563,21 +569,12 @@ func mcpArtifactContent(ctx context.Context, artifacts []protocol.Artifact, stor
 	if len(artifacts) == 0 {
 		return nil, nil
 	}
-	if store == nil {
-		return nil, fmt.Errorf("artifact store is unavailable")
-	}
 	limit := artifact.InlineLimit(inlineLimit)
 	content := make([]mcp.Content, 0, len(artifacts))
 	for _, item := range artifacts {
-		if item.Size > limit {
-			return nil, fmt.Errorf("artifact %q exceeds %d byte inline limit for this MCP transport", item.ID, limit)
-		}
-		data, mimeType, err := store.Get(ctx, item.ID)
+		data, mimeType, err := artifact.ReadContent(ctx, item, store, limit)
 		if err != nil {
-			return nil, fmt.Errorf("artifact %q is unavailable: %w", item.ID, err)
-		}
-		if int64(len(data)) > limit {
-			return nil, fmt.Errorf("artifact %q exceeds %d byte inline limit for this MCP transport", item.ID, limit)
+			return nil, err
 		}
 		encoded := base64.StdEncoding.EncodeToString(data)
 		if strings.HasPrefix(strings.ToLower(mimeType), "image/") {

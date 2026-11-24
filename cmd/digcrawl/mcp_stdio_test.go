@@ -336,11 +336,30 @@ func writeMCPBridgeExecutable(t *testing.T) string {
 // test binary has the same build identity and executes the production CLI
 // entry point, so ownership checks exercise exactly the supported process form.
 func TestMain(m *testing.M) {
+	temporaryHome := ""
+	if os.Getenv("DIGCRAWL_TEST_HOME") == "" {
+		base := ""
+		if runtime.GOOS == "darwin" {
+			base = "/tmp"
+		}
+		root, err := os.MkdirTemp(base, "dck-test-")
+		if err != nil {
+			panic(err)
+		}
+		_ = os.Setenv("HOME", root)
+		_ = os.Setenv("DIGCRAWL_TEST_HOME", root)
+		temporaryHome = root
+	}
+
 	if len(os.Args) > 1 && (os.Args[1] == "bridge" || os.Args[1] == "mcp") {
 		run(os.Args)
 		os.Exit(0)
 	}
-	os.Exit(m.Run())
+	code := m.Run()
+	if temporaryHome != "" {
+		_ = os.RemoveAll(temporaryHome)
+	}
+	os.Exit(code)
 }
 
 func waitForMCPTestBridge(t *testing.T, profilePath string) {

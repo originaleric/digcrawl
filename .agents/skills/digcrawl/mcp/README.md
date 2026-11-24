@@ -42,8 +42,8 @@ use `tools/list` and do not assume an independent `browser.snapshot` is exposed.
 The default Skill uses `browser.browse` with `mode: "snapshot"` instead.
 
 The Bridge reserves a durable, profile-scoped fault recovery budget under its
-existing lifecycle lock: up to three automatic recoveries, with two-second
-backoff. Initial starts, starts after verified controlled stops, and explicit
+existing lifecycle lock: three fast automatic recoveries, with two-second
+backoff, then a five-minute cooldown with one controlled attempt per period. Initial starts, starts after verified controlled stops, and explicit
 operator restarts neither consume recovery attempts nor erase previous failures.
 Stopping an already-absent crashed worker does not mark its exit clean. Proxy
 reconnection does not reset the budget. Version 1 records migrate conservatively
@@ -55,8 +55,8 @@ transport, build, recovery and browser operation separately. Explicit
 An interrupted post-dispatch call reports `execution_state=unknown`; do not replay
 it blindly, including readers that can save media under the active profile.
 
-During `bridge stop`, starts are rejected. After stop finishes, a later request
-may start again. An interrupted stop can leave a private `.stop-*` intent; inspect
+`bridge stop` persistently pauses automatic recovery and on-demand starts.
+Use `bridge restart` to resume. An interrupted stop can leave a private `.stop-*` intent; inspect
 the matching owner/cleanup before operator removal, never bulk-delete locks.
 
 When configured OCR is enabled, generic browser reads acquire bounded image bytes

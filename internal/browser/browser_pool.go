@@ -651,7 +651,11 @@ func (m *browserManager) openBrowserConnection(ctx context.Context) (*browserCon
 			started = started.Proxy(proxy)
 		}
 		started = applyBackgroundLauncherPolicy(started, m.cfg.ExtraArgs).Headless(true)
+		recordProcess := ownedProcessRecorder()
 		controlURL, err = launchBrowser(started)
+		if recordErr := recordProcess(started.PID()); recordErr != nil {
+			err = errors.Join(err, fmt.Errorf("persist owned browser process: %w", recordErr))
+		}
 	}
 	if err != nil {
 		c := newBrowserConnection(nil, nil, started, owned, profileDir, cdpPort)

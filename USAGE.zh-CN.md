@@ -182,7 +182,7 @@ go install ./cmd/digcollect
 
 ### 本机 MCP Bridge（默认）
 
-`digcrawl mcp` 首次被调用时，会为该 profile 启动一个私有 Unix socket Bridge。多个 Codex MCP stdio 子进程只转发协议，Bridge 才是唯一创建 Runtime 和 Chrome 的进程；因此没有固定 CDP 端口、没有 launchd/systemd 常驻浏览器，也不会因 MCP 重连重复争抢浏览器。配置文件的符号链接会归并到同一个 Bridge；而同一个持久化 `UserDataDir` 在任意时刻只能由一个 Bridge 使用。若确实需要两套独立配置，请给它们配置不同的 `UserDataDir`，避免权限、超时和登录态混用。Bridge 不使用空闲退出计时器：它会持续服务，直到异常退出或执行 `digcrawl bridge stop --config <profile>`；需要立即重启则用 `digcrawl bridge restart --config <profile>`。停止/重启不是平滑交接：它会立即取消在途 MCP 读取，待 Bridge 自己管理的 Chrome 已释放后才允许下一实例启动。Release 安装器使用已验证的临时新二进制，在替换安装目标前先停掉标准 Skill profile 的旧 Bridge，因此下一次 MCP 调用不会继续执行旧二进制。
+`digcrawl mcp` 首次被调用时，会为该 profile 启动一个私有 Unix socket Bridge。多个 Codex MCP stdio 子进程只转发协议，Bridge 才是唯一创建 Runtime 和 Chrome 的进程；因此没有固定 CDP 端口、没有 launchd/systemd 常驻浏览器，也不会因 MCP 重连重复争抢浏览器。配置文件的符号链接会归并到同一个 Bridge；而同一个持久化 `UserDataDir` 在任意时刻只能由一个 Bridge 使用。若确实需要两套独立配置，请给它们配置不同的 `UserDataDir`，避免权限、超时和登录态混用。Bridge 不使用空闲退出计时器：它会持续服务，直到异常退出或执行 `digcrawl bridge stop --config <profile>`；需要立即重启则用 `digcrawl bridge restart --config <profile>`。停止/重启会停止接收新任务，等待已接收请求结束并释放 Bridge 管理的 Chrome，再冷启动下一实例。Release 安装器使用已验证的临时新二进制，在同一维护锁内停止关联 watcher 和 Bridge、整理标准 profile，再替换程序并恢复 watcher。并发维护命令明确返回忙，完成后可重试；首次升级不支持排空的历史版本时，应等任务结束后用旧版先停止。详见[本地 Bridge 保活与迁移](docs/本地Bridge保活与迁移.md)。
 
 Bridge 默认忽略 profile 中遗留的 `CDPMode`、`CDPConnectExisting` 与 `CDPPort`，直接管理经过验证的专用无头运行时。这样旧的 CDP 服务短暂不可用、端口被占用或返回伪 HTTP 成功，都不再决定 MCP 是否可读页面。`digcrawl doctor --config <profile>` 分别检查浏览器依赖、Bridge 传输、运行构建与实际浏览器操作；实际操作通过已有 Bridge 创建并关闭测试页面，不启动第二个浏览器。首次 MCP 连接前若 Bridge 尚未运行，这项检查会明确报告未执行。
 
@@ -1528,11 +1528,11 @@ digcrawl doctor --config /absolute/path/to/digcrawl-skill.yaml
 
 ### Bridge 按需唤起与恢复预算
 
-代理在每次派发前探测并按需启动同一 profile 的 Bridge。自动故障恢复最多 3 次，恢复应用 2 秒退避；首次启动、受控停止后的正常启动和显式人工重启不计入该次数，也不清零之前的失败历史。恢复记录在现有生命周期锁下原子更新，跨代理重连保留。连续成功 RPC 观察满 10 分钟后恢复预算，相邻观察超过 1 分钟不算持续健康，空闲和系统睡眠本身不消耗恢复次数。这里是 Bridge 服务路径的存活观察，不代表浏览器、目标站点或 OCR 已就绪；doctor 分层报告这些能力。
+代理在每次派发前探测并按需启动同一 profile 的 Bridge。自动故障恢复提供 3 次快速尝试，应用 2 秒退避；耗尽后进入 5 分钟冷却，每个冷却周期允许一次受控尝试；首次启动、受控停止后的正常启动和显式人工重启不计入该次数，也不清零之前的失败历史。恢复记录在现有生命周期锁下原子更新，跨代理重连保留。连续成功 RPC 观察满 10 分钟后恢复预算，相邻观察超过 1 分钟不算持续健康，空闲和系统睡眠本身不消耗恢复次数。这里是 Bridge 服务路径的存活观察，不代表浏览器、目标站点或 OCR 已就绪；doctor 分层报告这些能力。
 
-耗尽后先修正依赖，再显式运行 `digcrawl bridge restart --config <profile>`。显式重启允许一次人工启动，但不清零自动预算。构建不匹配仍须关闭旧 MCP、使用匹配的已安装二进制显式重启，再重新连接；客户端不会互相自动升级或降级 Bridge。
+冷却期间先检查依赖；需要立即进行一次人工启动时，显式运行 `digcrawl bridge restart --config <profile>`。显式重启允许一次人工启动，但不清零自动预算。构建不匹配仍须关闭旧 MCP、使用匹配的已安装二进制显式重启，再重新连接；客户端不会互相自动升级或降级 Bridge。
 
-`bridge stop` 期间的启动请求会被拒绝；停止结束后，后续新的工具请求可以再次按需启动。停止控制进程异常死亡留下的 `.stop-*` 意图记录会阻止自动接管；应先检查 doctor，确认该停止控制进程及旧 Bridge/Chrome 已退出，再由操作者处理对应私有缓存目录中的残留记录。不要批量删除缓存、锁或日常 Chrome 进程。该保守边界避免未知资源归属下并发重建。
+`bridge stop` 期间的启动请求会被拒绝；停止结束后，持久暂停标记继续阻止巡检和按需启动，使用 `bridge restart` 恢复。停止控制进程异常死亡留下的 `.stop-*` 意图记录会阻止自动接管；应先检查 doctor，确认该停止控制进程及旧 Bridge/Chrome 已退出，再由操作者处理对应私有运行目录中的残留记录。不要批量删除缓存、锁或日常 Chrome 进程。该保守边界避免未知资源归属下并发重建。
 
 派发后连接中断会标记 `execution_state=unknown`，不会通用重放；读取也可能根据 profile 保存媒体或刷新会话，因此不能按工具名称断言没有副作用。浏览器内部已有有限故障重试，收到 `handled=true` 时按 `next_actions` 完成前置操作，避免多层叠加重试。
 
@@ -1563,3 +1563,5 @@ HTTP 400不会自动反复重试，原始provider响应不直接回显。正文�
 ### 恢复记录迁移与降级
 
 恢复记录 v2 用受控退出标志区分正常再启动与故障恢复。正常 SIGINT/SIGTERM 清理成功由 worker 确认；`bridge stop` 直接终止进程组时，由真正停止了所属进程的控制端在取得原生命周期锁、验证进程组与浏览器资源均释放后确认。对已经崩溃且不存在的进程运行 stop 不会清除故障状态；清理失败同样不能确认正常退出。v1 记录迁移为 v2 时原样保留旧计数作为保守上界；旧版稳定清零后可能再次累计真实失败，因此不推测并扣减“首次启动”，也不会为了升级清空恢复预算。旧版不理解 v2，不保证直接降级兼容；如需回退，应先制定保留历史的记录迁移，不能直接删除记录绕过预算。
+
+稳定运行目录、只读 `bridge status` 和 macOS `bridge watch --install` 见[本地 Bridge 保活与迁移](./docs/本地Bridge保活与迁移.md)。

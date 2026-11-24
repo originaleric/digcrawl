@@ -88,3 +88,8 @@ func waitForOwnedProcessRelease(ctx context.Context, c *browserConnection) error
 // Windows profile ownership is enforced by the common OS lock and Chrome's
 // native process checks; Unix socket/Symlink conventions are not assumed.
 func profileSocketReleased(string) error { return nil }
+
+func ProcessIdentity(ctx context.Context, pid int) (string, error) {
+	return ownedProcessIdentity(ctx, pid)
+}
+func ProcessAlive(pid int) (bool, error) { return profileProcessAlive(pid) }

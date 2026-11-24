@@ -368,6 +368,8 @@ digcrawl browser login --config "<MCP 实际使用的 profile 路径>" --platfor
 
 后台使用专用无头程序，登录使用独立的有窗口浏览器，依赖故障不会回退到日常 Chrome。源码安装请先运行 `digcrawl browser install`；旧配置和嵌入方请按 [升级迁移说明](./USAGE.zh-CN.md#浏览器能力按需) 处理。
 
+Bridge 运行状态保存在用户私有配置目录。使用 `digcrawl bridge status --config <profile>` 查询状态，使用 `digcrawl bridge watch --config <profile> --install` 安装 macOS 后台巡检。迁移、主动停止和回滚见[本地 Bridge 保活与迁移](./docs/本地Bridge保活与迁移.md)。
+
 遇到读取失败，请按错误提示操作，或查看[浏览器排障](./USAGE.zh-CN.md#浏览器超时或反复失败)。
 
 <details>

@@ -22,7 +22,7 @@ func TestRecoveryBudgetPersistsAndExplicitStartDoesNotRefund(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		r.LastAttempt = time.Now().Add(-time.Hour)
+		r.LastAttempt = time.Now().Add(-3 * time.Second)
 		if err = writeRecovery(socket, r); err != nil {
 			t.Fatal(err)
 		}
@@ -217,7 +217,7 @@ func TestLegacyRecoveryAfterStableResetDoesNotRefund(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			socket := filepath.Join(t.TempDir(), "bridge.sock")
-			raw, err := json.Marshal(map[string]any{"version": 1, "attempts": tc.attempts, "last_attempt": time.Now().Add(-time.Hour)})
+			raw, err := json.Marshal(map[string]any{"version": 1, "attempts": tc.attempts, "last_attempt": time.Now().Add(-3 * time.Second)})
 			if err != nil {
 				t.Fatal(err)
 			}

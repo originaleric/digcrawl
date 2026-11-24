@@ -28,6 +28,7 @@ func main(){
  f,e:=os.OpenFile(os.Getenv("FIXTURE_LOG"),os.O_CREATE|os.O_APPEND|os.O_WRONLY,0600);if e!=nil{panic(e)}
  f.WriteString(strings.Join(args,"|")+"\\n");f.Close()
  if len(args)>1 && args[0]=="browser" && args[1]=="install" && os.Getenv("FAIL_BROWSER")=="1" {os.Exit(4)}
+ if len(args)>1 && args[0]=="browser" && args[1]=="install" && os.Getenv("FAIL_BRIDGE")=="1" {os.Exit(3)}
  if len(args)>1 && args[0]=="browser" && args[1]=="install" {os.WriteFile(os.Getenv("LOCK_OWNER_PID"),[]byte(strconv.Itoa(os.Getpid())),0600);if os.Getenv("LEGACY_LOCK_PROTOCOL")=="1" {fmt.Println("DIGCRAWL_INSTALL_READY")} else {fmt.Println("DIGCRAWL_INSTALL_READY_V2")};scan:=bufio.NewScanner(os.Stdin);if scan.Scan() && scan.Text()=="release" && os.Getenv("OMIT_RELEASE_ACK")!="1" {fmt.Println("DIGCRAWL_INSTALL_RELEASED")}}
  if len(args)>0 && args[0]=="version" && os.Getenv("EXIT_LOCK_ON_VERSION")=="1" {data,_:=os.ReadFile(os.Getenv("LOCK_OWNER_PID"));pid,_:=strconv.Atoi(string(data));p,_:=os.FindProcess(pid);p.Kill();time.Sleep(100*time.Millisecond)}
  if len(args)>0 && args[0]=="init" {p:=filepath.Join(os.Getenv("XDG_CONFIG_HOME"),"digcrawl","digcrawl-skill.yaml");os.MkdirAll(filepath.Dir(p),0700);os.WriteFile(p,[]byte("preserve-profile"),0600)}
@@ -106,11 +107,9 @@ test('fresh install and update use stable paths, preserve profile and other MCP 
   assert.equal(await fs.readFile(config, 'utf8'), first);
   const calls = (await fs.readFile(context.env.FIXTURE_LOG, 'utf8')).trim().split('\n');
   assert.equal(calls.filter(c => c === 'init|--profile|skill').length, 1);
-  assert.ok(calls.includes(`browser|migrate|--config|${dirs.profile}|--apply`));
-  assert.equal(calls.filter(c => c === `browser|migrate|--config|${dirs.profile}|--apply`).length, 2,
-    'upgrade must drain owners both before and after executable replacement');
-  assert.ok(calls.some(c => c.startsWith('browser|install|')));
-  assert.ok(calls.findIndex(c => c.startsWith('browser|install|')) < calls.indexOf(`browser|migrate|--config|${dirs.profile}|--apply`));
+  assert.equal(calls.filter(c => c.startsWith('browser|migrate|')).length, 0,
+    'the native guard must own profile preparation; parents must not repeat migration');
+  assert.ok(calls.some(c => c.startsWith('browser|install|--replace-executable|')));
   assert.ok(context.requests.every(url => url.includes('/v1.0.0/')));
   // The native advisory lock may keep a reusable inode after release.
 });
@@ -131,7 +130,7 @@ test('failed Bridge stop preserves the installed executable and user settings', 
   await fs.mkdir(dirs.installDir);
   await fs.writeFile(dirs.binary, 'old-program');
   context.env.FAIL_BRIDGE = '1';
-  await assert.rejects(install({}, context), /browser migrate failed/);
+  await assert.rejects(install({}, context), /preparation \/ installation lock unavailable/);
   assert.equal(await fs.readFile(dirs.binary, 'utf8'), 'old-program');
   await assert.rejects(fs.stat(path.join(dirs.codexHome, 'config.toml')), { code: 'ENOENT' });
 });
@@ -139,7 +138,7 @@ test('failed Bridge stop preserves the installed executable and user settings', 
 test('program-only and explicit Claude installations respect host scope', async () => {
   const only = await sandbox();
   const dirs = await install({ skipAgents: true }, only);
-  assert.ok(only.requests.every(url => url.includes('/v1.0.3/')));
+  assert.ok(only.requests.every(url => url.includes('/v1.0.4/')));
   await assert.rejects(fs.stat(dirs.profile), { code: 'ENOENT' });
   await assert.rejects(fs.stat(dirs.codexHome), { code: 'ENOENT' });
   const claude = await sandbox();
@@ -214,7 +213,7 @@ test('npm tarball contains only the public installer and documents; npx entry re
   const packed = JSON.parse(result.stdout)[0];
   assert.deepEqual(packed.files.map(f => f.path).sort(), ['LICENSE', 'README.md', 'README.zh-CN.md', 'npm/cli.mjs', 'npm/install.mjs', 'package.json'].sort());
   const pkg = JSON.parse(await fs.readFile(new URL('../package.json', import.meta.url), 'utf8'));
-  assert.equal(pkg.digcrawlRelease, '1.0.3');
+  assert.equal(pkg.digcrawlRelease, '1.0.4');
   assert.equal(pkg.scripts.postinstall, undefined);
   const extracted = path.join(root, 'packed');
   await fs.mkdir(extracted);

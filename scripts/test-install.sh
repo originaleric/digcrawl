@@ -6,7 +6,13 @@
 set -eu
 
 repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-test_root=$(mktemp -d "${TMPDIR:-/tmp}/digcrawl-install-test.XXXXXX")
+# Keep the isolated macOS HOME short enough for AF_UNIX paths.
+test_root=$(mktemp -d "/tmp/dci.XXXXXX")
+# macOS UserConfigDir uses HOME rather than XDG_CONFIG_HOME. Keep transport
+# state and LaunchAgent discovery isolated as well as the profile itself.
+HOME="$test_root/home"
+export HOME
+mkdir -p "$HOME"
 
 cleanup() {
   if [ -n "${guard_pid:-}" ]; then
@@ -182,10 +188,13 @@ fi
 cat >"$fake_bin_dir/install" <<'EOF'
 #!/bin/sh
 set -eu
-# Reproduce an old client restarting its Bridge after pre-stop and before
-# executable replacement. The post-replacement barrier must drain it.
+# A current client attempting to restart during publication must be denied
+# by the install owner's maintenance intent, and publication must continue.
 if [ -n "${DIGCRAWL_INSTALL_TEST_RECONNECT_PROFILE:-}" ]; then
-  "$3" bridge restart --config "$DIGCRAWL_INSTALL_TEST_RECONNECT_PROFILE"
+  if "$3" bridge restart --config "$DIGCRAWL_INSTALL_TEST_RECONNECT_PROFILE"; then
+    printf '%s\n' 'restart bypassed installation maintenance intent' >&2
+    exit 1
+  fi
 fi
 exec /usr/bin/install "$@"
 EOF

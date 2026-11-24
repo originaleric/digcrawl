@@ -174,6 +174,7 @@ func browserProfilePath(explicitPath string) (string, error) {
 func runBrowserInstall(args []string) {
 	fs := flag.NewFlagSet("browser install", flag.ExitOnError)
 	archiveDir := fs.String("archive-dir", strings.TrimSpace(os.Getenv("DIGCRAWL_BROWSER_ARCHIVE_DIR")), "directory of official pinned runtime ZIPs for offline installation")
+	replacement := fs.String("replace-executable", "", "internal installed executable being replaced")
 	var installerLocks []string
 	fs.Func("installer-lock", "internal resource directory to guard; repeat for shared targets", func(path string) error { installerLocks = append(installerLocks, path); return nil })
 	repair := fs.Bool("repair", false, "preserve and replace a damaged runtime after stopping its owners")
@@ -184,6 +185,17 @@ func runBrowserInstall(args []string) {
 	var release chan bool
 	holding := len(installerLocks) > 0
 	multiResource := len(installerLocks) > 1
+	if *replacement != "" {
+		if !holding {
+			log.Fatal("executable replacement requires the existing installation lock")
+		}
+		target, err := filepath.Abs(*replacement)
+		if err != nil {
+			log.Fatal(err)
+		}
+		*replacement = target
+		installerLocks = append(installerLocks, filepath.Dir(target))
+	}
 	if holding || *migrateDefault {
 		profile, err := browser.CanonicalProfilePath(config.DefaultSkillProfilePath())
 		if err != nil {
@@ -231,25 +243,54 @@ func runBrowserInstall(args []string) {
 			stop()
 		}()
 	}
+	var control *browser.ProfileLock
 	install := browser.InstallBrowserRuntime
 	if *repair {
+		var err error
+		control, err = bridge.AcquireControl()
+		if err != nil {
+			log.Fatal(err)
+		}
+		defer control.Close()
 		install = browser.RepairBrowserRuntime
 	}
 	if err := install(ctx, *archiveDir); err != nil {
 		log.Fatal(err)
 	}
-	if *migrateDefault {
+	if (*migrateDefault || *replacement != "") && control == nil {
+		var err error
+		control, err = bridge.AcquireControl()
+		if err != nil {
+			log.Fatal(err)
+		}
+		defer control.Close()
+	}
+	if *migrateDefault && *replacement == "" {
 		if err := migrateDefaultBrowserProfile(ctx); err != nil {
 			log.Fatal(err)
 		}
 	}
+	restoreWatchers := func() error { return nil }
+	if *replacement != "" {
+		var err error
+		restoreWatchers, err = suspendInstalledWatchers(ctx, *replacement)
+		if err != nil {
+			log.Fatal(err)
+		}
+	}
 	if holding {
+		if err := ctx.Err(); err != nil {
+			log.Fatal(errors.Join(err, restoreWatchers()))
+		}
 		if multiResource {
 			fmt.Println("DIGCRAWL_INSTALL_READY_V2")
 		} else {
 			fmt.Println("DIGCRAWL_INSTALL_READY")
 		}
 		<-ctx.Done()
+		if err := restoreWatchers(); err != nil {
+			log.Fatalf("restore installed watchers: %v", err)
+		}
 		select {
 		case released := <-release:
 			if released {
@@ -291,6 +332,13 @@ func runBrowserMigrate(args []string) {
 	if err != nil {
 		log.Fatal(err)
 	}
+	if *apply {
+		control, err := bridge.AcquireControl()
+		if err != nil {
+			log.Fatal(err)
+		}
+		defer control.Close()
+	}
 	cfg, err := loadConfig(path)
 	if err != nil {
 		log.Fatal(err)
@@ -313,13 +361,10 @@ func runBrowserMigrate(args []string) {
 		fmt.Println("Read-only. Stop verified old owners with browser migrate --config PATH --apply. Then remove desktop ChromePath overrides, install the isolated runtime, and restart all callers (including embedded copies). Existing CookieStoreDir is retained; dedicated login profiles may need sign-in again.")
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), bridgeStopTimeout)
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
-	stopped, err := bridge.Stop(ctx, path)
+	stopped, err := migrateBrowserProfile(ctx, path)
 	if err != nil {
-		log.Fatal(err)
-	}
-	if err := config.MigrateBrowserRuntimeProfile(ctx, path); err != nil {
 		log.Fatal(err)
 	}
 	fmt.Printf("Verified Bridge owners stopped: %v. Legacy executable override cleared; original profile backed up. No daily browser was targeted. Restart callers with the updated binary.\n", stopped)
@@ -334,10 +379,24 @@ func migrateDefaultBrowserProfile(ctx context.Context) error {
 	} else if err != nil {
 		return err
 	}
-	stopCtx, cancel := context.WithTimeout(ctx, bridgeStopTimeout)
-	defer cancel()
-	if _, err := bridge.Stop(stopCtx, path); err != nil {
-		return err
+	_, err := migrateBrowserProfile(ctx, path)
+	return err
+}
+
+// Keep the original stop intent held until profile mutation has committed.
+func migrateBrowserProfile(ctx context.Context, path string) (bool, error) {
+	release, err := bridge.HoldStop(path)
+	if err != nil {
+		return false, err
 	}
-	return config.MigrateBrowserRuntimeProfile(stopCtx, path)
+	defer release()
+	directory, err := watcherProfileDirectory(ctx, path)
+	if err != nil {
+		return false, err
+	}
+	stopped, err := bridge.StopInDirectory(ctx, path, directory)
+	if err != nil {
+		return stopped, err
+	}
+	return stopped, config.MigrateBrowserRuntimeProfile(ctx, path)
 }

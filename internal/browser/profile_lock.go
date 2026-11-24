@@ -57,20 +57,32 @@ func AcquireProfileLock(profile string) (*ProfileLock, string, error) {
 	if err != nil {
 		return nil, "", err
 	}
-	cache, err := os.UserCacheDir()
+	dir, err := RuntimeDirectory()
 	if err != nil {
 		return nil, "", err
 	}
-	dir := filepath.Join(cache, "digcrawl", "bridge")
-	if err = os.MkdirAll(dir, 0700); err != nil {
-		return nil, "", err
-	}
-	if err = os.Chmod(dir, 0700); err != nil {
+	if err = PrepareRuntimeDirectory(dir); err != nil {
 		return nil, "", err
 	}
 	digest := sha256.Sum256([]byte(identity))
 	lock, err := acquireProfileFileLock(filepath.Join(dir, fmt.Sprintf("browser-%x.lock", digest[:12])))
-	return lock, identity, err
+	if err != nil {
+		return nil, identity, err
+	}
+	cache, err := os.UserCacheDir()
+	if err != nil {
+		_ = lock.Close()
+		return nil, identity, err
+	}
+	legacy := filepath.Join(cache, "digcrawl", "bridge")
+	if err = PrepareRuntimeDirectory(legacy); err == nil {
+		lock.compatibility, err = acquireProfileFileLock(filepath.Join(legacy, fmt.Sprintf("browser-%x.lock", digest[:12])))
+	}
+	if err != nil {
+		_ = lock.Close()
+		return nil, identity, err
+	}
+	return lock, identity, nil
 }
 func AcquireManagedProfileLock(profile string) (*ProfileLock, string, error) {
 	lock, identity, err := AcquireProfileLock(profile)

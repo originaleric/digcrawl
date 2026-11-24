@@ -15,7 +15,7 @@ const bridgeRecoveryLimit = 3
 const bridgeRecoveryStable = 10 * time.Minute
 const bridgeRecoveryBackoff = 2 * time.Second
 
-var ErrRecoveryExhausted = errors.New("local Bridge recovery exhausted; correct the dependency and explicitly run bridge restart")
+var ErrRecoveryExhausted = errors.New("local Bridge recovery cooling down; inspect doctor or explicitly run bridge restart")
 var ErrBridgeStopping = errors.New("local Bridge stop is in progress or incomplete; finish the owning stop before reconnecting")
 
 // This bounded record is read/written only by the existing lifecycle-lock
@@ -55,6 +55,24 @@ func readRecovery(socket string) (recoveryRecord, error) {
 	}
 	return r, nil
 }
+
+// Diagnostics use the same predecessor history before the first migration,
+// while leaving publication to the lifecycle-lock owner.
+func readRecoveryWithLegacy(socket string) (recoveryRecord, error) {
+	record, err := readRecovery(socket)
+	if err != nil || record.Version != 0 {
+		return record, err
+	}
+	legacy, err := legacySocketPathForSocket(socket)
+	if err != nil {
+		return record, err
+	}
+	if legacy == socket {
+		return record, nil
+	}
+	return readRecovery(legacy)
+}
+
 func writeRecovery(socket string, r recoveryRecord) error {
 	r.Version = 2
 	data, err := json.Marshal(r)
@@ -85,7 +103,7 @@ func bridgeStopping(socket string) bool {
 // reserveBridgeStart must run while the existing lifecycle lock is held, before
 // opening listeners or starting owned work. A proxy crash cannot refund it.
 func reserveBridgeStart(ctx context.Context, socket string, manual bool) error {
-	if bridgeStopping(socket) {
+	if bridgeStopping(socket) || bridgePaused(socket) {
 		return ErrBridgeStopping
 	}
 	r, err := readRecovery(socket)
@@ -93,7 +111,7 @@ func reserveBridgeStart(ctx context.Context, socket string, manual bool) error {
 		return err
 	}
 	recovering := r.Unclean && !manual
-	if recovering && r.Attempts >= bridgeRecoveryLimit {
+	if recovering && r.Attempts >= bridgeRecoveryLimit && (r.LastAttempt.IsZero() || time.Since(r.LastAttempt) < recoveryCooldown) {
 		return ErrRecoveryExhausted
 	}
 	wait := time.Until(r.LastAttempt.Add(bridgeRecoveryBackoff))
@@ -109,14 +127,16 @@ func reserveBridgeStart(ctx context.Context, socket string, manual bool) error {
 		case <-timer.C:
 		}
 	}
-	if bridgeStopping(socket) {
+	if bridgeStopping(socket) || bridgePaused(socket) {
 		return ErrBridgeStopping
 	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 	if recovering {
-		r.Attempts++
+		if r.Attempts < bridgeRecoveryLimit {
+			r.Attempts++
+		}
 	}
 	r.Unclean = true
 	r.LastAttempt = time.Now().UTC()
@@ -182,14 +202,14 @@ func CheckRecovery(ctx context.Context, profile string) error {
 	if err != nil {
 		return err
 	}
-	if bridgeStopping(socket) {
+	if bridgeStopping(socket) || bridgePaused(socket) {
 		return ErrBridgeStopping
 	}
-	r, err := readRecovery(socket)
+	r, err := readRecoveryWithLegacy(socket)
 	if err != nil {
 		return err
 	}
-	if r.Unclean && r.Attempts >= bridgeRecoveryLimit {
+	if r.Unclean && r.Attempts >= bridgeRecoveryLimit && (r.LastAttempt.IsZero() || time.Since(r.LastAttempt) < recoveryCooldown) {
 		if _, _, err := probe(ctx, socket); err != nil {
 			return ErrRecoveryExhausted
 		}

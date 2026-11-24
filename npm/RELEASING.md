@@ -4,8 +4,9 @@
 `package.json` `digcrawlRelease` field pins an existing public GitHub Release.
 Never move an existing Go tag to publish an installer update.
 
-Version 1.0.3 changes runtime preparation and installation coordination on
-both sides. Publish GitHub `v1.0.3` and verify its assets before npm `1.0.3`.
+Version 1.0.4 coordinates serial maintenance, watcher restoration and complete
+MCP attachment delivery on both sides. Publish GitHub `v1.0.4` and verify its
+assets before npm `1.0.4`.
 Older Go releases require their matching older npm installer; overriding
 `--version` alone does not provide backward compatibility for install commands.
 

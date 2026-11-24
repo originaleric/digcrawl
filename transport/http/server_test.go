@@ -2,15 +2,18 @@ package httpgw
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/originaleric/digcrawl/config"
 	"github.com/originaleric/digcrawl/protocol"
 	"github.com/originaleric/digcrawl/runtime"
+	"github.com/originaleric/digcrawl/runtime/artifact"
 	"github.com/originaleric/digcrawl/runtime/registry"
 )
 
@@ -221,5 +224,41 @@ func TestWatchlistAdminSourceDiscover(t *testing.T) {
 	}
 	if out.Count != 1 || len(out.Items) != 1 || out.Items[0].ContentKey != "g1" || out.Items[0].Title != "A" {
 		t.Fatalf("unexpected discover response: %+v", out)
+	}
+}
+
+func TestOnlyPrivateGatewayMaterializesArtifacts(t *testing.T) {
+	store, err := artifact.NewDiskStore(t.TempDir(), time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref, err := store.Put(context.Background(), "image", "image/png", "fixture", []byte("payload"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg := registry.New()
+	reg.Register(registry.Entry{Descriptor: protocol.ToolDescriptor{Name: "fixture.read"}, Handler: func(context.Context, *protocol.ToolCall) (map[string]any, []protocol.Artifact, error) {
+		return map[string]any{"text": "done"}, []protocol.Artifact{ref}, nil
+	}})
+	rt := runtime.New(reg, runtime.Options{ArtifactStore: store})
+	for _, private := range []bool{false, true} {
+		server := NewServer(rt, store, "")
+		server.InlineArtifacts = private
+		request := httptest.NewRequest(http.MethodPost, "/tools/call", bytes.NewBufferString(`{"id":"fixture","tool":"fixture.read","input":{}}`))
+		response := httptest.NewRecorder()
+		server.ServeHTTP(response, request)
+		if response.Code != http.StatusOK {
+			t.Fatal(response.Code, response.Body.String())
+		}
+		var result protocol.ToolResult
+		if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
+			t.Fatal(err)
+		}
+		if len(result.Artifacts) != 1 || (result.Artifacts[0].InlineData != nil) != private {
+			t.Fatalf("wrong artifact transport private=%v: %+v", private, result)
+		}
+		if !private && bytes.Contains(response.Body.Bytes(), []byte("inline_")) {
+			t.Fatal("public response changed")
+		}
 	}
 }

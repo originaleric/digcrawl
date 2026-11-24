@@ -170,8 +170,8 @@ func TestServeKeepsBridgeAvailableAcrossIdleGaps(t *testing.T) {
 		t.Fatal("bridge did not stop after cancellation")
 	}
 	r, err := readRecovery(socket)
-	if err != nil || r.Unclean || r.Attempts != 0 {
-		t.Fatalf("controlled shutdown state=%+v, err=%v", r, err)
+	if err != nil || !r.Unclean || r.Attempts != 0 {
+		t.Fatalf("shutdown without controller must retain conservative history=%+v, err=%v", r, err)
 	}
 }
 
@@ -216,7 +216,7 @@ func TestServeRejectsSecondBridgeForSamePersistentBrowserProfile(t *testing.T) {
 	}
 }
 
-func TestStopDoesNotFallBackToAnInProcessControlRequest(t *testing.T) {
+func TestStopUsesGracefulInProcessControlRequest(t *testing.T) {
 	dir := t.TempDir()
 	cfg := bridgeTestConfig(t, dir)
 	profile := filepath.Join(dir, "profile.yaml")
@@ -236,8 +236,8 @@ func TestStopDoesNotFallBackToAnInProcessControlRequest(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	stopped, err := Stop(ctx, profile)
-	if stopped || !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("Stop() = (%v, %v), want (false, deadline exceeded)", stopped, err)
+	if !stopped || err != nil {
+		t.Fatalf("Stop() = (%v, %v), want graceful completion", stopped, err)
 	}
 	cancelServe()
 	select {
@@ -250,6 +250,64 @@ func TestStopDoesNotFallBackToAnInProcessControlRequest(t *testing.T) {
 	}
 	if _, _, err := probe(context.Background(), socket); err == nil {
 		t.Fatal("bridge still answered after Stop")
+	}
+}
+
+func TestRecoveryRetainsHealthyBridgeBeforeRequestingShutdown(t *testing.T) {
+	dir := bridgeSocketTempDir(t)
+	profile := filepath.Join(dir, "profile.yaml")
+	if err := os.WriteFile(profile, []byte("LocalBrowser: {}\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	socket := filepath.Join(dir, "healthy.sock")
+	listener, err := net.Listen("unix", socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stops := make(chan struct{}, 1)
+	server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/internal/stop" {
+			stops <- struct{}{}
+			w.WriteHeader(http.StatusAccepted)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(protocol.ToolManifest{Runtime: version.RuntimeName, RuntimeVersion: version.RuntimeVersion, BuildID: version.BuildIdentity()})
+	})}
+	go func() { _ = server.Serve(listener) }()
+	defer server.Close()
+	if stopped, err := stopSocket(context.Background(), profile, socket, false, ""); err != nil || stopped {
+		t.Fatalf("healthy recovery stop=%v err=%v", stopped, err)
+	}
+	select {
+	case <-stops:
+		t.Fatal("recovery requested a healthy owner's shutdown")
+	default:
+	}
+}
+
+func TestStopRefusesOldServerWithoutDrainingSupport(t *testing.T) {
+	dir := bridgeSocketTempDir(t)
+	profile := filepath.Join(dir, "profile.yaml")
+	if err := os.WriteFile(profile, []byte("LocalBrowser: {}\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	socket := filepath.Join(dir, "old.sock")
+	listener, err := net.Listen("unix", socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := &http.Server{Handler: http.NotFoundHandler()}
+	go func() { _ = server.Serve(listener) }()
+	defer server.Close()
+	if stopped, err := stopSocket(context.Background(), profile, socket, true, ""); err == nil || stopped || !strings.Contains(err.Error(), "does not support draining shutdown") {
+		t.Fatalf("old server stop=%v err=%v", stopped, err)
+	}
+	// Rejection leaves the old process/listener in charge, rather than escalating
+	// an unsupported control request to a native force-kill fallback.
+	if conn, err := net.Dial("unix", socket); err != nil {
+		t.Fatal("unsupported server was stopped", err)
+	} else {
+		_ = conn.Close()
 	}
 }
 
@@ -429,4 +487,60 @@ func bridgeTestConfig(t *testing.T, dir string) *config.Config {
 		t.Fatal(err)
 	}
 	return cfg
+}
+
+func TestPrivateCallSeparatesExecutionAndDeliveryBudgets(t *testing.T) {
+	for _, scenario := range []string{"slow_delivery", "stalled_delivery", "caller_canceled"} {
+		t.Run(scenario, func(t *testing.T) {
+			socket := filepath.Join(bridgeSocketTempDir(t), "delivery.sock")
+			listener, err := net.Listen("unix", socket)
+			if err != nil {
+				t.Fatal(err)
+			}
+			headers := make(chan struct{})
+			server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/manifest" {
+					json.NewEncoder(w).Encode(protocol.ToolManifest{Runtime: version.RuntimeName, RuntimeVersion: version.RuntimeVersion, BuildID: version.BuildIdentity()})
+					return
+				}
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusOK)
+				http.NewResponseController(w).Flush()
+				close(headers)
+				if scenario != "slow_delivery" {
+					<-r.Context().Done()
+					return
+				}
+				select {
+				case <-time.After(150 * time.Millisecond):
+					json.NewEncoder(w).Encode(protocol.ToolResult{Status: "success"})
+				case <-r.Context().Done():
+				}
+			})}
+			go server.Serve(listener)
+			defer server.Close()
+			budget := time.Second
+			if scenario == "stalled_delivery" {
+				budget = 75 * time.Millisecond
+			}
+			executor := &Executor{socket: socket, cfg: &config.Config{}, artifactTimeout: budget}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			if scenario == "caller_canceled" {
+				go func() { <-headers; cancel() }()
+			}
+			started := time.Now()
+			result := executor.Execute(ctx, &protocol.ToolCall{ID: scenario, Tool: "gateway.ping", Input: json.RawMessage(`{}`), Policy: protocol.CallPolicy{TimeoutMs: 75}})
+			if time.Since(started) > 2*time.Second {
+				t.Fatal("delivery was unbounded")
+			}
+			if scenario == "slow_delivery" {
+				if result.Status != "success" {
+					t.Fatalf("execution budget cut off completed result delivery: %+v", result)
+				}
+			} else if result.Status != "error" || result.Error == nil {
+				t.Fatalf("unfinished delivery reported success: %+v", result)
+			}
+		})
+	}
 }

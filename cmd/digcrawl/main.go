@@ -99,6 +99,8 @@ func printUsage() {
   digcrawl mcp [flags]         MCP 服务（stdio，供 IDE 使用）
 	  digcrawl bridge stop --config <profile>     停止该 profile 的私有 MCP Bridge
 	  digcrawl bridge restart --config <profile>  重启该 profile 的私有 MCP Bridge
+	  digcrawl bridge status --config <profile>   只读查询连通性、归属和恢复状态
+	  digcrawl bridge watch --config <profile>    持续巡检，macOS 可加 --install / --uninstall
   digcrawl stdio [flags]       stdin/stdout 逐行 JSON 协议
   digcrawl dev-host [flags]    本地参考宿主（仅开发）
   digcrawl collect <url>       采集 URL 并导出 Markdown/HTML/JSON

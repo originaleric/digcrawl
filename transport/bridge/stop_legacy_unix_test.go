@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -289,10 +290,26 @@ func TestBridgeProcessGroupStopHelper(t *testing.T) {
 	if err := os.WriteFile(os.Getenv("DIGCRAWL_BRIDGE_GROUP_CHILD_PID_FILE"), []byte(strconv.Itoa(child.Process.Pid)), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	select {}
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, syscall.SIGTERM)
+	<-signals
+	_ = child.Process.Kill()
+	_ = child.Wait()
+	os.Exit(1)
 }
 
 func TestMain(m *testing.M) {
+	temporaryHome := ""
+	if os.Getenv("DIGCRAWL_TEST_HOME") == "" {
+		root, err := os.MkdirTemp("/tmp", "dck-test-")
+		if err != nil {
+			panic(err)
+		}
+		_ = os.Setenv("HOME", root)
+		_ = os.Setenv("DIGCRAWL_TEST_HOME", root)
+		temporaryHome = root
+	}
+
 	helper := ""
 	if os.Getenv("DIGCRAWL_LEGACY_BRIDGE_HELPER") == "1" {
 		helper = "TestLegacyBridgeStopHelper"
@@ -303,7 +320,11 @@ func TestMain(m *testing.M) {
 	if helper != "" {
 		os.Args = []string{os.Args[0], "-test.run=^" + helper + "$"}
 	}
-	os.Exit(m.Run())
+	code := m.Run()
+	if temporaryHome != "" {
+		_ = os.RemoveAll(temporaryHome)
+	}
+	os.Exit(code)
 }
 func bridgeStopFixture(t *testing.T) string {
 	t.Helper()
@@ -446,7 +467,7 @@ func TestOwnerVerificationAcceptsExecutableSymlink(t *testing.T) {
 	t.Fatal("symlink-launched native worker could not prove executable identity")
 }
 
-func TestRecordedOwnerSurvivesExecutableUnlinkDuringUpgrade(t *testing.T) {
+func TestColdUpdateRefusesUnknownUnlinkedLiveProgram(t *testing.T) {
 	dir := t.TempDir()
 	profile := filepath.Join(dir, "profile.yaml")
 	if err := os.WriteFile(profile, []byte("Gateway: {}\n"), 0600); err != nil {
@@ -489,8 +510,8 @@ func TestRecordedOwnerSurvivesExecutableUnlinkDuringUpgrade(t *testing.T) {
 		t.Fatalf("retained owner identity lost after unlink: %v %v", current, err)
 	}
 	stopped, err := Stop(ctx, profile)
-	if err != nil || !stopped {
-		t.Fatalf("upgrade could not retire recorded owner: %v %v", stopped, err)
+	if err == nil || stopped {
+		t.Fatalf("unknown live program was stopped without draining proof: %v %v", stopped, err)
 	}
 }
 

@@ -368,6 +368,8 @@ Use absolute program and profile paths, and copy the whole Skill rather than onl
 
 Background rendering uses a dedicated headless runtime; sign-in uses a separately identified headed browser. Dependency failures never fall back to daily Chrome. Source installations must run `digcrawl browser install`; migrate legacy configurations and embedded copies using the [upgrade instructions](./USAGE.md#browser-capabilities-optional).
 
+Bridge runtime state now uses the private user configuration directory. Use `digcrawl bridge status --config <profile>` for read-only diagnostics and `digcrawl bridge watch --config <profile> --install` for macOS background monitoring. See the [Bridge lifecycle guide](./docs/本地Bridge保活与迁移.md) for migration and rollback.
+
 Follow the returned error guidance or see [browser troubleshooting](./USAGE.md#browser-timeouts-or-repeated-failures).
 
 <details>

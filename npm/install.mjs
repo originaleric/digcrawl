@@ -258,7 +258,9 @@ async function prepareBrowserWithInstallLock(binary, args, env, resources) {
     async close(completed = false) {
       if (completed) { check(); releasing = true; child.stdin.end('release\n'); }
       else child.stdin.end();
-      const timer = setTimeout(() => child.kill('SIGKILL'), 10_000);
+      // The native owner restores the installed watcher jobs before release.
+      // Allow its bounded 45-second cleanup to finish on success and EOF.
+      const timer = setTimeout(() => child.kill('SIGKILL'), 60_000);
       try {
         const result = await done;
         if (completed && (result.code !== 0 || !acknowledged)) throw new Error('Installation lock release was not acknowledged');
@@ -272,7 +274,7 @@ export async function install(options = {}, context = {}) {
   const platform = context.platform || process.platform;
   const home = context.home || os.homedir();
   const log = context.log || console.log;
-  const version = (options.version || '1.0.3').replace(/^v/, '');
+  const version = (options.version || '1.0.4').replace(/^v/, '');
   const asset = assetName(version, platform, context.arch || process.arch);
   const dirs = locations(env, platform, home);
   if (options.installDir) {
@@ -311,7 +313,7 @@ export async function install(options = {}, context = {}) {
     if (codex) resources.push(path.join(dirs.codexHome,'skills'));
     if (claude) resources.push(path.join(dirs.claudeHome,'skills'));
     const writeConfig = codex ? await prepareCodex(await selectCodexConfig(env, dirs, context.cwd || process.cwd()), dirs, resources) : null;
-    const browserArgs = ['browser', 'install'];
+    const browserArgs = ['browser', 'install', '--replace-executable', dirs.binary];
     if (env.DIGCRAWL_BROWSER_ARCHIVE_DIR) browserArgs.push('--archive-dir', env.DIGCRAWL_BROWSER_ARCHIVE_DIR);
     lock = await prepareBrowserWithInstallLock(stagedBinary, browserArgs, env, resources);
     // The verified new program stops the old Bridge before executable replacement.
@@ -319,7 +321,6 @@ export async function install(options = {}, context = {}) {
     lock.check();
     try { if ((await fs.lstat(dirs.binary)).isSymbolicLink()) throw new Error('Refusing to replace a managed binary symlink; use its package manager or another install directory'); }
     catch(error) { if(error.code !== 'ENOENT') throw error; }
-    if (await exists(dirs.profile)) await lock.run(stagedBinary, ['browser', 'migrate', '--config', dirs.profile, '--apply']);
     const stage = path.join(dirs.installDir, `.digcrawl-${randomUUID()}${platform === 'win32' ? '.exe' : ''}`);
     try {
       await fs.copyFile(stagedBinary, stage);
@@ -327,9 +328,8 @@ export async function install(options = {}, context = {}) {
       lock.check();
       await fs.rename(stage, dirs.binary);
     } finally { await fs.rm(stage, { force: true }); }
-    // Retire a legacy worker restarted by an old MCP client during replacement.
-    // Subsequent starts now resolve this path to the isolated-runtime CLI.
-    if (await exists(dirs.profile)) await lock.run(dirs.binary, ['browser', 'migrate', '--config', dirs.profile, '--apply']);
+    // The native guard has drained and prepared the profile in its recorded
+    // context, and holds maintenance intent throughout publication.
     await lock.run(dirs.binary, ['version']);
     if (agents) {
       if (!await exists(dirs.profile)) await lock.run(dirs.binary, ['init', '--profile', 'skill']);

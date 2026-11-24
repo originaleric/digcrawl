@@ -13,6 +13,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/originaleric/digcrawl/runtime/version"
 )
 
 // stopBridgeOwner signals the current Bridge exactly once. Managed workers
@@ -34,8 +36,11 @@ func stopBridgeOwner(ctx context.Context, socket string) (bool, error) {
 			// never be trusted as a kill target: numeric IDs can be reused.
 			return false, ErrBridgeOwnerNotFound
 		}
-		if err := signalBridgeProcess(-owner.pgid, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) && !errors.Is(err, os.ErrProcessDone) {
-			return false, fmt.Errorf("force-stop local bridge process group: %w", err)
+		if err := nativeDrainSupported(ctx, owner.pid, socket); err != nil {
+			return false, err
+		}
+		if err := signalBridgeProcess(owner.pid, syscall.SIGTERM); err != nil && !errors.Is(err, syscall.ESRCH) && !errors.Is(err, os.ErrProcessDone) {
+			return false, fmt.Errorf("request local bridge shutdown: %w", err)
 		}
 		return true, nil
 	}
@@ -54,7 +59,23 @@ func stopBridgeOwner(ctx context.Context, socket string) (bool, error) {
 	if err != nil || !info.Verified {
 		return false, ErrBridgeOwnerNotFound
 	}
+	if err := nativeDrainSupported(ctx, pid, socket); err != nil {
+		return false, err
+	}
 	return terminateExactBridgeProcess(ctx, pid, info.identity)
+}
+
+// A missing socket cannot negotiate graceful shutdown. Only the same program
+// is known to handle TERM by draining; unknown/unlinked old programs must be
+// stopped while idle before a cold update, rather than dynamically taken over.
+func nativeDrainSupported(ctx context.Context, pid int, socket string) error {
+	info, err := verifiedBridgeProcess(ctx, pid, socket)
+	if err == nil && info.Verified {
+		if matches, checkErr := version.ExecutableMatches(info.Executable); checkErr == nil && matches {
+			return nil
+		}
+	}
+	return fmt.Errorf("unreachable previous Bridge cannot prove draining support; wait for its tasks to finish and stop it before updating")
 }
 
 // recordedBridgeOwnerIsCurrent turns the small owner file into a checked
@@ -76,12 +97,9 @@ func recordedBridgeOwnerIsCurrent(ctx context.Context, socket string, owner brid
 		return false, nil
 	}
 	if owner.identity != "" {
-		identity, err := bridgeProcessIdentity(ctx, owner.pid)
-		if err != nil {
+		matches, err := ownerIdentityMatches(ctx, owner)
+		if err != nil || !matches {
 			return false, err
-		}
-		if identity != owner.identity {
-			return false, nil
 		}
 		// An upgrade may have unlinked the old executable. The private owner
 		// record's start identity remains authoritative for its exact group.
@@ -101,15 +119,9 @@ func recordedBridgeOwnerIsCurrent(ctx context.Context, socket string, owner brid
 	return pgid == owner.pgid, nil
 }
 
-// terminateExactBridgeProcess is the migration fallback for a worker from an
-// older build that lacks a private owner record. It does not request graceful
-// HTTP shutdown before stopping the verified process.
-//
-// A Bridge predating the private-session launch may share its parent's group.
-// For that migration-only shape we kill only the verified PID, never a shared
-// process group that could contain the host or an unrelated process.
+// TERM only the verified main process, leaving its task/browser cleanup to it.
 func terminateExactBridgeProcess(ctx context.Context, pid int, expected string) (bool, error) {
-	pgid, err := bridgeProcessGroup(pid)
+	_, err := bridgeProcessGroup(pid)
 	if err != nil && !errors.Is(err, syscall.ESRCH) {
 		return false, fmt.Errorf("inspect local bridge process group: %w", err)
 	}
@@ -117,17 +129,12 @@ func terminateExactBridgeProcess(ctx context.Context, pid int, expected string) 
 		return true, nil
 	}
 
-	target := pid
-	if pgid == pid {
-		// POSIX kill accepts a negative PGID to target only that group.
-		target = -pgid
-	}
 	current, identityErr := bridgeProcessIdentity(ctx, pid)
 	if identityErr != nil || expected == "" || current != expected {
 		return false, ErrBridgeOwnerNotFound
 	}
-	if err := signalBridgeProcess(target, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) && !errors.Is(err, os.ErrProcessDone) {
-		return false, fmt.Errorf("force-stop local bridge: %w", err)
+	if err := signalBridgeProcess(pid, syscall.SIGTERM); err != nil && !errors.Is(err, syscall.ESRCH) && !errors.Is(err, os.ErrProcessDone) {
+		return false, fmt.Errorf("request local bridge shutdown: %w", err)
 	}
 	return true, nil
 }
@@ -222,7 +229,22 @@ func InspectOwners(ctx context.Context, profile string) ([]OwnerDiagnostic, erro
 	if err != nil {
 		return nil, err
 	}
-	return inspectSocketOwners(ctx, socket)
+	owners, err := inspectSocketOwners(ctx, socket)
+	if err != nil {
+		return nil, err
+	}
+	legacy, err := legacySocketPathForSocket(socket)
+	if err != nil {
+		return nil, err
+	}
+	if legacy != socket {
+		previous, err := inspectSocketOwners(ctx, legacy)
+		if err != nil {
+			return nil, err
+		}
+		owners = append(owners, previous...)
+	}
+	return owners, nil
 }
 func inspectSocketOwners(ctx context.Context, socket string) ([]OwnerDiagnostic, error) {
 	output, err := exec.CommandContext(ctx, "ps", "-ax", "-o", "pid=,command=").Output()
@@ -367,6 +389,9 @@ func stopLegacyBridgeCandidates(ctx context.Context, socket string) (bool, error
 		}
 		if !info.Verified {
 			continue
+		}
+		if err := nativeDrainSupported(ctx, pid, socket); err != nil {
+			return stopped, err
 		}
 		pgid, err := bridgeProcessGroup(pid)
 		if errors.Is(err, syscall.ESRCH) {

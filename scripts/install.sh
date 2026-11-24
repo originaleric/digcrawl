@@ -302,16 +302,7 @@ ensure_skill_profile() {
   "$install_dir/digcrawl" config validate --config "$skill_profile"
 }
 
-retire_standard_bridge() {
-  require_install_owner
-  bridge_controller="$1"
-  bridge_profile=$(profile_path)
-  # A fresh install has no previous Bridge to stop. Keep this a successful
-  # no-op under set -e so installation can create the first Skill profile.
-  [ -f "$bridge_profile" ] || return 0
-  "$bridge_controller" browser migrate --config "$bridge_profile" --apply
-  printf '%s\n' "Verified the DigCrawl Bridge release barrier for $bridge_profile."
-}
+
 
 install_claude_skill_if_detected() {
   [ "$install_claude" = "1" ] || return 0
@@ -393,7 +384,7 @@ if [ "$setup_agents" != "0" ]; then
   esac
 fi
 if [ "$setup_codex" != "0" ]; then resolve_codex_config_target; fi
-set -- browser install --installer-lock "$install_dir" --installer-lock "$(dirname "$(profile_path)")"
+set -- browser install --replace-executable "$install_dir/digcrawl" --installer-lock "$install_dir" --installer-lock "$(dirname "$(profile_path)")"
 if [ "$setup_agents" != "0" ]; then set -- "$@" --installer-lock "$(dirname "$agent_skill_dir")"; fi
 if [ "$setup_codex" != "0" ]; then set -- "$@" --installer-lock "$(dirname "$codex_config")" --installer-lock "$codex_home/skills"; fi
 if [ "$install_claude" = "1" ]; then set -- "$@" --installer-lock "$claude_home/skills"; fi
@@ -407,16 +398,13 @@ IFS= read -r readiness <&8 || fail "browser preparation / installation lock unav
 [ "$readiness" = DIGCRAWL_INSTALL_READY_V2 ] || fail "invalid browser preparation acknowledgement"
 require_install_owner
 [ ! -L "$install_dir/digcrawl" ] || fail "refusing to replace a managed binary symlink; use its package manager or another install directory"
-retire_standard_bridge "$temporary_dir/digcrawl"
 binary_stage=$(mktemp "$install_dir/.digcrawl-install.XXXXXX")
 install -m 0755 "$temporary_dir/digcrawl" "$binary_stage"
 require_install_owner
 mv -f "$binary_stage" "$install_dir/digcrawl"
 binary_stage=
-# An old MCP client can reconnect between the first stop and replacement.
-# Once this path contains the new CLI, no later starter can launch the legacy
-# browser. Drain any worker that won the replacement window before success.
-retire_standard_bridge "$install_dir/digcrawl"
+# The native guard has already drained and prepared the profile, and keeps
+# maintenance intent held until this publication and asset setup complete.
 
 "$install_dir/digcrawl" version
 
