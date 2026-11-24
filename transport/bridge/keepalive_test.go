@@ -122,9 +122,13 @@ func TestRecoveryCooldownAdmitsOnlyOneReservation(t *testing.T) {
 }
 
 func TestInspectAbsentProfileIsReadOnly(t *testing.T) {
-	// Unique profile and no runtime preparation. Neither path resolution nor the
-	// diagnostic command may create state for it.
-	profile := filepath.Join(t.TempDir(), "absent.yaml")
+	// Isolate the runtime root, not just the profile. Other packages may run
+	// concurrently and Windows resolves UserConfigDir through APPDATA.
+	root := bridgeSocketTempDir(t)
+	t.Setenv("HOME", root)
+	t.Setenv("XDG_CONFIG_HOME", root)
+	t.Setenv("APPDATA", root)
+	profile := filepath.Join(root, "absent.yaml")
 	socket, err := SocketPath(profile)
 	if err != nil {
 		t.Fatal(err)
@@ -144,7 +148,7 @@ func TestInspectAbsentProfileIsReadOnly(t *testing.T) {
 	if err != nil && !os.IsNotExist(err) {
 		t.Fatal(err)
 	}
-	if len(before) != len(after) {
+	if len(before) != 0 || len(after) != 0 || !os.IsNotExist(err) {
 		t.Fatal("inspect created runtime state")
 	}
 }

@@ -104,7 +104,14 @@ func TestBrowserProfilePathPreservesExplicitProfile(t *testing.T) {
 }
 
 func TestInstallerDefaultProfileMigrationPreservesCookieStore(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	// This config directory also owns the Unix Bridge socket. Keep the fixture
+	// short rather than inheriting t.TempDir's full test name on Linux.
+	root, err := os.MkdirTemp("", "dci-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(root) })
+	t.Setenv("XDG_CONFIG_HOME", root)
 	path := config.DefaultSkillProfilePath()
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		t.Fatal(err)

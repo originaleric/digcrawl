@@ -6,6 +6,10 @@
 set -eu
 
 repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+# Resolve the build dependency cache before isolating HOME. Go's module cache
+# contains read-only directories and must not become part of fixture cleanup.
+GOMODCACHE=$(go env GOMODCACHE)
+export GOMODCACHE
 # Keep the isolated macOS HOME short enough for AF_UNIX paths.
 test_root=$(mktemp -d "/tmp/dci.XXXXXX")
 # macOS UserConfigDir uses HOME rather than XDG_CONFIG_HOME. Keep transport
