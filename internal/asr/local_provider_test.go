@@ -92,7 +92,9 @@ func TestLocalProviderParsesStdoutJSON(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("DIGCRAWL_TEST_LOCAL_ASR_MODE", "transcript")
-	p := &localProvider{command: localASRTestCommand(t), model: "small", timeout: 5 * time.Second, modelCacheDir: filepath.Join(dir, "models")}
+	// This test asserts JSON parsing, not a startup deadline. Allow cold native
+	// helper launches while other packages run their process fixtures in parallel.
+	p := &localProvider{command: localASRTestCommand(t), model: "small", timeout: 15 * time.Second, modelCacheDir: filepath.Join(dir, "models")}
 	result, err := p.Transcribe(context.Background(), audio)
 	if err != nil {
 		t.Fatal(err)
@@ -112,7 +114,7 @@ func TestLocalProviderSetsWritableHuggingFaceCache(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("DIGCRAWL_TEST_LOCAL_ASR_MODE", "cache")
-	p := &localProvider{command: localASRTestCommand(t), model: "small", timeout: 5 * time.Second, modelCacheDir: filepath.Join(dir, "storage", "digcrawl", "asr_models")}
+	p := &localProvider{command: localASRTestCommand(t), model: "small", timeout: 15 * time.Second, modelCacheDir: filepath.Join(dir, "storage", "digcrawl", "asr_models")}
 	if _, err := p.Transcribe(context.Background(), audio); err != nil {
 		t.Fatal(err)
 	}

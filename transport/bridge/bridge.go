@@ -4,8 +4,10 @@
 package bridge
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -14,6 +16,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/originaleric/digcrawl/client"
@@ -31,15 +34,12 @@ const (
 	bridgeSocketDirName  = "bridge"
 	bridgeSocketFileMode = 0o600
 	// bridgeBrowserCleanupTimeout is intentionally independent from startup.
-	// A direct restart rejects in-flight MCP work immediately, then gives the
-	// owning browser manager enough time to release its Chrome profile before
-	// this process releases the lifecycle lock to its replacement.
+	// Browser cleanup starts only after all admitted requests have completed.
 	bridgeBrowserCleanupTimeout = 20 * time.Second
-	// artifactFetchTimeout bounds the post-call Unix-socket transfer used to
-	// inline an artifact into an MCP response. It intentionally does not share
-	// a tool's potentially long execution budget: by this point the tool has
-	// already completed and a stalled bridge must not keep the MCP response open.
-	artifactFetchTimeout = 120 * time.Second
+	// Execution and delivery have independent finite budgets. The private call
+	// flushes response headers once execution ends, then delivers the complete
+	// result and attachments in that same response.
+	artifactFetchTimeout = artifact.DeliveryTimeout
 )
 
 var ErrAlreadyRunning = errors.New("local DigCrawl bridge is already running")
@@ -67,6 +67,7 @@ type Executor struct {
 	// exists so the local RPC boundary can be exercised with a short test budget
 	// without weakening the production timeout.
 	artifactTimeout time.Duration
+	manualStart     bool
 }
 
 // NewExecutor connects to the bridge for profile, starting it on demand when
@@ -74,6 +75,15 @@ type Executor struct {
 // profile file rather than its spelling, so symlink aliases cannot create
 // duplicate Bridge owners.
 func NewExecutor(ctx context.Context, executable, profile string, cfg *config.Config) (*Executor, error) {
+	return newExecutor(ctx, executable, profile, cfg, false)
+}
+
+// NewExecutorAfterRestart permits one operator-requested start without refunding
+// the automatic recovery budget. Only the explicit CLI restart uses this path.
+func NewExecutorAfterRestart(ctx context.Context, executable, profile string, cfg *config.Config) (*Executor, error) {
+	return newExecutor(ctx, executable, profile, cfg, true)
+}
+func newExecutor(ctx context.Context, executable, profile string, cfg *config.Config, manual bool) (*Executor, error) {
 	if cfg == nil {
 		return nil, errors.New("bridge requires a profile configuration")
 	}
@@ -95,11 +105,12 @@ func NewExecutor(ctx context.Context, executable, profile string, cfg *config.Co
 	if err != nil {
 		return nil, err
 	}
-	e := &Executor{executable: executable, profile: profile, socket: socket, cfg: cfg}
+	e := &Executor{executable: executable, profile: profile, socket: socket, cfg: cfg, manualStart: manual}
 	manifest, err := e.ensure(ctx)
 	if err != nil {
 		return nil, err
 	}
+	e.manualStart = false
 	e.manifest = manifest
 	e.artifacts = remoteArtifactStore{executor: e}
 	return e, nil
@@ -140,13 +151,77 @@ func (e *Executor) Execute(ctx context.Context, call *protocol.ToolCall) *protoc
 	if err != nil {
 		return bridgeErrorResult(call.ID, err)
 	}
-	result, err := client.Call(callCtx, *call)
+	result, err := e.call(ctx, callCtx, client, *call)
 	if err != nil {
 		// Do not retry a call here. The bridge could have executed it and died
 		// while writing the response, so replay would break at-most-once intent.
-		return bridgeErrorResult(call.ID, fmt.Errorf("local bridge call failed: %w", err))
+		result := bridgeErrorResult(call.ID, fmt.Errorf("local bridge call failed: %w", err))
+		result.Error.Details["stage"] = "dispatch"
+		result.Error.Details["execution_state"] = "unknown"
+		return result
 	}
 	return &result
+}
+
+// call keeps the tool's deadline until response headers, then bounds the whole
+// result delivery separately. No attachment request is needed after it returns.
+// Only this trusted private response uses streaming JSON decoding; the public
+// HTTP client's existing 8 MiB response limit remains unchanged.
+func (e *Executor) call(parent, execution context.Context, c *client.Client, call protocol.ToolCall) (protocol.ToolResult, error) {
+	if call.Type == "" {
+		call.Type = protocol.TypeToolCall
+	}
+	body, err := json.Marshal(call)
+	if err != nil {
+		return protocol.ToolResult{}, err
+	}
+	if parent == nil {
+		parent = context.Background()
+	}
+	rpc, cancel := context.WithCancelCause(parent)
+	defer cancel(context.Canceled)
+	request, err := http.NewRequestWithContext(rpc, http.MethodPost, "http://digcrawl-bridge/tools/call", bytes.NewReader(body))
+	if err != nil {
+		return protocol.ToolResult{}, err
+	}
+	request.Header.Set("Content-Type", "application/json")
+	deadline, _ := execution.Deadline()
+	timer := time.AfterFunc(time.Until(deadline), func() { cancel(context.DeadlineExceeded) })
+	defer timer.Stop()
+	response, err := c.HTTPClient.Do(request)
+	if !timer.Stop() {
+		cancel(context.DeadlineExceeded)
+	}
+	if err != nil {
+		if cause := context.Cause(rpc); cause != nil {
+			return protocol.ToolResult{}, cause
+		}
+		return protocol.ToolResult{}, err
+	}
+	defer response.Body.Close()
+	if cause := context.Cause(rpc); cause != nil {
+		return protocol.ToolResult{}, cause
+	}
+	deliveryTimer := time.AfterFunc(e.artifactFetchBudget(), func() { cancel(context.DeadlineExceeded) })
+	defer deliveryTimer.Stop()
+	if response.StatusCode >= 400 {
+		return protocol.ToolResult{}, fmt.Errorf("private Bridge HTTP %d", response.StatusCode)
+	}
+	var result protocol.ToolResult
+	if err := json.NewDecoder(response.Body).Decode(&result); err != nil {
+		if cause := context.Cause(rpc); cause != nil {
+			return protocol.ToolResult{}, cause
+		}
+		return protocol.ToolResult{}, err
+	}
+	// A matching private worker must deliver either bytes or an attachment
+	// error in this response, never defer an accepted call to a future RPC.
+	for i := range result.Artifacts {
+		if result.Artifacts[i].InlineData == nil && result.Artifacts[i].InlineError == "" {
+			result.Artifacts[i].InlineError = "Bridge returned an undelivered artifact; restart the matching Bridge"
+		}
+	}
+	return result, nil
 }
 
 // withExecutionTimeout establishes the same finite tool budget at the local
@@ -167,7 +242,7 @@ func bridgeErrorResult(id string, err error) *protocol.ToolResult {
 		Type:   protocol.TypeToolResult,
 		ID:     id,
 		Status: "error",
-		Error:  &protocol.ToolError{Code: "LOCAL_BRIDGE_UNAVAILABLE", Message: err.Error(), Details: map[string]any{"handled": true, "retryable": false, "next_actions": []map[string]any{{"type": "restart_bridge", "executor": "user_or_agent", "precondition": "close old MCP clients, restart with the installed binary, then reconnect"}}}},
+		Error:  &protocol.ToolError{Code: "LOCAL_BRIDGE_UNAVAILABLE", Message: err.Error(), Details: bridgeRecoveryDetails(err)},
 	}
 }
 
@@ -179,6 +254,9 @@ func (e *Executor) ensure(ctx context.Context) (protocol.ToolManifest, error) {
 func (e *Executor) clientAndManifest(ctx context.Context) (*client.Client, protocol.ToolManifest, error) {
 	if e == nil {
 		return nil, protocol.ToolManifest{}, errors.New("nil local bridge executor")
+	}
+	if bridgeStopping(e.socket) || bridgePaused(e.socket) {
+		return nil, protocol.ToolManifest{}, ErrBridgeStopping
 	}
 	if c, manifest, err := probe(ctx, e.socket); err == nil {
 		if err := checkBuild(manifest); err != nil {
@@ -206,6 +284,9 @@ func (e *Executor) startOrWait(ctx context.Context) error {
 	if _, manifest, err := probe(ctx, e.socket); err == nil {
 		return checkBuild(manifest)
 	}
+	if bridgeStopping(e.socket) || bridgePaused(e.socket) {
+		return ErrBridgeStopping
+	}
 	status, err := os.CreateTemp(filepath.Dir(e.socket), ".startup-status-*")
 	if err != nil {
 		return err
@@ -218,6 +299,9 @@ func (e *Executor) startOrWait(ctx context.Context) error {
 	// listener, browser, or child process tree. Keeping no second transition
 	// lock avoids another state that can outlive the operation it represents.
 	cmd := exec.Command(e.executable, "bridge", "serve", "--managed-worker", "--config", e.profile, "--socket", e.socket, "--startup-status", startupStatus.path)
+	if e.manualStart {
+		cmd.Args = append(cmd.Args, "--explicit-restart")
+	}
 	detachBridgeProcess(cmd)
 	// A persistent Bridge must not inherit the stdio proxy's pipes. In
 	// particular, io.Discard and an in-memory stderr writer make os/exec
@@ -246,13 +330,17 @@ func (e *Executor) startOrWait(ctx context.Context) error {
 	return err
 }
 
-// Stop terminates the singleton Bridge for profile. It is deliberately a
-// direct stop for one local user: it does not drain MCP work
-// or run a rolling handoff. A Bridge is launched in its own session, so this
-// stops its exact process group (the Bridge and the Chromium tree it owns),
-// then waits for both that group and the lifecycle lock to disappear before a
-// replacement may start. A bridge that is already absent is a successful no-op.
+// Stop drains the singleton Bridge for profile, then waits for browser resources
+// and the lifetime lock to be released. Controllers hold AcquireControl over the
+// complete stop/configuration/start operation. An absent Bridge is a no-op.
 func Stop(ctx context.Context, profile string) (bool, error) {
+	return StopInDirectory(ctx, profile, "")
+}
+
+// StopInDirectory preserves the profile's original relative resource paths
+// when an installer controls a watcher from a different working directory.
+// It never changes process-global cwd or reloads active configuration.
+func StopInDirectory(ctx context.Context, profile, workingDirectory string) (bool, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -264,6 +352,14 @@ func Stop(ctx context.Context, profile string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	if err := ensurePrivateDir(filepath.Dir(socket)); err != nil {
+		return false, err
+	}
+	return stopSocket(ctx, profile, socket, true, workingDirectory)
+}
+
+func stopSocket(ctx context.Context, profile, socket string, controlled bool, workingDirectory string) (bool, error) {
+	var err error
 	// Read only the configured resource path; do not reload process-global
 	// runtime state while another in-process caller may still be draining.
 	var profileConfig struct {
@@ -278,29 +374,88 @@ func Stop(ctx context.Context, profile string) (bool, error) {
 	if err = yaml.Unmarshal(data, &profileConfig); err != nil {
 		return false, err
 	}
+	if path := profileConfig.LocalBrowser.UserDataDir; strings.TrimSpace(path) != "" && !filepath.IsAbs(path) {
+		if workingDirectory == "" {
+			workingDirectory, err = os.Getwd()
+			if err != nil {
+				return false, err
+			}
+		}
+		if !filepath.IsAbs(workingDirectory) {
+			return false, errors.New("Bridge working directory must be absolute")
+		}
+		profileConfig.LocalBrowser.UserDataDir = filepath.Join(workingDirectory, path)
+	}
+	clearIntent, err := stopIntent(socket)
+	if err != nil {
+		return false, err
+	}
+	defer clearIntent()
 	stopped := false
+	if !controlled {
+		if _, m, err := probe(ctx, socket); err == nil {
+			return false, checkBuild(m)
+		}
+	}
+	requested, err := requestBridgeStop(ctx, socket)
+	if err != nil {
+		return false, err
+	}
+	stopped = requested
 	for {
+		if !controlled && !requested {
+			if _, m, err := probe(ctx, socket); err == nil {
+				return false, checkBuild(m)
+			}
+		}
 		if err := ctx.Err(); err != nil {
 			return false, err
 		}
 		lock, err := acquireDaemonLock(socket + ".lock")
 		if err == nil {
 			defer lock.Close()
-			// Holding the only lifecycle lock prevents a replacement worker from
-			// starting while a previously signalled private group drains. Do not
-			// signal a group from a record after its lock holder has exited: its
-			// numeric PGID could have been reused. Waiting here makes that rare
-			// unsafe state visible instead of risking an unrelated process.
-			if err := waitForRecordedBridgeGroupRelease(ctx, socket); err != nil {
-				return false, fmt.Errorf("wait for previous local bridge process group: %w", err)
+			stable, pathErr := SocketPath(profile)
+			if pathErr != nil {
+				return false, pathErr
 			}
+			// Stop exact live candidates first, then reclaim their recorded browser
+			// groups before a legacy stop checks the same persistent browser profile.
 			legacyStopped, legacyErr := stopLegacyBridgeCandidates(ctx, socket)
 			if legacyErr != nil && !errors.Is(legacyErr, ErrBridgeOwnerNotFound) {
 				return false, legacyErr
 			}
 			stopped = stopped || legacyStopped
+			if err := waitForRecordedBridgeGroupRelease(ctx, socket); err != nil {
+				return false, fmt.Errorf("wait for previous local Bridge resources: %w", err)
+			}
+			if socket == stable {
+				if err := migrateLocked(ctx, profile, socket, controlled, workingDirectory); err != nil {
+					return false, err
+				}
+			}
 			if err := browser.WaitProfileRelease(ctx, profileConfig.LocalBrowser.UserDataDir); err != nil {
 				return false, fmt.Errorf("previous Bridge profile remains unavailable; end the owning session before restart: %w", err)
+			}
+			isolated := browser.ManagedConfig(config.LocalBrowserConfig{UserDataDir: profileConfig.LocalBrowser.UserDataDir}).UserDataDir
+			if isolated != profileConfig.LocalBrowser.UserDataDir {
+				if err := browser.WaitProfileRelease(ctx, isolated); err != nil {
+					return false, fmt.Errorf("isolated browser profile remains unavailable: %w", err)
+				}
+			}
+			remaining, inspectErr := inspectSocketOwners(ctx, socket)
+			if inspectErr != nil {
+				return false, inspectErr
+			}
+			if len(remaining) > 0 {
+				return false, fmt.Errorf("unresolved Bridge candidates remain; inspect browser migrate output; unknown owners are not terminated")
+			}
+			// Only a controller that actually stopped owned work and verified all
+			// release barriers acknowledges a controlled exit here.
+			// Stopping an already-absent crashed worker must not reset recovery state.
+			if stopped && controlled {
+				if err := markBridgeStopped(socket); err != nil {
+					return false, fmt.Errorf("record controlled Bridge stop: %w", err)
+				}
 			}
 			removeBridgeOwner(socket)
 			if err := os.Remove(socket); err != nil && !os.IsNotExist(err) {
@@ -310,6 +465,14 @@ func Stop(ctx context.Context, profile string) (bool, error) {
 		}
 		if !errors.Is(err, ErrAlreadyRunning) {
 			return false, err
+		}
+		if requested {
+			select {
+			case <-ctx.Done():
+				return false, ctx.Err()
+			case <-time.After(50 * time.Millisecond):
+			}
+			continue
 		}
 		if signalled, err := stopBridgeOwner(ctx, socket); err != nil {
 			if !errors.Is(err, ErrBridgeOwnerNotFound) {
@@ -347,7 +510,7 @@ func waitForBridgeOrExit(ctx context.Context, socket string, exited <-chan error
 		// after the caller's deadline and erase the actionable cause.
 		if stderr != nil {
 			if detail := strings.TrimSpace(stderr.String()); detail != "" {
-				return nil, protocol.ToolManifest{}, fmt.Errorf("local bridge reported startup failure: %s", detail)
+				return nil, protocol.ToolManifest{}, bridgeStartupError(detail)
 			}
 		}
 		if c, manifest, err := probe(ctx, socket); err == nil {
@@ -377,7 +540,7 @@ func waitForBridgeOrExit(ctx context.Context, socket string, exited <-chan error
 				detail = strings.TrimSpace(stderr.String())
 			}
 			if detail != "" {
-				return nil, protocol.ToolManifest{}, fmt.Errorf("local bridge exited during startup: %w: %s", exitErr, detail)
+				return nil, protocol.ToolManifest{}, bridgeStartupError(detail)
 			}
 			return nil, protocol.ToolManifest{}, fmt.Errorf("local bridge exited during startup: %w", exitErr)
 		case <-time.After(50 * time.Millisecond):
@@ -422,27 +585,19 @@ func SocketPath(profile string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("resolve bridge profile: %w", err)
 	}
-	cache, err := os.UserCacheDir()
+	dir, err := browser.RuntimeDirectory()
 	if err != nil {
 		return "", fmt.Errorf("resolve local bridge cache directory: %w", err)
 	}
 	digest := sha256.Sum256([]byte(profile))
-	dir := filepath.Join(cache, "digcrawl", bridgeSocketDirName)
-	if err := ensurePrivateDir(dir); err != nil {
-		return "", err
+	socket := filepath.Join(dir, fmt.Sprintf("%x.sock", digest[:12]))
+	if len(socket) > 103 {
+		return "", errors.New("Bridge socket path exceeds the supported Unix socket length")
 	}
-	return filepath.Join(dir, fmt.Sprintf("%x.sock", digest[:12])), nil
+	return socket, nil
 }
 
-func ensurePrivateDir(dir string) error {
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return fmt.Errorf("create local bridge directory: %w", err)
-	}
-	if err := os.Chmod(dir, 0o700); err != nil {
-		return fmt.Errorf("protect local bridge directory: %w", err)
-	}
-	return nil
-}
+func ensurePrivateDir(dir string) error { return browser.PrepareRuntimeDirectory(dir) }
 
 // Serve owns one local Runtime and its managed browser lifetime. It keeps no
 // daemon registry: the Unix socket and an advisory process lock are the only
@@ -451,6 +606,15 @@ func ensurePrivateDir(dir string) error {
 // between a readiness probe and a tool request, so stdio-session reclamation
 // owns process cleanup while this singleton owns stable local transport.
 func Serve(ctx context.Context, cfg *config.Config, socket string) error {
+	return serve(ctx, cfg, socket, false)
+}
+
+// ServeAfterExplicitRestart is the internal CLI operator-start path. It keeps
+// automatic budget reservations intact while permitting this requested attempt.
+func ServeAfterExplicitRestart(ctx context.Context, cfg *config.Config, socket string) error {
+	return serve(ctx, cfg, socket, true)
+}
+func serve(ctx context.Context, cfg *config.Config, socket string, manual bool) (resultErr error) {
 	if cfg == nil {
 		return errors.New("bridge requires configuration")
 	}
@@ -462,27 +626,88 @@ func Serve(ctx context.Context, cfg *config.Config, socket string) error {
 		return err
 	}
 
+	stage := "ownership"
 	lock, err := acquireDaemonLock(socket + ".lock")
 	if err != nil {
 		return err
 	}
 	defer lock.Close()
+	defer func() {
+		if resultErr != nil {
+			_ = recordStartupFailure(socket, stage, resultErr)
+		}
+	}()
+	stage = "legacy_ownership"
+	legacy, err := legacySocketPathForSocket(socket)
+	if err != nil {
+		return err
+	}
+	if legacy != socket {
+		if err := ensurePrivateDir(filepath.Dir(legacy)); err != nil {
+			return err
+		}
+		compatibilityLock, err := acquireDaemonLock(legacy + ".lock")
+		if err != nil {
+			return err
+		}
+		defer compatibilityLock.Close()
+		if bridgeStopping(legacy) {
+			return ErrBridgeStopping
+		}
+		legacyCtx, cancelLegacy := context.WithTimeout(ctx, startupTimeout)
+		err = waitForPriorBridgeOwners(legacyCtx, legacy)
+		cancelLegacy()
+		if err != nil {
+			return err
+		}
+		if err := migrateRecoveryLocked(socket, legacy); err != nil {
+			return err
+		}
+	}
+
+	stage = "recovery"
+	if err := reserveBridgeStart(ctx, socket, manual); err != nil {
+		return recoveryError(err)
+	}
 	// The worker normally follows startOrWait, which already observed the
 	// profile. Keep the same gate at the lock-owning boundary: a crashed stop
 	// must not be bypassed by the next worker invocation. A bounded startup
 	// error is safer than launching beside an old Chromium group whose profile
 	// resources have not been released.
+	stage = "ownership_cleanup"
+	if legacy != socket {
+		legacyCtx, cancelLegacy := context.WithTimeout(ctx, startupTimeout)
+		err := waitForRecordedBridgeGroupRelease(legacyCtx, legacy)
+		cancelLegacy()
+		if err != nil {
+			return err
+		}
+	}
 	recoveryCtx, cancelRecovery := context.WithTimeout(ctx, startupTimeout)
 	err = waitForRecordedBridgeGroupRelease(recoveryCtx, socket)
 	cancelRecovery()
 	if err != nil {
 		return err
 	}
+	// A legacy worker can outlive a deleted/replaced cache lock inode. The
+	// lock remains the arbiter; this read-only gate prevents overwriting that
+	// worker's socket/profile until an explicit verified migration stops it.
+	ownerCtx, cancelOwners := context.WithTimeout(ctx, startupTimeout)
+	err = waitForPriorBridgeOwners(ownerCtx, socket)
+	cancelOwners()
+	if err != nil {
+		return err
+	}
 	if err := writeBridgeOwner(socket); err != nil {
 		return err
 	}
-	defer removeBridgeOwner(socket)
+	defer func() {
+		if resultErr == nil {
+			removeBridgeOwner(socket)
+		}
+	}()
 	prepareManagedConfig(cfg)
+	stage = "browser_ownership"
 	profileLock, err := acquireBrowserProfileLock(cfg)
 	if err != nil {
 		return err
@@ -490,9 +715,15 @@ func Serve(ctx context.Context, cfg *config.Config, socket string) error {
 	if profileLock != nil {
 		defer profileLock.Close()
 	}
+	finishProcessRecords, err := recordBridgeBrowserProcesses(socket)
+	if err != nil {
+		return err
+	}
+	defer finishProcessRecords()
 	if err := os.Remove(socket); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("remove stale local bridge socket: %w", err)
 	}
+	stage = "listen"
 	listener, err := net.Listen("unix", socket)
 	if err != nil {
 		return fmt.Errorf("listen on local bridge socket: %w", err)
@@ -502,30 +733,49 @@ func Serve(ctx context.Context, cfg *config.Config, socket string) error {
 		return fmt.Errorf("protect local bridge socket: %w", err)
 	}
 
+	stage = "runtime"
 	rt, err := runtime.NewRuntime(cfg)
 	if err != nil {
 		return fmt.Errorf("start local bridge runtime: %w", err)
 	}
+	serving, stopServing := context.WithCancel(ctx)
+	defer stopServing()
 	gateway := httpgw.NewServer(rt, rt.ArtifactStore(), "")
+	gateway.InlineArtifacts = true
+	handler, finishObservations := observeBridgeResponses(socket, privateBridgeHandler(gateway, stopServing))
+	defer finishObservations()
 	server := &http.Server{
-		Handler:           privateBridgeHandler(gateway),
+		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       120 * time.Second,
 	}
+	drained := make(chan error, 1)
 	go func() {
-		<-ctx.Done()
-		// This is an operator-triggered local restart, not a rolling service
-		// deploy. Close immediately so in-flight reads are cancelled instead of
-		// delaying the next run; browser cleanup below still owns Chrome.
-		_ = server.Close()
+		<-serving.Done()
+		drained <- server.Shutdown(context.Background())
 	}()
+	if manual {
+		if err := os.Remove(socket + ".failure.json"); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("clear previous Bridge startup diagnostic: %w", err)
+		}
+	}
+	stage = "serve"
 	err = server.Serve(listener)
+	// Even an unexpected accept failure must drain already accepted handlers
+	// before browser cleanup. Shutdown owns this barrier for every serve exit.
+	stopServing()
+	if drainErr := <-drained; drainErr != nil {
+		return drainErr
+	}
+	finishObservations()
 	shutdown, cancel := context.WithTimeout(context.Background(), bridgeBrowserCleanupTimeout)
 	defer cancel()
 	if closeErr := browser.ShutdownImmediately(shutdown); closeErr != nil && (err == nil || errors.Is(err, http.ErrServerClosed)) {
 		err = fmt.Errorf("stop bridge-owned browser: %w", closeErr)
 	}
 	if errors.Is(err, http.ErrServerClosed) {
+		// Only a successful explicit controller acknowledges a controlled stop.
+		// Background recovery must retain its previous failure allowance.
 		return nil
 	}
 	return err
@@ -568,11 +818,9 @@ func (s remoteArtifactStore) Get(ctx context.Context, id string) ([]byte, string
 	if s.executor == nil {
 		return nil, "", errors.New("local bridge artifact store is unavailable")
 	}
-	// The tool's execution context is already complete before MCP asks the
-	// store to inline artifacts. Establish an independent, finite delivery
-	// budget at this RPC boundary so an unresponsive bridge cannot leave the
-	// user-facing MCP response pending forever. A shorter caller deadline is
-	// preserved by withExecutionTimeout.
+	// Independent reads still use the normal admission gate and finite budget.
+	// An accepted MCP call already carries its attachments in the Execute
+	// response and never relies on this later request during maintenance.
 	artifactCtx, cancel := withExecutionTimeout(ctx, s.executor.artifactFetchBudget())
 	defer cancel()
 	c, _, err := s.executor.clientAndManifest(artifactCtx)
@@ -580,4 +828,74 @@ func (s remoteArtifactStore) Get(ctx context.Context, id string) ([]byte, string
 		return nil, "", err
 	}
 	return c.FetchArtifact(artifactCtx, id)
+}
+
+// The lifecycle-lock-owning Bridge alone updates its recovery record. Serialize
+// successful response observations from concurrent requests within that owner.
+func observeBridgeResponses(socket string, next http.Handler) (http.Handler, func()) {
+	var mu sync.Mutex
+	var last time.Time
+	stopped := false
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		observed := &bridgeResponseWriter{ResponseWriter: w, status: http.StatusOK}
+		next.ServeHTTP(observed, r)
+		if r.Context().Err() != nil || observed.status >= 400 {
+			return
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		now := time.Now().UTC()
+		if !stopped && now.Sub(last) >= time.Second {
+			_ = noteBridgeHealthy(socket, now)
+			last = now
+		}
+	})
+	return handler, func() { mu.Lock(); stopped = true; mu.Unlock() }
+}
+
+type bridgeResponseWriter struct {
+	http.ResponseWriter
+	status int
+}
+
+func (w *bridgeResponseWriter) WriteHeader(status int) {
+	w.status = status
+	w.ResponseWriter.WriteHeader(status)
+}
+
+// Preserve deadlines and flushing through the observation wrapper.
+func (w *bridgeResponseWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+func bridgeStartupError(detail string) error {
+	for _, known := range []error{ErrRecoveryExhausted, ErrBridgeStopping, ErrBuildMismatch, ErrBrowserProfileInUse} {
+		if strings.HasSuffix(detail, known.Error()) {
+			return known
+		}
+	}
+	return errors.New("local Bridge startup failed; run doctor and inspect local ownership/configuration")
+}
+
+// Losing concurrent starters exit when they cannot claim the lifecycle lock.
+// Let those candidates drain, but never replace a persistent predecessor's
+// socket after its cache lock inode was removed outside the running process.
+func waitForPriorBridgeOwners(ctx context.Context, socket string) error {
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		owners, err := inspectSocketOwners(ctx, socket)
+		if err != nil {
+			return fmt.Errorf("inspect prior Bridge owners: %w", err)
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if len(owners) == 0 {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("prior Bridge process still references this socket; run browser migrate --config <actual profile> --apply before replacement: %w", ctx.Err())
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
 }

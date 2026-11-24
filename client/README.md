@@ -14,4 +14,4 @@ result, _ := c.Call(ctx, protocol.ToolCall{
 
 支持 `GET /manifest`、`POST /tools/call`、`GET /artifacts/{id}`。
 
-与 **Collector 模式**（本机连宿主 WebSocket）的区别见 [USAGE.md §11](../USAGE.md#11-宿主项目接入go-sdk)。
+与 **Collector 模式**（本机连宿主 WebSocket）的区别见 [USAGE.zh-CN.md §11](../USAGE.zh-CN.md#11-宿主项目接入go-sdk)。

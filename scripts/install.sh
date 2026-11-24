@@ -35,6 +35,7 @@ Options:
   -h, --help               Show this help.
 
 Environment variables:
+  DIGCRAWL_BROWSER_ARCHIVE_DIR  Offline directory containing the pinned browser ZIPs.
   DIGCRAWL_VERSION         Same as --version.
   DIGCRAWL_INSTALL_DIR     Same as --install-dir.
   DIGCRAWL_CODEX_CONFIG    Codex config.toml to update (default: $CODEX_HOME/config.toml or $HOME/.codex/config.toml).
@@ -107,9 +108,33 @@ esac
 
 temporary_dir="$(mktemp -d 2>/dev/null || mktemp -d -t digcrawl-install)"
 cleanup() {
+  cleanup_status=$?
+  trap - EXIT HUP INT TERM
+  if [ -n "${installer_guard_pid:-}" ]; then
+    exec 9>&- 8<&-
+    wait "$installer_guard_pid" || true
+  fi
+  [ -z "${binary_stage:-}" ] || rm -f "$binary_stage"
   rm -rf "$temporary_dir"
+  exit "$cleanup_status"
 }
-trap cleanup EXIT HUP INT TERM
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' HUP TERM
+
+require_install_owner() {
+  [ -z "${installer_guard_pid:-}" ] || kill -0 "$installer_guard_pid" 2>/dev/null || fail "installation owner exited; publishing stopped"
+}
+
+release_install_owner() {
+  require_install_owner
+  printf '%s\n' release >&9
+  IFS= read -r acknowledgement <&8 || fail "installation release was not acknowledged"
+  [ "$acknowledgement" = DIGCRAWL_INSTALL_RELEASED ] || fail "invalid installation release acknowledgement"
+  wait "$installer_guard_pid" || fail "installation lock owner failed"
+  installer_guard_pid=
+  exec 9>&- 8<&-
+}
 
 profile_path() {
   if [ -n "${XDG_CONFIG_HOME:-}" ]; then
@@ -181,6 +206,7 @@ resolve_codex_config_target() {
 }
 
 write_codex_mcp_config() {
+  require_install_owner
   config_dir=$(dirname "$codex_config")
   mkdir -p "$config_dir"
   config_tmp=$(mktemp "$config_dir/.config.toml.digcrawl.XXXXXX")
@@ -223,7 +249,7 @@ write_codex_mcp_config() {
   fi
   printf '%s\n' '[mcp_servers.digcrawl]' >>"$config_tmp"
   printf 'command = "%s"\n' "$(toml_escape "$install_dir/digcrawl")" >>"$config_tmp"
-  printf 'args = ["mcp", "--idle-timeout", "15m", "--config", "%s"]\n' "$(toml_escape "$skill_profile")" >>"$config_tmp"
+  printf 'args = ["mcp", "--idle-timeout", "0", "--config", "%s"]\n' "$(toml_escape "$skill_profile")" >>"$config_tmp"
 
   if [ "$config_existed" = 1 ] && ! cmp -s "$config_source" "$codex_config"; then
     rm -f "$config_tmp" "$config_source"
@@ -233,11 +259,13 @@ write_codex_mcp_config() {
     rm -f "$config_tmp"
     fail "Codex configuration was created during installation; no configuration was replaced, retry the installer"
   fi
+  require_install_owner
   mv "$config_tmp" "$codex_config" || fail "could not replace $codex_config"
   [ "$config_existed" = 0 ] || rm -f "$config_source"
 }
 
 install_skill_at() {
+  require_install_owner
   skill_source="$temporary_dir/skills/digcrawl"
   skill_target="$1"
   [ -f "$skill_source/SKILL.md" ] || fail "release archive did not contain the DigCrawl Agent Skill"
@@ -253,9 +281,12 @@ install_skill_at() {
   if [ -e "$skill_dir" ] || [ -L "$skill_dir" ]; then
     skill_backup="$skill_root/.digcrawl.previous.$$"
     [ ! -e "$skill_backup" ] && [ ! -L "$skill_backup" ] || fail "could not safely replace $skill_dir"
+    require_install_owner
     mv "$skill_dir" "$skill_backup" || fail "could not stage the existing DigCrawl Agent Skill"
   fi
+  require_install_owner
   if ! mv "$skill_stage" "$skill_dir"; then
+    require_install_owner
     [ -z "$skill_backup" ] || mv "$skill_backup" "$skill_dir"
     fail "could not install the DigCrawl Agent Skill"
   fi
@@ -263,6 +294,7 @@ install_skill_at() {
 }
 
 ensure_skill_profile() {
+  require_install_owner
   skill_profile=$(profile_path)
   if [ ! -f "$skill_profile" ]; then
     "$install_dir/digcrawl" init --profile skill
@@ -270,25 +302,10 @@ ensure_skill_profile() {
   "$install_dir/digcrawl" config validate --config "$skill_profile"
 }
 
-retire_standard_bridge() {
-  bridge_controller="$1"
-  bridge_profile=$(profile_path)
-  # A fresh install has no previous Bridge to stop. Keep this a successful
-  # no-op under set -e so installation can create the first Skill profile.
-  [ -f "$bridge_profile" ] || return 0
-  "$bridge_controller" bridge stop --config "$bridge_profile"
-  printf '%s\n' "Stopped the previous DigCrawl Bridge for $bridge_profile before replacing the installed binary."
-}
+
 
 install_claude_skill_if_detected() {
-  case "${DIGCRAWL_SETUP_CLAUDE:-auto}" in
-    0) return ;;
-    1) ;;
-    auto|"")
-      [ -d "$claude_home" ] || command -v claude >/dev/null 2>&1 || return
-      ;;
-    *) fail "DIGCRAWL_SETUP_CLAUDE must be auto, 0, or 1" ;;
-  esac
+  [ "$install_claude" = "1" ] || return 0
   install_skill_at "$claude_home/skills/digcrawl"
   printf '%s\n' "Installed DigCrawl Agent Skill for Claude Code in $claude_home/skills/digcrawl"
 }
@@ -307,9 +324,7 @@ setup_codex_mcp() {
   [ "$setup_codex" = "0" ] && return
 
   ensure_skill_profile
-  # Preserve a user's dotfiles link: modify its target rather than replacing
-  # the link with a regular file during the atomic rename below.
-  resolve_codex_config_target
+  # The actual dotfiles target was resolved before acquiring resource locks.
   install_skill_at "$codex_home/skills/digcrawl"
   write_codex_mcp_config
   printf '%s\n' "Installed DigCrawl Agent Skill for Codex in $codex_home/skills/digcrawl"
@@ -358,17 +373,45 @@ tar -xzf "$temporary_dir/$archive_name" -C "$temporary_dir"
 umask 022
 [ "$setup_codex" = "0" ] || select_codex_config
 mkdir -p "$install_dir"
-# Use the verified staged binary to take over the previous runtime before
-# overwriting its executable. This avoids an executing-file replacement race
-# and guarantees the next MCP process starts the just-installed binary.
-retire_standard_bridge "$temporary_dir/digcrawl"
-install -m 0755 "$temporary_dir/digcrawl" "$install_dir/digcrawl"
+# Reuse the same native OS locks as npm. All paths are arguments, never eval.
+install_claude=0
+if [ "$setup_agents" != "0" ]; then
+  case "${DIGCRAWL_SETUP_CLAUDE:-auto}" in
+    1) install_claude=1 ;;
+    0) ;;
+    auto|"") if [ -d "$claude_home" ] || command -v claude >/dev/null 2>&1; then install_claude=1; fi ;;
+    *) fail "DIGCRAWL_SETUP_CLAUDE must be auto, 0, or 1" ;;
+  esac
+fi
+if [ "$setup_codex" != "0" ]; then resolve_codex_config_target; fi
+set -- browser install --replace-executable "$install_dir/digcrawl" --installer-lock "$install_dir" --installer-lock "$(dirname "$(profile_path)")"
+if [ "$setup_agents" != "0" ]; then set -- "$@" --installer-lock "$(dirname "$agent_skill_dir")"; fi
+if [ "$setup_codex" != "0" ]; then set -- "$@" --installer-lock "$(dirname "$codex_config")" --installer-lock "$codex_home/skills"; fi
+if [ "$install_claude" = "1" ]; then set -- "$@" --installer-lock "$claude_home/skills"; fi
+if [ -n "${DIGCRAWL_BROWSER_ARCHIVE_DIR:-}" ]; then set -- "$@" --archive-dir "$DIGCRAWL_BROWSER_ARCHIVE_DIR"; fi
+mkfifo "$temporary_dir/control" "$temporary_dir/status"
+"$temporary_dir/digcrawl" "$@" <"$temporary_dir/control" >"$temporary_dir/status" &
+installer_guard_pid=$!
+exec 9>"$temporary_dir/control"
+exec 8<"$temporary_dir/status"
+IFS= read -r readiness <&8 || fail "browser preparation / installation lock unavailable"
+[ "$readiness" = DIGCRAWL_INSTALL_READY_V2 ] || fail "invalid browser preparation acknowledgement"
+require_install_owner
+[ ! -L "$install_dir/digcrawl" ] || fail "refusing to replace a managed binary symlink; use its package manager or another install directory"
+binary_stage=$(mktemp "$install_dir/.digcrawl-install.XXXXXX")
+install -m 0755 "$temporary_dir/digcrawl" "$binary_stage"
+require_install_owner
+mv -f "$binary_stage" "$install_dir/digcrawl"
+binary_stage=
+# The native guard has already drained and prepared the profile, and keeps
+# maintenance intent held until this publication and asset setup complete.
 
-printf '%s\n' "Installed DigCrawl $release_tag to $install_dir/digcrawl"
 "$install_dir/digcrawl" version
 
 setup_agent_assets
 setup_codex_mcp
+release_install_owner
+printf '%s\n' "Installed DigCrawl $release_tag to $install_dir/digcrawl"
 
 case ":${PATH:-}:" in
   *":$install_dir:"*) ;;

@@ -92,9 +92,14 @@ func InteractiveLogin(ctx context.Context, platform string, cfg config.LocalBrow
 
 	headlessFalse := false
 	cfg.Headless = &headlessFalse
-	cfg.ChromePath = discoverInteractiveChromePath(cfg.ChromePath)
-	if cfg.ChromePath == "" {
-		return fmt.Errorf("未找到可显示登录窗口的 Chrome/Chromium；安装 Chrome/Chromium 或设置 LocalBrowser.ChromePath")
+	// Login always uses the separately identified headed runtime, including
+	// YouTube's user-operated authentication phase. Never rediscover daily Chrome.
+	cfg.ChromePath, err = RuntimeExecutable(true)
+	if err != nil {
+		return err
+	}
+	if err = validateBrowserExtraArgs(cfg.InteractiveExtraArgs); err != nil {
+		return err
 	}
 	cfg = normalizeLocalBrowserConfig(cfg)
 	profileDir := ProfileDirForPlatform(cfg.UserDataDir, spec.Platform)
@@ -123,6 +128,7 @@ func InteractiveLogin(ctx context.Context, platform string, cfg config.LocalBrow
 		fmt.Fprintln(os.Stderr, "已清理上次异常退出遗留的 Chrome profile 锁。")
 	}
 	cookieSaved := false
+	fmt.Println("使用 DigCrawl 专用的 Chrome for Testing；窗口中的测试版提示是该发行版自带的说明。")
 	manualSignIn := spec.Platform == "youtube"
 	if manualSignIn {
 		// Google sign-in belongs in a normal, user-operated browser. Do not
@@ -204,6 +210,12 @@ func InteractiveLogin(ctx context.Context, platform string, cfg config.LocalBrow
 // YouTube uses a headless collector only after the user-operated Chrome has
 // exited and released the profile. It never performs Google authentication.
 func launchLoginBrowser(ctx context.Context, cfg config.LocalBrowserConfig, profileDir string, headless bool) (*browserConnection, error) {
+	if err := validateOwnedRuntimePath(cfg.ChromePath, true); err != nil {
+		return nil, err
+	}
+	if err := validateBrowserExtraArgs(cfg.InteractiveExtraArgs); err != nil {
+		return nil, err
+	}
 	setupCtx, cancel := browserOperationContext(ctx, 10*time.Second)
 	defer cancel()
 	l := launcher.New().
@@ -215,6 +227,9 @@ func launchLoginBrowser(ctx context.Context, cfg config.LocalBrowserConfig, prof
 		l = l.Bin(cfg.ChromePath)
 	}
 	l = applyInteractiveLauncherPolicy(l, cfg)
+	if headless {
+		l = l.Set(flags.Flag("mute-audio"))
+	}
 
 	controlURL, err := launchBrowser(l)
 	connection := newBrowserConnection(nil, nil, l, true, profileDir, 0)

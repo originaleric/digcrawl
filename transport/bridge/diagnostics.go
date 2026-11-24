@@ -25,8 +25,17 @@ func checkBuild(m protocol.ToolManifest) error {
 
 // Wrap only the private Bridge. The public HTTP server never registers this
 // diagnostic path; ownership and normal acquisition remain inside the Bridge.
-func privateBridgeHandler(gateway http.Handler) http.Handler {
+func privateBridgeHandler(gateway http.Handler, stop func()) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/internal/stop" {
+			if r.Method != http.MethodPost {
+				w.WriteHeader(http.StatusMethodNotAllowed)
+				return
+			}
+			w.WriteHeader(http.StatusAccepted)
+			stop()
+			return
+		}
 		if r.URL.Path != "/internal/browser-check" {
 			gateway.ServeHTTP(w, r)
 			return
@@ -53,6 +62,26 @@ func privateBridgeHandler(gateway http.Handler) http.Handler {
 		}
 		_ = json.NewEncoder(w).Encode(result)
 	})
+}
+
+// A shutdown acknowledgement means "draining", never "all work finished".
+// The controller still waits for the lifetime lock and browser release.
+func requestBridgeStop(ctx context.Context, socket string) (bool, error) {
+	check, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	request, err := http.NewRequestWithContext(check, http.MethodPost, "http://local/internal/stop", nil)
+	if err != nil {
+		return false, err
+	}
+	response, err := newSocketClient(socket).HTTPClient.Do(request)
+	if err != nil {
+		return false, nil
+	} // unreachable: native identity-based fallback
+	defer response.Body.Close()
+	if response.StatusCode == http.StatusAccepted {
+		return true, nil
+	}
+	return false, fmt.Errorf("Bridge does not support draining shutdown; wait for its tasks to finish and stop the old version before updating (HTTP %d)", response.StatusCode)
 }
 
 // CheckBridge only connects. It never starts a Bridge or a competing browser.

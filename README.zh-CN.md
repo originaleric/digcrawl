@@ -40,6 +40,14 @@
 
 ## 快速开始
 
+已安装Node.js 20.19+：
+
+```bash
+npx digcrawl-skill@latest install
+```
+
+macOS / Linux也可使用脚本安装：
+
 **在终端安装**（macOS / Linux，不需要 Go）：
 
 ```bash
@@ -53,7 +61,7 @@ curl -fsSL https://raw.githubusercontent.com/originaleric/digcrawl/main/scripts/
 
 - 自动配置 Codex；检测到 Claude Code 时安装其 Skill。其他宿主见 [MCP 接入](./.agents/skills/digcrawl/mcp/README.md)。
 - 程序安装到 `~/.local/bin`；如提示找不到命令，请将该目录加入 `PATH`。
-- Windows 下载 [Release](https://github.com/originaleric/digcrawl/releases)；指定版本与源码构建见[安装说明](./USAGE.md#1-安装)。
+- Windows 下载 [Release](https://github.com/originaleric/digcrawl/releases)；指定版本与源码构建见[安装说明](./USAGE.zh-CN.md#1-安装)。
 
 </details>
 
@@ -74,7 +82,7 @@ curl -fsSL https://raw.githubusercontent.com/originaleric/digcrawl/main/scripts/
 
 - **本地实验功能**：微信视频号聊天卡片（需 macOS 本机桥接），见[本地使用手册](./docs/微信视频号本地抓取使用手册.md)。
 
-各平台的内容范围与登录要求见[平台说明](./USAGE.md#支持的内容来源)。
+各平台的内容范围与登录要求见[平台说明](./USAGE.zh-CN.md#支持的内容来源)。
 
 ## 采集、导出与监控
 
@@ -97,7 +105,7 @@ digcrawl watchlist run --once --config config/config.yaml
 digcrawl watchlist serve --config config/config.yaml
 ```
 
-转写与画面识别需配置相应依赖，详见[视频解析](./USAGE.md#直接视频解析)；批量采集见 [Collect](./collect/README.md)。
+转写与画面识别需配置相应依赖，详见[视频解析](./USAGE.zh-CN.md#直接视频解析)；批量采集见 [Collect](./collect/README.md)。
 
 </details>
 
@@ -286,7 +294,7 @@ digcrawl watchlist serve --config config/config.yaml
 
 ### YouTube 登录流程
 
-遇到 `LOGIN_REQUIRED`，让 Agent 打开专用的普通 Chrome 窗口：
+遇到 `LOGIN_REQUIRED`，让 Agent 打开应用身份独立的 Chrome for Testing 登录窗口：
 
 ```text
 帮我打开 DigCrawl 的 YouTube 登录窗口。
@@ -307,7 +315,7 @@ digcrawl browser login --config "<MCP 实际使用的 profile 路径>" --platfor
 
 在专用 Chrome 中登录并返回 YouTube，再在原终端按 Enter；程序关闭窗口后同步会话。Windows 用户需先关闭该专用 Chrome 的全部窗口再按 Enter。
 
-使用与 MCP 相同的配置；日常浏览器的登录不会自动同步。登录信息与 Cookie 留在本机。若 Google 拒绝登录，请保留错误，参见[登录说明](./USAGE.md#平台登录与健康检查)。
+使用与 MCP 相同的配置；日常浏览器的登录不会自动同步。登录信息与 Cookie 留在本机。若 Google 拒绝登录，请保留错误，参见[登录说明](./USAGE.zh-CN.md#平台登录与健康检查)。
 
 </details>
 
@@ -334,7 +342,7 @@ digcrawl browser login --config "<MCP 实际使用的 profile 路径>" --platfor
 
 手动执行命令时，登录后在原终端按 Enter 保存。使用与 MCP 相同的配置；日常浏览器的登录不会自动同步。登录信息与 Cookie 留在本机。
 
-更多平台与排障见[登录说明](./USAGE.md#平台登录与健康检查)。
+更多平台与排障见[登录说明](./USAGE.zh-CN.md#平台登录与健康检查)。
 
 </details>
 
@@ -347,7 +355,7 @@ digcrawl browser login --config "<MCP 实际使用的 profile 路径>" --platfor
 - [Claude Code 示例](./.agents/skills/digcrawl/claude-code/.mcp.json.example)
 - [其他 MCP 宿主](./.agents/skills/digcrawl/mcp/README.md)
 
-使用程序与配置文件的绝对路径；不要只复制 `SKILL.md`。配置初始化见[接入指南](./USAGE.md#6-ide-集成mcp)。
+使用程序与配置文件的绝对路径；不要只复制 `SKILL.md`。配置初始化见[接入指南](./USAGE.zh-CN.md#6-ide-集成mcp)。
 
 </details>
 
@@ -360,7 +368,11 @@ digcrawl browser login --config "<MCP 实际使用的 profile 路径>" --platfor
 
 ### 浏览器恢复与诊断
 
-遇到读取失败，请按错误提示操作，或查看[浏览器排障](./USAGE.md#浏览器超时或反复失败)。
+后台使用专用无头程序，登录使用独立的有窗口浏览器，依赖故障不会回退到日常 Chrome。源码安装请先运行 `digcrawl browser install`；旧配置和嵌入方请按 [升级迁移说明](./USAGE.zh-CN.md#浏览器能力按需) 处理。
+
+Bridge 运行状态保存在用户私有配置目录。使用 `digcrawl bridge status --config <profile>` 查询状态，使用 `digcrawl bridge watch --config <profile> --install` 安装 macOS 后台巡检。迁移、主动停止和回滚见[本地 Bridge 保活与迁移](./docs/本地Bridge保活与迁移.md)。
+
+遇到读取失败，请按错误提示操作，或查看[浏览器排障](./USAGE.zh-CN.md#浏览器超时或反复失败)。
 
 <details>
 <summary>检查本地环境</summary>
@@ -387,10 +399,12 @@ digcrawl doctor --config "$HOME/.config/digcrawl/digcrawl-skill.yaml"
 
 **使用者**
 
-- [安装与使用](./USAGE.md) · [功能手册](./docs/DigCrawl功能与使用手册.md) · [浏览器排障](./USAGE.md#浏览器超时或反复失败)
+- [安装与使用](./USAGE.zh-CN.md) · [功能手册](./docs/DigCrawl功能与使用手册.md) · [浏览器排障](./USAGE.zh-CN.md#浏览器超时或反复失败)
 - [Agent Skill](./.agents/skills/digcrawl/) · [MCP 接入](./.agents/skills/digcrawl/mcp/README.md)
 
 **开发者**
+
+- [CI](./.github/workflows/test.yml) 仅通过 `workflow_dispatch` 手动运行，Test工作流覆盖Linux、macOS和Windows；Release发布仍由版本tag触发。
 
 - [HTTP / stdio](./transport/README.md) · [Go SDK](./client/README.md) · [配置样例](./config/)
 - [Collect](./collect/README.md) · [Runtime](./runtime/README.md) · [Protocol](./protocol/README.md)

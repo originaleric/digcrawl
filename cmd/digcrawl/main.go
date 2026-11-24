@@ -112,6 +112,8 @@ func printUsage() {
   digcrawl mcp [flags]         MCP 服务（stdio，供 IDE 使用）
 	  digcrawl bridge stop --config <profile>     停止该 profile 的私有 MCP Bridge
 	  digcrawl bridge restart --config <profile>  重启该 profile 的私有 MCP Bridge
+	  digcrawl bridge status --config <profile>   只读查询连通性、归属和恢复状态
+	  digcrawl bridge watch --config <profile>    持续巡检，macOS 可加 --install / --uninstall
   digcrawl stdio [flags]       stdin/stdout 逐行 JSON 协议
   digcrawl dev-host [flags]    本地参考宿主（仅开发）
   digcrawl collect <url>       采集 URL 并导出 Markdown/HTML/JSON
@@ -840,7 +842,7 @@ func runDevHost(args []string) {
 func runMCP(args []string) {
 	fs := flag.NewFlagSet("mcp", flag.ExitOnError)
 	configPath := fs.String("config", "", "path to profile (default: user skill profile)")
-	idleTimeout := fs.Duration("idle-timeout", mcpgw.DefaultStdioIdleTimeout, "exit after this much inactive stdio time (explicit 0 disables recovery)")
+	idleTimeout := fs.Duration("idle-timeout", mcpgw.DefaultStdioIdleTimeout, "exit after tool inactivity; default keeps initialized host connection (explicit 0 also disables initialization recovery)")
 	_ = fs.Parse(args)
 	idleTimeoutExplicit := false
 	fs.Visit(func(f *flag.Flag) {

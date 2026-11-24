@@ -23,4 +23,4 @@ DigCrawl **工具注册、策略校验、审计、Artifact 与统一执行入口
 | `executor/` | 请求解码、Cookie 域校验等辅助 |
 | `version/` | 构建版本信息 |
 
-使用说明见 [USAGE.md](../USAGE.md)。
+使用说明见 [USAGE.zh-CN.md](../USAGE.zh-CN.md)。

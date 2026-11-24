@@ -89,4 +89,9 @@ type Artifact struct {
 	Size      int64  `json:"size"`
 	URI       string `json:"uri"`
 	ExpiresAt string `json:"expires_at,omitempty"`
+	// InlineData and InlineError are call-scoped delivery values used only by
+	// the private Bridge. Public gateways continue returning artifact references.
+	// A pointer distinguishes a delivered empty file from an absent payload.
+	InlineData  *[]byte `json:"inline_data,omitempty"`
+	InlineError string  `json:"inline_error,omitempty"`
 }

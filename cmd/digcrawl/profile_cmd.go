@@ -22,6 +22,7 @@ import (
 )
 
 var skillReadTools = []string{
+	"source.discover",
 	"gateway.ping",
 	"skill.asr.enable",
 	"skill.media.configure",
@@ -144,6 +145,7 @@ func runDoctor(args []string) {
 		{name: "browser dependency", err: browser.CheckManagedAvailable(cfg.LocalBrowser)},
 		{name: "Bridge transport", err: bridgeErr},
 		{name: "Bridge build", err: bridge.CheckBridgeBuild(ctx, *configPath)},
+		{name: "Bridge recovery", err: bridge.CheckRecovery(ctx, *configPath)},
 		{name: "browser operation", err: bridge.CheckBrowserOperation(ctx, *configPath)},
 		{name: "Skill ffmpeg", err: checkSkillFFmpeg(cfg)},
 		{name: "Skill ASR provider", err: checkSkillASRProvider(cfg)},

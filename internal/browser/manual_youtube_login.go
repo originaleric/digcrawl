@@ -30,6 +30,9 @@ func startManualLoginChrome(ctx context.Context, chromePath, profileDir string) 
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	if err := validateOwnedRuntimePath(chromePath, true); err != nil {
+		return nil, err
+	}
 	cmd := exec.Command(chromePath, manualYouTubeLoginArgs(profileDir)...)
 	cmd.Stdout, cmd.Stderr = io.Discard, io.Discard
 	if err := cmd.Start(); err != nil {

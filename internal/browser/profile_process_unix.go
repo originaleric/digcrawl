@@ -26,7 +26,22 @@ func profileProcessAlive(pid int) (bool, error) {
 	}
 	err = p.Signal(syscall.Signal(0))
 	if err == nil {
-		return true, nil
+		// A zombie retains its PID until reaped but has released the profile.
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		output, inspectErr := exec.CommandContext(ctx, "ps", "-p", strconv.Itoa(pid), "-o", "stat=").Output()
+		if inspectErr != nil {
+			gone := p.Signal(syscall.Signal(0))
+			if errors.Is(gone, syscall.ESRCH) || errors.Is(gone, os.ErrProcessDone) {
+				return false, nil
+			}
+			return false, inspectErr
+		}
+		state := strings.TrimSpace(string(output))
+		if state == "" {
+			return false, fmt.Errorf("profile process state unavailable")
+		}
+		return !strings.HasPrefix(state, "Z"), nil
 	}
 	if errors.Is(err, syscall.ESRCH) || errors.Is(err, os.ErrProcessDone) {
 		return false, nil
@@ -35,18 +50,17 @@ func profileProcessAlive(pid int) (bool, error) {
 }
 
 func ownedProcessIdentity(ctx context.Context, pid int) (string, error) {
-	if pid <= 0 {
+	identity, err := ProcessIdentity(ctx, pid)
+	if errors.Is(err, syscall.ESRCH) {
 		return "", nil
 	}
-	output, err := exec.CommandContext(ctx, "ps", "-p", strconv.Itoa(pid), "-o", "lstart=,comm=").Output()
-	if err != nil {
-		if _, gone := err.(*exec.ExitError); gone {
-			return "", nil
-		}
-		return "", err
-	}
-	return strings.TrimSpace(string(output)), nil
+	return identity, err
 }
+
+// ProcessAlive reports whether the process can still execute, including the
+// existing zombie and permission handling shared by browser cleanup.
+func ProcessAlive(pid int) (bool, error) { return profileProcessAlive(pid) }
+
 func ownedProcessGroupReleased(ctx context.Context, pid int) (bool, error) {
 	output, err := exec.CommandContext(ctx, "ps", "-ax", "-o", "pgid=,stat=").Output()
 	if err != nil {
@@ -79,6 +93,12 @@ func killVerifiedLauncher(c *browserConnection) error {
 	}
 	if identity != "" {
 		pgid, err := syscall.Getpgid(c.launcher.PID())
+		if errors.Is(err, syscall.ESRCH) {
+			// Exit between identity inspection and group lookup is cleanup
+			// progress. The caller still verifies group/profile release; never
+			// signal a bare PID after the owned process has disappeared.
+			return nil
+		}
 		if err != nil {
 			return err
 		}

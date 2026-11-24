@@ -221,6 +221,17 @@ func resolveLocalASRCacheLocation(configured string, legacyCandidates []string, 
 	if err := validateASRCacheDirectory(canonical); err != nil {
 		return localASRCacheLocation{}, err
 	}
+	// Cache selection and its compatibility record form one transaction. A
+	// rename-only writer still races with readers on Windows, and competing
+	// initializers could otherwise choose different legacy caches. Keep every
+	// state read and write under the same per-cache, cross-process lock.
+	lockCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	unlock, err := lockLocalASRCache(lockCtx, canonical)
+	if err != nil {
+		return localASRCacheLocation{}, fmt.Errorf("lock ASR cache compatibility state in %q: %w", canonical, err)
+	}
+	defer unlock()
 	if hasASRModelData(canonical) {
 		return localASRCacheLocation{modelCacheDir: canonical}, nil
 	}

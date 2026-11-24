@@ -5,8 +5,10 @@ package bridge
 import (
 	"context"
 	"errors"
+	"io"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -37,7 +39,7 @@ func TestStopKillsExactLegacyBridgePID(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.Command(os.Args[0], "-test.run=^TestLegacyBridgeStopHelper$", "--", "bridge", "serve", "--config", profile, "--socket", socket)
+	cmd := exec.Command(bridgeStopFixture(t), "bridge", "serve", "--config", profile, "--socket", socket)
 	cmd.Env = append(os.Environ(),
 		"DIGCRAWL_LEGACY_BRIDGE_HELPER=1",
 		"DIGCRAWL_LEGACY_BRIDGE_SOCKET="+socket,
@@ -52,7 +54,7 @@ func TestStopKillsExactLegacyBridgePID(t *testing.T) {
 		}
 	})
 
-	deadline := time.Now().Add(time.Second)
+	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		lock, lockErr := acquireDaemonLock(socket + ".lock")
 		if errors.Is(lockErr, ErrAlreadyRunning) {
@@ -97,7 +99,7 @@ func TestStopKillsExactBridgeProcessGroupAndChild(t *testing.T) {
 		t.Fatal(err)
 	}
 	childPIDFile := filepath.Join(dir, "chrome-child.pid")
-	cmd := exec.Command(os.Args[0], "-test.run=^TestBridgeProcessGroupStopHelper$", "--", "bridge", "serve", "--config", profile, "--socket", socket)
+	cmd := exec.Command(bridgeStopFixture(t), "bridge", "serve", "--config", profile, "--socket", socket)
 	detachBridgeProcess(cmd)
 	cmd.Env = append(os.Environ(),
 		"DIGCRAWL_BRIDGE_GROUP_HELPER=1",
@@ -113,7 +115,7 @@ func TestStopKillsExactBridgeProcessGroupAndChild(t *testing.T) {
 			_ = cmd.Wait()
 		}
 	})
-	deadline := time.Now().Add(time.Second)
+	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		lock, lockErr := acquireDaemonLock(socket + ".lock")
 		if errors.Is(lockErr, ErrAlreadyRunning) {
@@ -137,7 +139,7 @@ func TestStopKillsExactBridgeProcessGroupAndChild(t *testing.T) {
 	}
 
 	var childPID int
-	childDeadline := time.Now().Add(time.Second)
+	childDeadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(childDeadline) {
 		data, err := os.ReadFile(childPIDFile)
 		if err == nil {
@@ -199,7 +201,7 @@ func TestStopDoesNotSignalStaleOwnerRecord(t *testing.T) {
 	// A live lock simulates the small setup window of a new worker. Its owner
 	// record is deliberately stale, so Stop must not treat the sleep group as
 	// the current Bridge merely because it has matching numeric IDs.
-	holder := exec.Command(os.Args[0], "-test.run=^TestLegacyBridgeStopHelper$", "--", "bridge", "serve", "--config", profile, "--socket", socket)
+	holder := exec.Command(bridgeStopFixture(t), "bridge", "serve", "--config", profile, "--socket", socket)
 	holder.Env = append(os.Environ(),
 		"DIGCRAWL_LEGACY_BRIDGE_HELPER=1",
 		"DIGCRAWL_LEGACY_BRIDGE_SOCKET="+socket,
@@ -213,7 +215,7 @@ func TestStopDoesNotSignalStaleOwnerRecord(t *testing.T) {
 			_ = holder.Wait()
 		}
 	})
-	deadline := time.Now().Add(time.Second)
+	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		lock, lockErr := acquireDaemonLock(socket + ".lock")
 		if errors.Is(lockErr, ErrAlreadyRunning) {
@@ -288,5 +290,232 @@ func TestBridgeProcessGroupStopHelper(t *testing.T) {
 	if err := os.WriteFile(os.Getenv("DIGCRAWL_BRIDGE_GROUP_CHILD_PID_FILE"), []byte(strconv.Itoa(child.Process.Pid)), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	select {}
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, syscall.SIGTERM)
+	<-signals
+	_ = child.Process.Kill()
+	_ = child.Wait()
+	os.Exit(1)
+}
+
+func bridgeStopFixture(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "digcrawl")
+	src, err := os.Open(os.Args[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer src.Close()
+	dst, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0700)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = io.Copy(dst, src)
+	closeErr := dst.Close()
+	if err != nil || closeErr != nil {
+		t.Fatal(err, closeErr)
+	}
+	return path
+}
+
+func TestMigrationDoesNotSignalInterpreterWithWorkerText(t *testing.T) {
+	python, err := exec.LookPath("python3")
+	if err != nil {
+		t.Skip("python fixture unavailable")
+	}
+	socket := filepath.Join(t.TempDir(), "bridge.sock")
+	cmd := exec.Command(python, "-c", "import time;time.sleep(30)", "/tmp/digcrawl", "bridge", "serve", "--socket", socket)
+	if err = cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = cmd.Process.Kill(); _ = cmd.Wait() }()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	stopped, err := stopLegacyBridgeCandidates(ctx, socket)
+	if err != nil || stopped {
+		t.Fatalf("interpreter was selected: stopped=%v err=%v", stopped, err)
+	}
+	if err = cmd.Process.Signal(syscall.Signal(0)); err != nil {
+		t.Fatal("unrelated interpreter terminated:", err)
+	}
+}
+
+func TestStartRejectsLivePredecessorAfterLockFileDeletion(t *testing.T) {
+	profile := filepath.Join(t.TempDir(), "profile.yaml")
+	if err := os.WriteFile(profile, []byte("Gateway: {}\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	socket, err := SocketPath(profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(bridgeStopFixture(t), "bridge", "serve", "--config", profile, "--socket", socket)
+	cmd.Env = append(os.Environ(), "DIGCRAWL_LEGACY_BRIDGE_HELPER=1", "DIGCRAWL_LEGACY_BRIDGE_SOCKET="+socket)
+	if err = cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = cmd.Process.Kill(); _ = cmd.Wait() }()
+	deadline := time.Now().Add(2 * time.Second)
+	acquired := false
+	for time.Now().Before(deadline) {
+		l, e := acquireDaemonLock(socket + ".lock")
+		if errors.Is(e, ErrAlreadyRunning) {
+			acquired = true
+			break
+		}
+		if e != nil {
+			t.Fatal(e)
+		}
+		_ = l.Close()
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !acquired {
+		t.Fatal("predecessor failed to acquire lock")
+	}
+	if err = os.Remove(socket + ".lock"); err != nil {
+		t.Fatal(err)
+	}
+	// A replacement can now claim a different inode; the process ownership gate
+	// must still prevent it from publishing a socket or acquiring a browser.
+	l, err := acquireDaemonLock(socket + ".lock")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	if err = waitForPriorBridgeOwners(ctx, socket); err == nil {
+		t.Fatal("live prior worker bypassed ownership gate")
+	}
+	if err = cmd.Process.Signal(syscall.Signal(0)); err != nil {
+		t.Fatal("read-only startup gate terminated predecessor")
+	}
+}
+
+func TestOwnerGateDoesNotTreatCancellationAsRelease(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := waitForPriorBridgeOwners(ctx, filepath.Join(t.TempDir(), "absent.sock")); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled inspection falsely succeeded: %v", err)
+	}
+}
+func TestBridgeIdentitySupportsRenamedNativeCLI(t *testing.T) {
+	original := bridgeStopFixture(t)
+	renamed := filepath.Join(filepath.Dir(original), "custom-agent-browser")
+	if err := os.Rename(original, renamed); err != nil {
+		t.Fatal(err)
+	}
+	if !isBridgeExecutable(renamed) {
+		t.Fatal("renamed native DigCrawl test worker rejected")
+	}
+	if isBridgeExecutable("/bin/sh") {
+		t.Fatal("shell accepted as DigCrawl executable")
+	}
+}
+
+func TestOwnerVerificationAcceptsExecutableSymlink(t *testing.T) {
+	actual := bridgeStopFixture(t)
+	alias := filepath.Join(t.TempDir(), "project - worker-link")
+	if err := os.Symlink(actual, alias); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	socket := filepath.Join(t.TempDir(), "bridge.sock")
+	cmd := exec.Command(alias, "bridge", "serve", "--socket", socket)
+	cmd.Env = append(os.Environ(), "DIGCRAWL_LEGACY_BRIDGE_HELPER=1", "DIGCRAWL_LEGACY_BRIDGE_SOCKET="+socket)
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = cmd.Process.Kill(); _ = cmd.Wait() }()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		info, err := verifiedBridgeProcess(ctx, cmd.Process.Pid, socket)
+		if err == nil && info.Verified {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("symlink-launched native worker could not prove executable identity")
+}
+
+func TestColdUpdateRefusesUnknownUnlinkedLiveProgram(t *testing.T) {
+	dir := t.TempDir()
+	profile := filepath.Join(dir, "profile.yaml")
+	if err := os.WriteFile(profile, []byte("Gateway: {}\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	socket, err := SocketPath(profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	executable := bridgeStopFixture(t)
+	cmd := exec.Command(executable, "bridge", "serve", "--config", profile, "--socket", socket)
+	detachBridgeProcess(cmd)
+	cmd.Env = append(os.Environ(), "DIGCRAWL_BRIDGE_GROUP_HELPER=1", "DIGCRAWL_BRIDGE_GROUP_SOCKET="+socket, "DIGCRAWL_BRIDGE_GROUP_CHILD_PID_FILE="+filepath.Join(dir, "child"))
+	if err = cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL); _ = cmd.Wait() }()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, e := os.Stat(filepath.Join(dir, "child")); e == nil {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	identity, err := bridgeProcessIdentity(ctx, cmd.Process.Pid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner := bridgeOwner{pid: cmd.Process.Pid, pgid: cmd.Process.Pid, identity: identity}
+	if err = writeBridgeOwnerRecord(socket, owner); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Remove(executable); err != nil {
+		t.Fatal(err)
+	}
+	current, err := recordedBridgeOwnerIsCurrent(ctx, socket, owner)
+	if err != nil || !current {
+		t.Fatalf("retained owner identity lost after unlink: %v %v", current, err)
+	}
+	stopped, err := Stop(ctx, profile)
+	if err == nil || stopped {
+		t.Fatalf("unknown live program was stopped without draining proof: %v %v", stopped, err)
+	}
+}
+
+func TestReviewNativeWorkerInDashSpacePath(t *testing.T) {
+	socket := "/tmp/review.sock"
+	command := "234 /tmp/Projects - Copy/digcrawl bridge serve --managed-worker --config /tmp/profile.yaml --socket " + socket
+	if got := bridgePID(command, socket); got != 234 {
+		t.Fatalf("legitimate native worker in a path containing space-dash was rejected: got PID %d", got)
+	}
+}
+
+func TestMigrationDoesNotSignalShellWithWorkerText(t *testing.T) {
+	shell, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skip("shell unavailable")
+	}
+	socket := filepath.Join(t.TempDir(), "bridge.sock")
+	cmd := exec.Command(shell, "-c", "sleep 30", "/tmp/digcrawl", "bridge", "serve", "--socket", socket)
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = cmd.Process.Kill(); _ = cmd.Wait() }()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	stopped, err := stopLegacyBridgeCandidates(ctx, socket)
+	if err != nil && !errors.Is(err, ErrBridgeOwnerNotFound) {
+		t.Fatal(err)
+	}
+	if stopped {
+		t.Fatal("shell selected as native owner")
+	}
+	if err := cmd.Process.Signal(syscall.Signal(0)); err != nil {
+		t.Fatal("shell was terminated", err)
+	}
 }

@@ -36,6 +36,8 @@ archives:
       - LICENSE
       - README.md
       - README.zh-CN.md
+      - USAGE.md
+      - USAGE.zh-CN.md
       - src: .agents/skills/digcrawl/SKILL.md
         dst: skills/digcrawl
         strip_parent: true
@@ -52,6 +54,9 @@ archives:
         dst: skills/digcrawl/mcp
         strip_parent: true
       - src: .agents/skills/digcrawl/references/error-handling.md
+        dst: skills/digcrawl/references
+        strip_parent: true
+      - src: .agents/skills/digcrawl/references/source-discovery.md
         dst: skills/digcrawl/references
         strip_parent: true
       - src: .agents/skills/digcrawl/references/tool-routing.md
@@ -76,6 +81,20 @@ homebrew_casks:
       - digcrawl
     binaries:
       - digcrawl
+    # Prepare before Homebrew replaces/removes the installed executable.
+    # The existing CLI owns dependency validation and standard-profile migration.
+    hooks:
+      pre:
+        # Keep the v2 Ruby hook for compatibility with older Homebrew clients.
+        install: |
+          system_command "#{staged_path}/digcrawl",
+                         args: ["browser", "install", "--migrate-default"],
+                         must_succeed: true
+      post:
+        install: |
+          system_command "#{staged_path}/digcrawl",
+                         args: ["browser", "install", "--migrate-default"],
+                         must_succeed: true
     repository:
       owner: originaleric
       name: homebrew-tap

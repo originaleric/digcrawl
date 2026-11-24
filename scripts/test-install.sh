@@ -6,9 +6,32 @@
 set -eu
 
 repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-test_root=$(mktemp -d "${TMPDIR:-/tmp}/digcrawl-install-test.XXXXXX")
+# Resolve the build dependency cache before isolating HOME. Go's module cache
+# contains read-only directories and must not become part of fixture cleanup.
+GOMODCACHE=$(go env GOMODCACHE)
+export GOMODCACHE
+# Keep the isolated macOS HOME short enough for AF_UNIX paths.
+test_root=$(mktemp -d "/tmp/dci.XXXXXX")
+# macOS UserConfigDir uses HOME rather than XDG_CONFIG_HOME. Keep transport
+# state and LaunchAgent discovery isolated as well as the profile itself.
+HOME="$test_root/home"
+export HOME
+mkdir -p "$HOME"
 
 cleanup() {
+  if [ -n "${guard_pid:-}" ]; then
+    exec 9>&- 8<&-
+    wait "$guard_pid" || true
+  fi
+  # MCP intentionally leaves its shared Bridge running. Release that exact
+  # fixture before removing its executable/profile; otherwise the test leaves
+  # an unverifiable worker with an already deleted on-disk executable.
+  if [ -x "$test_root/bin/digcrawl" ] && [ -f "$test_root/xdg/digcrawl/digcrawl-skill.yaml" ]; then
+    if ! "$test_root/bin/digcrawl" bridge stop --config "$test_root/xdg/digcrawl/digcrawl-skill.yaml" >"$test_root/cleanup.log" 2>&1; then
+      printf '%s\n' "FAIL: test Bridge cleanup incomplete; retained $test_root for inspection" >&2
+      return 1
+    fi
+  fi
   rm -rf "$test_root"
 }
 trap cleanup EXIT HUP INT TERM
@@ -118,11 +141,30 @@ run_user_install() {
     CODEX_HOME="$codex_home" \
     CLAUDE_CONFIG_DIR="$claude_home" \
     DIGCRAWL_SETUP_CLAUDE=1 \
+    DIGCRAWL_INSTALL_TEST_RECONNECT_PROFILE="${profile:-}" \
     XDG_CONFIG_HOME="$xdg_dir" \
     XDG_DATA_HOME="$xdg_data_dir" \
     sh "$repo_root/scripts/install.sh" --version "$release_tag"
 }
 
+# A live holder of the same resource must block the other installation entry.
+mkfifo "$test_root/guard-control" "$test_root/guard-status"
+XDG_CONFIG_HOME="$xdg_dir" XDG_DATA_HOME="$xdg_data_dir" \
+  "$fixture_dir/digcrawl" browser install --installer-lock "$install_dir" \
+  <"$test_root/guard-control" >"$test_root/guard-status" &
+guard_pid=$!
+exec 9>"$test_root/guard-control"
+exec 8<"$test_root/guard-status"
+IFS= read -r guard_ready <&8 || fail "fixture holder failed"
+[ "$guard_ready" = DIGCRAWL_INSTALL_READY ] || fail "fixture readiness mismatch"
+if run_user_install >"$test_root/conflicting-install.log" 2>&1; then fail "shell installer bypassed the native install lock"; fi
+[ ! -e "$install_dir/digcrawl" ] || fail "conflicting installer published a binary"
+printf '%s\n' release >&9
+IFS= read -r guard_ack <&8 || fail "fixture release failed"
+[ "$guard_ack" = DIGCRAWL_INSTALL_RELEASED ] || fail "fixture release mismatch"
+wait "$guard_pid" || fail "fixture owner failed"
+guard_pid=
+exec 9>&- 8<&-
 run_user_install
 
 [ -x "$install_dir/digcrawl" ] || fail "installer did not create the stable binary"
@@ -136,7 +178,7 @@ grep -F 'model = "gpt-test"' "$codex_config" >/dev/null || fail "global Codex co
 grep -F 'command = "/usr/local/bin/keep"' "$codex_config" >/dev/null || fail "other MCP server was not preserved"
 grep -F 'command = "/usr/local/bin/digcrawl-helper"' "$codex_config" >/dev/null || fail "similarly named MCP server was not preserved"
 grep -F "command = \"$install_dir/digcrawl\"" "$codex_config" >/dev/null || fail "DigCrawl command did not use installed binary"
-grep -F 'args = ["mcp", "--idle-timeout", "15m", "--config",' "$codex_config" >/dev/null || fail "DigCrawl Codex adapter did not enable bounded idle recovery"
+grep -F 'args = ["mcp", "--idle-timeout", "0", "--config",' "$codex_config" >/dev/null || fail "DigCrawl Codex adapter did not preserve host-owned MCP lifetime"
 grep -F "\"$profile\"" "$codex_config" >/dev/null || fail "DigCrawl args did not use the generated Skill profile"
 if grep -F '/private/tmp/digcrawl-deleted/digcrawl' "$codex_config" >/dev/null || grep -F 'OLD_VALUE' "$codex_config" >/dev/null; then
   fail "stale DigCrawl MCP configuration survived repair"
@@ -147,7 +189,25 @@ fi
 
 # A normal upgrade/reinstall must remain idempotent rather than appending a
 # second entry that would make Codex reject config.toml.
+cat >"$fake_bin_dir/install" <<'EOF'
+#!/bin/sh
+set -eu
+# A current client attempting to restart during publication must be denied
+# by the install owner's maintenance intent, and publication must continue.
+if [ -n "${DIGCRAWL_INSTALL_TEST_RECONNECT_PROFILE:-}" ]; then
+  if "$3" bridge restart --config "$DIGCRAWL_INSTALL_TEST_RECONNECT_PROFILE"; then
+    printf '%s\n' 'restart bypassed installation maintenance intent' >&2
+    exit 1
+  fi
+fi
+exec /usr/bin/install "$@"
+EOF
+chmod 755 "$fake_bin_dir/install"
 run_user_install
+"$install_dir/digcrawl" browser migrate --config "$profile" >"$test_root/after-upgrade-owners"
+if grep -F 'Owner PID=' "$test_root/after-upgrade-owners" >/dev/null; then
+  fail "a worker restarted during replacement survived the installer"
+fi
 if [ "$(grep -c '^\[mcp_servers\.digcrawl\]$' "$codex_config")" -ne 1 ]; then
   fail "reinstall produced duplicate DigCrawl MCP entries"
 fi

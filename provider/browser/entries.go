@@ -114,10 +114,22 @@ func BrowseEntry(configDomains []string, artStore artifact.Store, runtimeConfigs
 			if returnMedia || ocrPolicy.requested || retainProviderImages {
 				metadataScript = browserImageMetadataScript()
 			}
+			var imageBytes int64
+			var imageItems int
+			if !isCollect && ocrPolicy.requested {
+				ocrCfg := ocrPolicy.rootConfig
+				if ocrPolicy.skillOwned {
+					ocrCfg = skillCfg.OCR
+				}
+				if ocrCfg.EnabledOrDefault() {
+					imageBytes, imageItems = ocrCfg.MaxImageBytesOrDefault(), ocrCfg.MaxImagesOrDefault()
+				}
+			}
 			resp, err := browsePage(ctx, &browser.BrowserBrowseRequest{
 				URL: in.URL, Action: in.Action, CaptureScreenshot: in.IncludeScreenshot, Mode: in.Mode, TabID: in.TabID,
 				WaitSelector: in.WaitSelector, ContentSelector: contentSelector,
 				UseCookieDomain: in.UseCookieDomain, MetadataScript: metadataScript,
+				ImageMaxBytes: imageBytes, ImageMaxItems: imageItems, ImageDomains: policy.MergeDomains(&call.Policy, configDomains),
 			})
 			if err != nil {
 				return nil, nil, err
@@ -126,6 +138,9 @@ func BrowseEntry(configDomains []string, artStore artifact.Store, runtimeConfigs
 				return nil, nil, err
 			}
 			out := map[string]any{"source_url": resp.URL, "title": resp.Title, "browser_diagnostics": resp.Diagnostics}
+			if resp.ContentCoverage != nil {
+				out["content_coverage"] = resp.ContentCoverage
+			}
 			if resp.Text != "" {
 				out["text"] = resp.Text
 			}
@@ -152,6 +167,17 @@ func BrowseEntry(configDomains []string, artStore artifact.Store, runtimeConfigs
 				// response contract.
 				defer delete(out, "media")
 			}
+			var inlineImages []ocr.ImageRef
+			for _, img := range resp.ImageData {
+				inlineImages = append(inlineImages, ocr.ImageRef{URL: img["url"], Source: img["source"], DataURL: img["data"], Error: img["error"], Type: "image"})
+			}
+			if imageItems > 0 {
+				meta := map[string]any{"ocr_image_scope": "current_rendered_images", "ocr_skipped_count": resp.ImagesSkipped}
+				if resp.ImagesTruncated {
+					meta["ocr_truncated"] = true
+				}
+				out["platform_metadata"] = meta
+			}
 			var localImages []skill.LocalImageInput
 			if retainProviderImages {
 				inputs, retainErr := platformprov.RetainResolvedProviderImages(ctx, out, imageDownloadCfg, artStore)
@@ -167,15 +193,15 @@ func BrowseEntry(configDomains []string, artStore artifact.Store, runtimeConfigs
 			}
 			if !isCollect && ocrPolicy.requested && ocrPolicy.skillOwned {
 				if err := skill.Enhance(ctx, out, skillCfg, skill.EnhanceOptions{
-					IncludeOCR: true, ScreenshotBase64: resp.ScreenshotBase, ArtifactStore: artStore, LocalImages: localImages,
+					IncludeOCR: true, ScreenshotBase64: resp.ScreenshotBase, ArtifactStore: artStore, LocalImages: localImages, InlineImages: inlineImages, ResolvedImages: imageItems > 0,
 				}); err != nil {
 					return out, nil, err
 				}
 			}
 			if !isCollect && ocrPolicy.requested && !ocrPolicy.skillOwned {
-				opts := ocr.EnrichOptions{}
+				opts := ocr.EnrichOptions{ExtraImages: inlineImages, ResolvedImages: imageItems > 0}
 				if resp.ScreenshotBase != "" {
-					opts.ExtraImages = []ocr.ImageRef{ocr.PNGDataURLImageRef("screenshot", resp.ScreenshotBase)}
+					opts.ExtraImages = append(opts.ExtraImages, ocr.PNGDataURLImageRef("screenshot", resp.ScreenshotBase))
 				}
 				ocr.EnrichMap(ctx, out, ocrPolicy.rootConfig, opts)
 			}

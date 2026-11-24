@@ -1,0 +1,101 @@
+{
+  "version": "157.0.8103.38",
+  "assets": [
+    {
+      "kind": "chrome-headless-shell",
+      "platform": "linux-arm64",
+      "url": "https://storage.googleapis.com/chrome-for-testing-public/157.0.8103.38/linux-arm64/chrome-headless-shell-linux-arm64.zip",
+      "size": 128171139,
+      "sha256": "b9b910a57b2a15eb3e55000a2339f93a973934a413ebfc6e585a50ec6c42fd6c",
+      "executable_sha256": "8c60790845b6be4c400733973c18a929f259ec19d47af7e143e31db164f3243a"
+    },
+    {
+      "kind": "chrome-headless-shell",
+      "platform": "linux64",
+      "url": "https://storage.googleapis.com/chrome-for-testing-public/157.0.8103.38/linux64/chrome-headless-shell-linux64.zip",
+      "size": 128168542,
+      "sha256": "deafffa74660b34853a4119c361fd427ac8c9fcb62db51ddb8a797cd83a4ba2d",
+      "executable_sha256": "8e48f6ba1eefe1d41a143daa07115d099572a6239107808966af9143c59186d2"
+    },
+    {
+      "kind": "chrome-headless-shell",
+      "platform": "mac-arm64",
+      "url": "https://storage.googleapis.com/chrome-for-testing-public/157.0.8103.38/mac-arm64/chrome-headless-shell-mac-arm64.zip",
+      "size": 104773711,
+      "sha256": "e6a6b13551aa12f951d0891d79282606b13742837c8fa0505e1272bae116ce82",
+      "executable_sha256": "ed0e3d67ce3cc2528acb7290ebe86181c144890ff7f610e86268317c6139d518"
+    },
+    {
+      "kind": "chrome-headless-shell",
+      "platform": "mac-x64",
+      "url": "https://storage.googleapis.com/chrome-for-testing-public/157.0.8103.38/mac-x64/chrome-headless-shell-mac-x64.zip",
+      "size": 110442262,
+      "sha256": "79821745d0a72d2ba752d981284ed0a9e6fa320dad133596941a17dba6186de3",
+      "executable_sha256": "e7abbee846a4e06d6243f74ceb422e405d08d0685caf8f282aac79a121f2a9d1"
+    },
+    {
+      "kind": "chrome-headless-shell",
+      "platform": "win32",
+      "url": "https://storage.googleapis.com/chrome-for-testing-public/157.0.8103.38/win32/chrome-headless-shell-win32.zip",
+      "size": 120390416,
+      "sha256": "35e0d45c0136448f7b587f6fb7195a0686127a4dfdc23ef3b0e04b5e9ffe16cd",
+      "executable_sha256": "e69af11a7478ee6beca3ffbba15880d77e731d5e9969083b94a89c5d12984bc1"
+    },
+    {
+      "kind": "chrome-headless-shell",
+      "platform": "win64",
+      "url": "https://storage.googleapis.com/chrome-for-testing-public/157.0.8103.38/win64/chrome-headless-shell-win64.zip",
+      "size": 126513060,
+      "sha256": "1ff4540855478ba0848e03f1ef8d455f77d058b38285df91bc34273788a73446",
+      "executable_sha256": "18a6ae26964d5e987f1f3e339dc13f792ff664a6dddc48340f9a58d0a9f0b359"
+    },
+    {
+      "kind": "chrome",
+      "platform": "linux-arm64",
+      "url": "https://storage.googleapis.com/chrome-for-testing-public/157.0.8103.38/linux-arm64/chrome-linux-arm64.zip",
+      "size": 203276965,
+      "sha256": "5517510e61657ff43ee9ab804ecd1a499b3d5bd3caf72f097516bd6565ba5a17",
+      "executable_sha256": "90e3f2244c4e70a333ce6d9dd60bc3f48f233f3a87dcbe4c495528737d539d78"
+    },
+    {
+      "kind": "chrome",
+      "platform": "linux64",
+      "url": "https://storage.googleapis.com/chrome-for-testing-public/157.0.8103.38/linux64/chrome-linux64.zip",
+      "size": 203502190,
+      "sha256": "8cdeb344e9b2cefe59f4aea8d1d93d5d93054c03cde217665c16fc1f62e72a66",
+      "executable_sha256": "41ea350a7f209da77c14d1df3924d71ac66988623e71d44459b49a3dceb1c14e"
+    },
+    {
+      "kind": "chrome",
+      "platform": "mac-arm64",
+      "url": "https://storage.googleapis.com/chrome-for-testing-public/157.0.8103.38/mac-arm64/chrome-mac-arm64.zip",
+      "size": 196562867,
+      "sha256": "3406b38b52b7d341d74450eb7b369be038c9fec9894c8b8a9e9e9f97333caf2f",
+      "executable_sha256": "3336497800b2b2045f4b64d269319af2acf37778b132aac1d03789b4decbc7e6"
+    },
+    {
+      "kind": "chrome",
+      "platform": "mac-x64",
+      "url": "https://storage.googleapis.com/chrome-for-testing-public/157.0.8103.38/mac-x64/chrome-mac-x64.zip",
+      "size": 207117913,
+      "sha256": "c6fcc2869b0d5a421e880d7bcdabe96e4261c4100e125fc4e4daf6346474efa6",
+      "executable_sha256": "2b203a03fded53ec95ad916af8ddfdc82dbb8f3fc613826efda0888829885301"
+    },
+    {
+      "kind": "chrome",
+      "platform": "win32",
+      "url": "https://storage.googleapis.com/chrome-for-testing-public/157.0.8103.38/win32/chrome-win32.zip",
+      "size": 190957520,
+      "sha256": "be61f767e50b6d94586710afa138535306084b438d9e30bee600a538e16a278a",
+      "executable_sha256": "1713abdd3a5da5b1d4eaba7c40b60cc9621fdfb5f0868d6ea09930916072d676"
+    },
+    {
+      "kind": "chrome",
+      "platform": "win64",
+      "url": "https://storage.googleapis.com/chrome-for-testing-public/157.0.8103.38/win64/chrome-win64.zip",
+      "size": 210600182,
+      "sha256": "ae0deef27d449e1d7529df7705d609bab102de48464da13567ed3dd2ee1a0586",
+      "executable_sha256": "b299662ff2155d34b7aa8475d287940aa9461fc538defecff6fdd566054541b1"
+    }
+  ]
+}

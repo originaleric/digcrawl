@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -18,19 +19,50 @@ import (
 	"github.com/originaleric/digcrawl/runtime/version"
 )
 
-// The failing child is a native executable on every platform. It reports the
-// private startup diagnostic without depending on a shell interpreter.
+// Every test process owns its runtime and cache roots. Windows resolves them
+// through APPDATA/LOCALAPPDATA rather than HOME, including child workers.
 func TestMain(m *testing.M) {
-	if strings.TrimSuffix(filepath.Base(os.Args[0]), ".exe") == "bridge-failure" {
-		for i, arg := range os.Args {
-			if arg == "--startup-status" && i+1 < len(os.Args) {
-				_ = os.WriteFile(os.Args[i+1], []byte("configured Chrome profile is already owned by another local DigCrawl bridge"), 0o600)
-				break
-			}
+	temporaryHome := ""
+	if os.Getenv("DIGCRAWL_TEST_HOME") == "" {
+		base := ""
+		if runtime.GOOS == "darwin" {
+			base = "/tmp"
 		}
-		os.Exit(1)
+		prefix := "dck-test-"
+		if runtime.GOOS == "windows" {
+			prefix = "dc-"
+		}
+		root, err := os.MkdirTemp(base, prefix)
+		if err != nil {
+			panic(err)
+		}
+		_ = os.Setenv("HOME", root)
+		if runtime.GOOS == "windows" {
+			// Keep both derived socket roots below AF_UNIX's path limit even
+			// with Windows' longer native temporary directory.
+			_ = os.Setenv("USERPROFILE", root)
+			_ = os.Setenv("APPDATA", filepath.Join(root, "r"))
+			_ = os.Setenv("LOCALAPPDATA", filepath.Join(root, "c"))
+		}
+		_ = os.Setenv("DIGCRAWL_TEST_HOME", root)
+		temporaryHome = root
 	}
-	os.Exit(m.Run())
+
+	helper := ""
+	if os.Getenv("DIGCRAWL_LEGACY_BRIDGE_HELPER") == "1" {
+		helper = "TestLegacyBridgeStopHelper"
+	}
+	if os.Getenv("DIGCRAWL_BRIDGE_GROUP_HELPER") == "1" {
+		helper = "TestBridgeProcessGroupStopHelper"
+	}
+	if helper != "" {
+		os.Args = []string{os.Args[0], "-test.run=^" + helper + "$"}
+	}
+	code := m.Run()
+	if temporaryHome != "" {
+		_ = os.RemoveAll(temporaryHome)
+	}
+	os.Exit(code)
 }
 
 // bridgeSocketTempDir keeps fixtures within the Unix socket path limit while
@@ -183,6 +215,10 @@ func TestServeKeepsBridgeAvailableAcrossIdleGaps(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("bridge did not stop after cancellation")
 	}
+	r, err := readRecovery(socket)
+	if err != nil || !r.Unclean || r.Attempts != 0 {
+		t.Fatalf("shutdown without controller must retain conservative history=%+v, err=%v", r, err)
+	}
 }
 
 func TestServeRejectsSecondBridgeForSamePersistentBrowserProfile(t *testing.T) {
@@ -226,7 +262,7 @@ func TestServeRejectsSecondBridgeForSamePersistentBrowserProfile(t *testing.T) {
 	}
 }
 
-func TestStopDoesNotFallBackToAnInProcessControlRequest(t *testing.T) {
+func TestStopUsesGracefulInProcessControlRequest(t *testing.T) {
 	dir := t.TempDir()
 	cfg := bridgeTestConfig(t, dir)
 	profile := filepath.Join(dir, "profile.yaml")
@@ -243,11 +279,13 @@ func TestStopDoesNotFallBackToAnInProcessControlRequest(t *testing.T) {
 		t.Fatalf("bridge did not become ready: %v", err)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	// Match the production CLI's 25-second stop budget: resource release also
+	// includes cold Windows CIM enumeration for stable and legacy owners.
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 	defer cancel()
 	stopped, err := Stop(ctx, profile)
-	if stopped || !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("Stop() = (%v, %v), want (false, deadline exceeded)", stopped, err)
+	if !stopped || err != nil {
+		t.Fatalf("Stop() = (%v, %v), want graceful completion", stopped, err)
 	}
 	cancelServe()
 	select {
@@ -260,6 +298,64 @@ func TestStopDoesNotFallBackToAnInProcessControlRequest(t *testing.T) {
 	}
 	if _, _, err := probe(context.Background(), socket); err == nil {
 		t.Fatal("bridge still answered after Stop")
+	}
+}
+
+func TestRecoveryRetainsHealthyBridgeBeforeRequestingShutdown(t *testing.T) {
+	dir := bridgeSocketTempDir(t)
+	profile := filepath.Join(dir, "profile.yaml")
+	if err := os.WriteFile(profile, []byte("LocalBrowser: {}\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	socket := filepath.Join(dir, "healthy.sock")
+	listener, err := net.Listen("unix", socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stops := make(chan struct{}, 1)
+	server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/internal/stop" {
+			stops <- struct{}{}
+			w.WriteHeader(http.StatusAccepted)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(protocol.ToolManifest{Runtime: version.RuntimeName, RuntimeVersion: version.RuntimeVersion, BuildID: version.BuildIdentity()})
+	})}
+	go func() { _ = server.Serve(listener) }()
+	defer server.Close()
+	if stopped, err := stopSocket(context.Background(), profile, socket, false, ""); err != nil || stopped {
+		t.Fatalf("healthy recovery stop=%v err=%v", stopped, err)
+	}
+	select {
+	case <-stops:
+		t.Fatal("recovery requested a healthy owner's shutdown")
+	default:
+	}
+}
+
+func TestStopRefusesOldServerWithoutDrainingSupport(t *testing.T) {
+	dir := bridgeSocketTempDir(t)
+	profile := filepath.Join(dir, "profile.yaml")
+	if err := os.WriteFile(profile, []byte("LocalBrowser: {}\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	socket := filepath.Join(dir, "old.sock")
+	listener, err := net.Listen("unix", socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := &http.Server{Handler: http.NotFoundHandler()}
+	go func() { _ = server.Serve(listener) }()
+	defer server.Close()
+	if stopped, err := stopSocket(context.Background(), profile, socket, true, ""); err == nil || stopped || !strings.Contains(err.Error(), "does not support draining shutdown") {
+		t.Fatalf("old server stop=%v err=%v", stopped, err)
+	}
+	// Rejection leaves the old process/listener in charge, rather than escalating
+	// an unsupported control request to a native force-kill fallback.
+	if conn, err := net.Dial("unix", socket); err != nil {
+		t.Fatal("unsupported server was stopped", err)
+	} else {
+		_ = conn.Close()
 	}
 }
 
@@ -391,19 +487,32 @@ func TestNewExecutorReportsPrivateStartupStatus(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		executable += ".exe"
 	}
-	data, err := os.ReadFile(os.Args[0])
-	if err != nil {
+	// Use a native helper so Windows exercises the same startup-status path.
+	fixture := filepath.Join(dir, "bridge-failure.go")
+	source := `package main
+import "os"
+func main() {
+ for i, arg := range os.Args {
+  if arg == "--startup-status" && i+1 < len(os.Args) {
+   if err := os.WriteFile(os.Args[i+1], []byte("configured Chrome profile is already owned by another local DigCrawl bridge"), 0600); err != nil { panic(err) }
+   os.Exit(1)
+  }
+ }
+ os.Exit(1)
+}
+`
+	if err := os.WriteFile(fixture, []byte(source), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(executable, data, 0o700); err != nil {
-		t.Fatal(err)
+	if output, err := exec.Command("go", "build", "-o", executable, fixture).CombinedOutput(); err != nil {
+		t.Fatalf("build startup helper: %v: %s", err, output)
 	}
 	// This matches the production startup budget plus a small scheduling margin:
 	// the assertion is about a deterministic private diagnostic, not whether a
 	// busy local test runner schedules a child in an arbitrary three seconds.
 	ctx, cancel := context.WithTimeout(context.Background(), startupTimeout+2*time.Second)
 	defer cancel()
-	_, err = NewExecutor(ctx, executable, profile, &config.Config{})
+	_, err := NewExecutor(ctx, executable, profile, &config.Config{})
 	if err == nil || !strings.Contains(err.Error(), "configured Chrome profile is already owned") {
 		t.Fatalf("startup error=%v, want private startup diagnostic", err)
 	}
@@ -426,4 +535,60 @@ func bridgeTestConfig(t *testing.T, dir string) *config.Config {
 		t.Fatal(err)
 	}
 	return cfg
+}
+
+func TestPrivateCallSeparatesExecutionAndDeliveryBudgets(t *testing.T) {
+	for _, scenario := range []string{"slow_delivery", "stalled_delivery", "caller_canceled"} {
+		t.Run(scenario, func(t *testing.T) {
+			socket := filepath.Join(bridgeSocketTempDir(t), "delivery.sock")
+			listener, err := net.Listen("unix", socket)
+			if err != nil {
+				t.Fatal(err)
+			}
+			headers := make(chan struct{})
+			server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/manifest" {
+					json.NewEncoder(w).Encode(protocol.ToolManifest{Runtime: version.RuntimeName, RuntimeVersion: version.RuntimeVersion, BuildID: version.BuildIdentity()})
+					return
+				}
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusOK)
+				http.NewResponseController(w).Flush()
+				close(headers)
+				if scenario != "slow_delivery" {
+					<-r.Context().Done()
+					return
+				}
+				select {
+				case <-time.After(150 * time.Millisecond):
+					json.NewEncoder(w).Encode(protocol.ToolResult{Status: "success"})
+				case <-r.Context().Done():
+				}
+			})}
+			go server.Serve(listener)
+			defer server.Close()
+			budget := time.Second
+			if scenario == "stalled_delivery" {
+				budget = 75 * time.Millisecond
+			}
+			executor := &Executor{socket: socket, cfg: &config.Config{}, artifactTimeout: budget}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			if scenario == "caller_canceled" {
+				go func() { <-headers; cancel() }()
+			}
+			started := time.Now()
+			result := executor.Execute(ctx, &protocol.ToolCall{ID: scenario, Tool: "gateway.ping", Input: json.RawMessage(`{}`), Policy: protocol.CallPolicy{TimeoutMs: 75}})
+			if time.Since(started) > 2*time.Second {
+				t.Fatal("delivery was unbounded")
+			}
+			if scenario == "slow_delivery" {
+				if result.Status != "success" {
+					t.Fatalf("execution budget cut off completed result delivery: %+v", result)
+				}
+			} else if result.Status != "error" || result.Error == nil {
+				t.Fatalf("unfinished delivery reported success: %+v", result)
+			}
+		})
+	}
 }

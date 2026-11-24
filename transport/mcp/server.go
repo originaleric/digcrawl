@@ -6,7 +6,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"os"
 	"os/signal"
@@ -30,13 +29,10 @@ const (
 	// connected client owns the session until it closes stdin. Hosts can opt in
 	// to a positive timeout explicitly.
 	DefaultStdioIdleTimeout time.Duration = 0
-	// DefaultStdioSessionIdleTimeout bounds every initialized session started
-	// by the CLI. A host can create many stdio children while one human uses
-	// DigCrawl, so clientInfo must not decide whether a forgotten proxy lives
-	// forever. An explicit --idle-timeout=0 remains the opt-out for a host that
-	// truly requires an unbounded connection.
-	DefaultStdioSessionIdleTimeout = 15 * time.Minute
-	// Deprecated: CLI recovery now applies to every initialized stdio session.
+	// DefaultStdioSessionIdleTimeout keeps initialized CLI sessions attached to
+	// their host pipe. A positive --idle-timeout explicitly opts into reclamation.
+	DefaultStdioSessionIdleTimeout time.Duration = 0
+	// Deprecated: initialized sessions now follow the host pipe by default.
 	// Use DefaultStdioSessionIdleTimeout instead.
 	DefaultCodexStdioIdleTimeout = DefaultStdioSessionIdleTimeout
 	// DefaultStdioInitializeTimeout only applies while the client has not sent
@@ -75,8 +71,8 @@ func ServeStdioWithIdleTimeout(rt *runtime.Runtime, idleTimeout time.Duration) e
 }
 
 // ServeStdioWithCodexRecovery is retained for callers of the original CLI
-// helper. Despite its historical name, it reclaims every initialized session:
-// an MCP client name is presentation metadata, not a safe lifecycle boundary.
+// helper. It now bounds initialization only; initialized sessions follow the
+// host pipe regardless of the client presentation name.
 // Keep this concrete parameter for source compatibility with the original API.
 func ServeStdioWithCodexRecovery(rt *runtime.Runtime) error {
 	return serveRuntimeStdio(rt, DefaultStdioIdleTimeout, true)
@@ -84,9 +80,9 @@ func ServeStdioWithCodexRecovery(rt *runtime.Runtime) error {
 
 // ServeToolRuntimeStdio exposes an abstract ToolRuntime over stdio. It is the
 // Bridge entry point: the stdio child remains a thin forwarding process while
-// the bridge owns the browser Runtime. CLI sessions always use message-aware
-// reclamation: uninitialized pipes expire quickly and initialized sessions
-// expire after actual tool inactivity, never after MCP ping traffic. An
+// the bridge owns the browser Runtime. CLI sessions use message-aware initialization
+// reclamation. Initialized sessions follow their host pipe by default; a
+// positive idle timeout opts into tool-inactivity reclamation. An
 // explicit zero with automaticRecovery disabled keeps the legacy unbounded
 // session behavior for hosts that require it.
 func ServeToolRuntimeStdio(rt ToolRuntime, idleTimeout time.Duration, automaticRecovery bool) error {
@@ -528,7 +524,14 @@ func toolResultToMCPWithInlineLimit(ctx context.Context, result *protocol.ToolRe
 		}
 	}
 	if len(result.Artifacts) > 0 {
-		output["artifacts"] = result.Artifacts
+		// Keep the established metadata shape and avoid duplicating binary data
+		// in structured/text output as well as MCP image/resource content.
+		metadata := append([]protocol.Artifact(nil), result.Artifacts...)
+		for i := range metadata {
+			metadata[i].InlineData = nil
+			metadata[i].InlineError = ""
+		}
+		output["artifacts"] = metadata
 	}
 	artifactContent, artifactErr := mcpArtifactContent(ctx, result.Artifacts, store, inlineLimit)
 	if result.Status == "error" {
@@ -566,21 +569,12 @@ func mcpArtifactContent(ctx context.Context, artifacts []protocol.Artifact, stor
 	if len(artifacts) == 0 {
 		return nil, nil
 	}
-	if store == nil {
-		return nil, fmt.Errorf("artifact store is unavailable")
-	}
 	limit := artifact.InlineLimit(inlineLimit)
 	content := make([]mcp.Content, 0, len(artifacts))
 	for _, item := range artifacts {
-		if item.Size > limit {
-			return nil, fmt.Errorf("artifact %q exceeds %d byte inline limit for this MCP transport", item.ID, limit)
-		}
-		data, mimeType, err := store.Get(ctx, item.ID)
+		data, mimeType, err := artifact.ReadContent(ctx, item, store, limit)
 		if err != nil {
-			return nil, fmt.Errorf("artifact %q is unavailable: %w", item.ID, err)
-		}
-		if int64(len(data)) > limit {
-			return nil, fmt.Errorf("artifact %q exceeds %d byte inline limit for this MCP transport", item.ID, limit)
+			return nil, err
 		}
 		encoded := base64.StdEncoding.EncodeToString(data)
 		if strings.HasPrefix(strings.ToLower(mimeType), "image/") {

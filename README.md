@@ -40,6 +40,14 @@ Read and summarize this link: <URL>
 
 ## Quick Start
 
+With Node.js 20.19+:
+
+```bash
+npx digcrawl-skill@latest install
+```
+
+Or install with the shell script on macOS / Linux:
+
 **Install in your terminal** (macOS / Linux, no Go required):
 
 ```bash
@@ -53,7 +61,7 @@ The installer verifies downloads and installs the program, complete Skill, and d
 
 - Configures Codex automatically and installs the Claude Code Skill when detected. See [MCP setup](./.agents/skills/digcrawl/mcp/README.md) for other hosts.
 - Installs to `~/.local/bin`; add it to `PATH` if the command is not found.
-- For Windows, download a [Release](https://github.com/originaleric/digcrawl/releases). See [installation](./USAGE.md#1-安装) for version pinning and source builds.
+- For Windows, download a [Release](https://github.com/originaleric/digcrawl/releases). See [installation](./USAGE.md#1-installation) for version pinning and source builds.
 
 </details>
 
@@ -74,7 +82,7 @@ The installer verifies downloads and installs the program, complete Skill, and d
 
 - **Local experiment**: WeChat Channels chat cards through the local macOS bridge. See the [local guide](./docs/微信视频号本地抓取使用手册.md).
 
-See [source details](./USAGE.md#支持的内容来源) for platform capabilities and login requirements.
+See [source details](./USAGE.md#supported-content-sources) for platform capabilities and login requirements.
 
 ## Collect, Export, and Watch
 
@@ -97,7 +105,7 @@ digcrawl watchlist run --once --config config/config.yaml
 digcrawl watchlist serve --config config/config.yaml
 ```
 
-Transcription and OCR require the relevant dependencies; see [video analysis](./USAGE.md#直接视频解析) and [Collect](./collect/README.md).
+Transcription and OCR require the relevant dependencies; see [video analysis](./USAGE.md#direct-video-analysis) and [Collect](./collect/README.md).
 
 </details>
 
@@ -286,7 +294,7 @@ Read this agent video and extract its description and chapters. https://www.yout
 
 ### YouTube Sign-In
 
-On `LOGIN_REQUIRED`, ask your agent to open a dedicated, ordinary Chrome window:
+On `LOGIN_REQUIRED`, ask your agent to open the dedicated Chrome for Testing sign-in window:
 
 ```text
 Open the DigCrawl sign-in window for YouTube.
@@ -307,7 +315,7 @@ digcrawl browser login --config "<profile path used by MCP>" --platform youtube
 
 Sign in through the dedicated Chrome window and return to YouTube, then press Enter in the original terminal. DigCrawl closes the window and synchronizes the session. On Windows, close all dedicated Chrome windows before pressing Enter.
 
-Use the same profile as MCP; your everyday browser session is not copied automatically. Credentials and cookies stay on your machine. Preserve any Google sign-in rejection; see [sign-in guidance](./USAGE.md#平台登录与健康检查).
+Use the same profile as MCP; your everyday browser session is not copied automatically. Credentials and cookies stay on your machine. Preserve any Google sign-in rejection; see [sign-in guidance](./USAGE.md#platform-sign-in-and-health-checks).
 
 </details>
 
@@ -334,7 +342,7 @@ digcrawl browser login --config "<profile path used by MCP>" --platform xiaohong
 
 When running the command yourself, press Enter in that terminal after signing in. Use the same profile as MCP; your everyday browser session is not copied automatically. Credentials and cookies stay on your machine.
 
-See [sign-in guidance](./USAGE.md#平台登录与健康检查) for other platforms and troubleshooting.
+See [sign-in guidance](./USAGE.md#platform-sign-in-and-health-checks) for other platforms and troubleshooting.
 
 </details>
 
@@ -347,7 +355,7 @@ Install the complete [Skill directory](./.agents/skills/digcrawl/), then configu
 - [Claude Code example](./.agents/skills/digcrawl/claude-code/.mcp.json.example)
 - [Other MCP hosts](./.agents/skills/digcrawl/mcp/README.md)
 
-Use absolute program and profile paths, and copy the whole Skill rather than only `SKILL.md`. See [setup](./USAGE.md#6-ide-集成mcp) for profile initialization.
+Use absolute program and profile paths, and copy the whole Skill rather than only `SKILL.md`. See [setup](./USAGE.md#6-ide-integration-mcp) for profile initialization.
 
 </details>
 
@@ -360,7 +368,11 @@ Use absolute program and profile paths, and copy the whole Skill rather than onl
 
 ### Browser recovery and diagnostics
 
-Follow the returned error guidance or see [browser troubleshooting](./USAGE.md#浏览器超时或反复失败).
+Background rendering uses a dedicated headless runtime; sign-in uses a separately identified headed browser. Dependency failures never fall back to daily Chrome. Source installations must run `digcrawl browser install`; migrate legacy configurations and embedded copies using the [upgrade instructions](./USAGE.md#browser-capabilities-optional).
+
+Bridge runtime state now uses the private user configuration directory. Use `digcrawl bridge status --config <profile>` for read-only diagnostics and `digcrawl bridge watch --config <profile> --install` for macOS background monitoring. See the [Bridge lifecycle guide](./docs/本地Bridge保活与迁移.md) for migration and rollback.
+
+Follow the returned error guidance or see [browser troubleshooting](./USAGE.md#browser-timeouts-or-repeated-failures).
 
 <details>
 <summary>Check the local environment</summary>
@@ -387,10 +399,12 @@ See [Runtime](./runtime/README.md), [Transport](./transport/README.md), and [Pro
 
 **For users**
 
-- [Installation and usage](./USAGE.md) · [Product guide](./docs/DigCrawl功能与使用手册.md) · [Browser troubleshooting](./USAGE.md#浏览器超时或反复失败)
+- [Installation and usage](./USAGE.md) · [Product guide](./docs/DigCrawl功能与使用手册.md) · [Browser troubleshooting](./USAGE.md#browser-timeouts-or-repeated-failures)
 - [Agent Skill](./.agents/skills/digcrawl/) · [MCP setup](./.agents/skills/digcrawl/mcp/README.md)
 
 **For developers**
+
+- [CI](./.github/workflows/test.yml) runs only through manual `workflow_dispatch`; the Test workflow covers Linux, macOS, and Windows. Release publishing remains triggered by version tags.
 
 - [HTTP / stdio](./transport/README.md) · [Go SDK](./client/README.md) · [Configuration examples](./config/)
 - [Collect](./collect/README.md) · [Runtime](./runtime/README.md) · [Protocol](./protocol/README.md)

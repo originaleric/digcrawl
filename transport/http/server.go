@@ -23,6 +23,9 @@ type Server struct {
 	artStore  artifact.Store
 	authToken string
 	mux       *http.ServeMux
+	// InlineArtifacts is enabled only on the private Bridge before serving.
+	// It keeps execution and attachment delivery inside one draining handler.
+	InlineArtifacts bool
 }
 
 // NewServer creates an HTTP gateway server.
@@ -138,6 +141,22 @@ func (s *Server) handleToolCall(w http.ResponseWriter, r *http.Request) {
 	// not cut off by the generic HTTP write timeout while it is still working.
 	_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(s.rt.ExecutionTimeout(&call) + 5*time.Second))
 	result := s.rt.Execute(r.Context(), &call)
+	if s.InlineArtifacts {
+		// Execution has ended. Flush headers before reading attachments so the
+		// private client can finish its execution budget and start delivery's
+		// independent budget. Structured tool errors remain in the response body.
+		_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(artifact.DeliveryTimeout))
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		if err := http.NewResponseController(w).Flush(); err != nil {
+			return
+		}
+		delivery, cancel := context.WithTimeout(r.Context(), artifact.DeliveryTimeout)
+		defer cancel()
+		result.Artifacts = artifact.Materialize(delivery, result.Artifacts, s.artStore, s.rt.ArtifactInlineLimit())
+		_ = json.NewEncoder(w).Encode(result)
+		return
+	}
 	status := http.StatusOK
 	if result.Status == "error" && result.Error != nil {
 		switch result.Error.Code {

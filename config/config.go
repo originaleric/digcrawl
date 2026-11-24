@@ -411,14 +411,15 @@ type LocalBrowserConfig struct {
 	NavigateTimeoutSec     int      `yaml:"NavigateTimeoutSec" json:"NavigateTimeoutSec,omitempty"`
 	WaitSelectorTimeoutSec int      `yaml:"WaitSelectorTimeoutSec" json:"WaitSelectorTimeoutSec,omitempty"`
 	AllowedDomains         []string `yaml:"AllowedDomains" json:"AllowedDomains,omitempty"`
-	ChromePath             string   `yaml:"ChromePath" json:"ChromePath,omitempty"`
-	Headless               *bool    `yaml:"Headless" json:"Headless,omitempty"`
-	CookieStoreDir         string   `yaml:"CookieStoreDir" json:"CookieStoreDir,omitempty"`
-	CDPMode                *bool    `yaml:"CDPMode" json:"CDPMode,omitempty"`
-	CDPPort                int      `yaml:"CDPPort" json:"CDPPort,omitempty"`
-	CDPConnectExisting     *bool    `yaml:"CDPConnectExisting" json:"CDPConnectExisting,omitempty"`
-	UserDataDir            string   `yaml:"UserDataDir" json:"UserDataDir,omitempty"`
-	ProxyURL               string   `yaml:"ProxyURL" json:"ProxyURL,omitempty"`
+	// ChromePath is a legacy override: owned launches accept only the pinned runtime.
+	ChromePath         string `yaml:"ChromePath" json:"ChromePath,omitempty"`
+	Headless           *bool  `yaml:"Headless" json:"Headless,omitempty"`
+	CookieStoreDir     string `yaml:"CookieStoreDir" json:"CookieStoreDir,omitempty"`
+	CDPMode            *bool  `yaml:"CDPMode" json:"CDPMode,omitempty"`
+	CDPPort            int    `yaml:"CDPPort" json:"CDPPort,omitempty"`
+	CDPConnectExisting *bool  `yaml:"CDPConnectExisting" json:"CDPConnectExisting,omitempty"`
+	UserDataDir        string `yaml:"UserDataDir" json:"UserDataDir,omitempty"`
+	ProxyURL           string `yaml:"ProxyURL" json:"ProxyURL,omitempty"`
 	// ExtraArgs apply only to crawler-owned background browser launches. They
 	// may contain headless-shell compatibility flags that are unsafe for a
 	// visible interactive login window.

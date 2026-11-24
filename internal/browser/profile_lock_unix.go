@@ -11,11 +11,12 @@ import (
 )
 
 type ProfileLock struct {
-	file     *os.File
-	managed  bool
-	identity string
-	once     sync.Once
-	err      error
+	compatibility *ProfileLock
+	file          *os.File
+	managed       bool
+	identity      string
+	once          sync.Once
+	err           error
 }
 
 func acquireProfileFileLock(path string) (*ProfileLock, error) {
@@ -38,6 +39,9 @@ func (l *ProfileLock) Close() error {
 		return nil
 	}
 	l.once.Do(func() {
+		if l.compatibility != nil {
+			_ = l.compatibility.Close()
+		}
 		if l.managed {
 			managedProfileMu.Lock()
 			if managedProfile == l.identity {

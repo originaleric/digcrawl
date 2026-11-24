@@ -5,4 +5,4 @@ command = "/absolute/path/to/digcrawl"
 # adapter after 15 minutes without an actual tools/call; MCP pings do not
 # extend that window. Generic hosts can use the standard unflagged command
 # from mcp/README.md instead.
-args = ["mcp", "--idle-timeout", "15m", "--config", "/absolute/path/to/digcrawl-skill.yaml"]
+args = ["mcp", "--idle-timeout", "0", "--config", "/absolute/path/to/digcrawl-skill.yaml"]

@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 # Manage the dedicated Chrome instance used by DigCrawl through CDP.
-# It deliberately finds a system Chrome/Chromium and never depends on a
-# Playwright versioned browser cache.
+# It uses only the pinned DigCrawl runtime; desktop Chrome is never a fallback.
 #
 # Usage:
 #   ./scripts/digcrawl-cdp-browser-service.sh install
@@ -22,12 +21,16 @@ PORT_EXPLICIT=0
 USER_DATA_DIR_EXPLICIT=0
 LOG_DIR_EXPLICIT=0
 CHROME_PATH_EXPLICIT=0
+DIGCRAWL_BIN_EXPLICIT=0
+BROWSER_DIR_EXPLICIT=0
 [[ -n "${DIGCRAWL_CDP_BROWSER_SERVICE_NAME+x}" ]] && SERVICE_NAME_EXPLICIT=1
 [[ -n "${DIGCRAWL_CDP_BROWSER_SERVICE_LABEL+x}" ]] && SERVICE_LABEL_EXPLICIT=1
 [[ -n "${DIGCRAWL_CDP_PORT+x}" ]] && PORT_EXPLICIT=1
 [[ -n "${DIGCRAWL_CDP_USER_DATA_DIR+x}" ]] && USER_DATA_DIR_EXPLICIT=1
 [[ -n "${DIGCRAWL_CDP_LOG_DIR+x}" ]] && LOG_DIR_EXPLICIT=1
 [[ -n "${DIGCRAWL_CHROME_PATH+x}" ]] && CHROME_PATH_EXPLICIT=1
+[[ -n "${DIGCRAWL_BIN+x}" ]] && DIGCRAWL_BIN_EXPLICIT=1
+[[ -n "${DIGCRAWL_BROWSER_DIR+x}" ]] && BROWSER_DIR_EXPLICIT=1
 
 SERVICE_NAME="${DIGCRAWL_CDP_BROWSER_SERVICE_NAME:-digcrawl-cdp-browser}"
 SERVICE_LABEL="${DIGCRAWL_CDP_BROWSER_SERVICE_LABEL:-com.digcrawl.cdp-browser}"
@@ -35,6 +38,7 @@ PORT="${DIGCRAWL_CDP_PORT:-9323}"
 USER_DATA_DIR="${DIGCRAWL_CDP_USER_DATA_DIR:-${HOME}/.local/share/digcrawl/cdp-browser}"
 LOG_DIR="${DIGCRAWL_CDP_LOG_DIR:-${HOME}/.local/state/digcrawl/cdp-browser}"
 CHROME_PATH="${DIGCRAWL_CHROME_PATH:-}"
+DIGCRAWL_BIN="${DIGCRAWL_BIN:-${HOME}/.local/bin/digcrawl}"
 SELF_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/$(basename "${BASH_SOURCE[0]}")"
 # Keep invocation-supplied runtime values separate from the mutable launch
 # configuration. A reconfiguration must stop the old browser using its saved
@@ -43,6 +47,8 @@ EXPLICIT_PORT_VALUE="${PORT}"
 EXPLICIT_USER_DATA_DIR_VALUE="${USER_DATA_DIR}"
 EXPLICIT_LOG_DIR_VALUE="${LOG_DIR}"
 EXPLICIT_CHROME_PATH_VALUE="${CHROME_PATH}"
+EXPLICIT_DIGCRAWL_BIN_VALUE="${DIGCRAWL_BIN}"
+EXPLICIT_BROWSER_DIR_VALUE="${DIGCRAWL_BROWSER_DIR:-}"
 
 usage() {
   cat <<EOF
@@ -52,7 +58,7 @@ Environment overrides:
   DIGCRAWL_CDP_PORT                 default: ${PORT}
   DIGCRAWL_CDP_USER_DATA_DIR        default: ${USER_DATA_DIR}
   DIGCRAWL_CDP_LOG_DIR              default: ${LOG_DIR}
-  DIGCRAWL_CHROME_PATH              default: auto-discover system Chrome/Chromium
+  DIGCRAWL_CHROME_PATH              default: verified DigCrawl isolated runtime
   DIGCRAWL_CDP_BROWSER_SERVICE_NAME default: ${SERVICE_NAME}
   DIGCRAWL_CDP_BROWSER_SERVICE_LABEL default: ${SERVICE_LABEL}
 EOF
@@ -112,6 +118,8 @@ save_service_metadata() {
   validate_metadata_value "DIGCRAWL_CDP_USER_DATA_DIR" "${USER_DATA_DIR}"
   validate_metadata_value "DIGCRAWL_CDP_LOG_DIR" "${LOG_DIR}"
   validate_metadata_value "DIGCRAWL_CHROME_PATH" "${CHROME_PATH}"
+  validate_metadata_value "DIGCRAWL_BIN" "${DIGCRAWL_BIN}"
+  validate_metadata_value "DIGCRAWL_BROWSER_DIR" "${DIGCRAWL_BROWSER_DIR:-}"
   local dir target temporary
   dir="$(metadata_dir)"
   target="$(metadata_path)"
@@ -125,6 +133,8 @@ save_service_metadata() {
     printf 'user_data_dir\t%s\n' "${USER_DATA_DIR}"
     printf 'log_dir\t%s\n' "${LOG_DIR}"
     printf 'chrome_path\t%s\n' "${CHROME_PATH}"
+    printf 'digcrawl_bin\t%s\n' "${DIGCRAWL_BIN}"
+    if [[ -n "${DIGCRAWL_BROWSER_DIR:-}" ]]; then printf 'browser_dir\t%s\n' "${DIGCRAWL_BROWSER_DIR}"; fi
   } >"${temporary}"
   chmod 600 "${temporary}"
   mv -f "${temporary}" "${target}"
@@ -155,7 +165,7 @@ remove_service_metadata() {
 
 load_service_metadata() {
   local path="$1" key value extra
-  local saved_version="" saved_name="" saved_label="" saved_port="" saved_user_data_dir="" saved_log_dir="" saved_chrome_path=""
+  local saved_version="" saved_name="" saved_label="" saved_port="" saved_user_data_dir="" saved_log_dir="" saved_chrome_path="" saved_digcrawl_bin="" saved_browser_dir=""
   [[ -f "${path}" ]] || return 1
   while IFS=$'\t' read -r key value extra || [[ -n "${key}" ]]; do
     [[ -z "${extra}" ]] || fail "invalid service metadata at ${path}; reinstall the CDP browser service"
@@ -167,6 +177,8 @@ load_service_metadata() {
       user_data_dir) saved_user_data_dir="${value}" ;;
       log_dir) saved_log_dir="${value}" ;;
       chrome_path) saved_chrome_path="${value}" ;;
+      digcrawl_bin) saved_digcrawl_bin="${value}" ;;
+      browser_dir) saved_browser_dir="${value}" ;;
       *) fail "invalid service metadata at ${path}; reinstall the CDP browser service" ;;
     esac
   done <"${path}"
@@ -177,6 +189,8 @@ load_service_metadata() {
   USER_DATA_DIR="${saved_user_data_dir}"
   LOG_DIR="${saved_log_dir}"
   CHROME_PATH="${saved_chrome_path}"
+  [[ -z "${saved_digcrawl_bin}" ]] || DIGCRAWL_BIN="${saved_digcrawl_bin}"
+  [[ -z "${saved_browser_dir}" ]] || DIGCRAWL_BROWSER_DIR="${saved_browser_dir}"
   validate_config
   validate_service_identity
 }
@@ -186,10 +200,12 @@ apply_explicit_runtime_overrides() {
   if (( USER_DATA_DIR_EXPLICIT )); then USER_DATA_DIR="${EXPLICIT_USER_DATA_DIR_VALUE}"; fi
   if (( LOG_DIR_EXPLICIT )); then LOG_DIR="${EXPLICIT_LOG_DIR_VALUE}"; fi
   if (( CHROME_PATH_EXPLICIT )); then CHROME_PATH="${EXPLICIT_CHROME_PATH_VALUE}"; fi
+  if (( DIGCRAWL_BIN_EXPLICIT )); then DIGCRAWL_BIN="${EXPLICIT_DIGCRAWL_BIN_VALUE}"; fi
+  if (( BROWSER_DIR_EXPLICIT )); then DIGCRAWL_BROWSER_DIR="${EXPLICIT_BROWSER_DIR_VALUE}"; fi
 }
 
 validate_explicit_runtime_overrides() {
-  local saved_port="${PORT}" saved_user_data_dir="${USER_DATA_DIR}" saved_log_dir="${LOG_DIR}" saved_chrome_path="${CHROME_PATH}"
+  local saved_port="${PORT}" saved_user_data_dir="${USER_DATA_DIR}" saved_log_dir="${LOG_DIR}" saved_chrome_path="${CHROME_PATH}" saved_bin="${DIGCRAWL_BIN}" saved_root="${DIGCRAWL_BROWSER_DIR:-}"
   apply_explicit_runtime_overrides
   validate_config
   if (( USER_DATA_DIR_EXPLICIT )); then validate_metadata_value "DIGCRAWL_CDP_USER_DATA_DIR" "${USER_DATA_DIR}"; fi
@@ -199,6 +215,8 @@ validate_explicit_runtime_overrides() {
   USER_DATA_DIR="${saved_user_data_dir}"
   LOG_DIR="${saved_log_dir}"
   CHROME_PATH="${saved_chrome_path}"
+  DIGCRAWL_BIN="${saved_bin}"
+  DIGCRAWL_BROWSER_DIR="${saved_root}"
 }
 
 load_managed_service() {
@@ -245,38 +263,12 @@ load_managed_service() {
 }
 
 discover_chrome() {
-  local candidates=()
+  local digcrawl_bin="${DIGCRAWL_BIN}"
   if [[ -n "${CHROME_PATH}" ]]; then
-    candidates+=("${CHROME_PATH}")
+    DIGCRAWL_BROWSER_DIR="${DIGCRAWL_BROWSER_DIR:-}" "${digcrawl_bin}" browser runtime --expect "${CHROME_PATH}"
+  else
+    DIGCRAWL_BROWSER_DIR="${DIGCRAWL_BROWSER_DIR:-}" "${digcrawl_bin}" browser runtime
   fi
-  case "${OS_NAME}" in
-    Darwin)
-      candidates+=(
-        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
-        "${HOME}/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
-        "/Applications/Chromium.app/Contents/MacOS/Chromium"
-      )
-      ;;
-  esac
-  local candidate
-  # Bash 3 with `set -u` treats an empty declared array as unset when it is
-  # expanded. Linux commonly starts with no path candidates, so guard that
-  # expansion before falling back to command discovery.
-  if ((${#candidates[@]})); then
-    for candidate in "${candidates[@]}"; do
-      if [[ -x "${candidate}" ]]; then
-        printf '%s\n' "${candidate}"
-        return 0
-      fi
-    done
-  fi
-  for candidate in google-chrome google-chrome-stable chromium chromium-browser; do
-    if candidate="$(command -v "${candidate}" 2>/dev/null)" && [[ -x "${candidate}" ]]; then
-      printf '%s\n' "${candidate}"
-      return 0
-    fi
-  done
-  return 1
 }
 
 cdp_url() {
@@ -427,6 +419,7 @@ ensure_private_dirs() {
 }
 
 run_foreground() {
+  [[ "${USER_DATA_DIR##*/}" == "digcrawl-isolated" ]] || USER_DATA_DIR="${USER_DATA_DIR}/digcrawl-isolated"
   validate_config
   if cdp_ready; then
     if browser_process_matches_config; then
@@ -441,10 +434,12 @@ run_foreground() {
     fi
   fi
   local chrome
-  chrome="$(discover_chrome)" || fail "no supported system Chrome/Chromium found; install Chrome or set DIGCRAWL_CHROME_PATH"
+  chrome="$(discover_chrome)" || fail "isolated browser unavailable; run digcrawl browser install and remove legacy desktop Chrome overrides"
+  [[ "${USER_DATA_DIR##*/}" == "digcrawl-isolated" ]] || fail "legacy CDP profile is not isolated; reinstall the service"
   ensure_private_dirs "${USER_DATA_DIR}" "${LOG_DIR}"
   exec "${chrome}" \
     --headless=new \
+    --enable-automation \
     --remote-debugging-address=127.0.0.1 \
     --remote-debugging-port="${PORT}" \
     --user-data-dir="${USER_DATA_DIR}" \
@@ -457,11 +452,13 @@ run_foreground() {
 
 install_macos() {
   local chrome launcher
-  chrome="$(discover_chrome)" || fail "no supported system Chrome/Chromium found; install Chrome or set DIGCRAWL_CHROME_PATH"
+  chrome="$(discover_chrome)" || fail "isolated browser unavailable; run digcrawl browser install and remove legacy desktop Chrome overrides"
   # The service definition and its metadata must record the same resolved
   # executable. Discovery used to populate only the plist, leaving a metadata
   # record that could not be loaded by later management commands.
   CHROME_PATH="${chrome}"
+  DIGCRAWL_BROWSER_DIR="$(dirname "$(dirname "$(dirname "${chrome}")")")"
+  [[ "${USER_DATA_DIR##*/}" == "digcrawl-isolated" ]] || USER_DATA_DIR="${USER_DATA_DIR}/digcrawl-isolated"
   mkdir -p "${HOME}/Library/LaunchAgents"
   ensure_private_dirs "${USER_DATA_DIR}" "${LOG_DIR}"
   launcher="$(stage_macos_launcher)"
@@ -476,6 +473,7 @@ install_macos() {
     <string>$(xml_escape "${launcher}")</string><string>run-foreground</string>
   </array>
   <key>EnvironmentVariables</key><dict>
+    <key>DIGCRAWL_BIN</key><string>$(xml_escape "${DIGCRAWL_BIN}")</string>
     <key>DIGCRAWL_CDP_PORT</key><string>$(xml_escape "${PORT}")</string>
     <key>DIGCRAWL_CDP_USER_DATA_DIR</key><string>$(xml_escape "${USER_DATA_DIR}")</string>
     <key>DIGCRAWL_CDP_LOG_DIR</key><string>$(xml_escape "${LOG_DIR}")</string>
@@ -613,8 +611,10 @@ uninstall_macos() {
 install_linux() {
   command -v systemctl >/dev/null 2>&1 || fail "systemctl is required on Linux"
   local chrome
-  chrome="$(discover_chrome)" || fail "no supported system Chrome/Chromium found; install Chrome or set DIGCRAWL_CHROME_PATH"
+  chrome="$(discover_chrome)" || fail "isolated browser unavailable; run digcrawl browser install and remove legacy desktop Chrome overrides"
   CHROME_PATH="${chrome}"
+  DIGCRAWL_BROWSER_DIR="$(dirname "$(dirname "$(dirname "${chrome}")")")"
+  [[ "${USER_DATA_DIR##*/}" == "digcrawl-isolated" ]] || USER_DATA_DIR="${USER_DATA_DIR}/digcrawl-isolated"
   mkdir -p "${HOME}/.config/systemd/user"
   ensure_private_dirs "${USER_DATA_DIR}" "${LOG_DIR}"
   local unit
@@ -636,6 +636,7 @@ Environment=$(systemd_quote "DIGCRAWL_CDP_PORT=${PORT}")
 Environment=$(systemd_quote "DIGCRAWL_CDP_USER_DATA_DIR=${USER_DATA_DIR}")
 Environment=$(systemd_quote "DIGCRAWL_CDP_LOG_DIR=${LOG_DIR}")
 Environment=$(systemd_quote "DIGCRAWL_CHROME_PATH=${chrome}")
+Environment=$(systemd_quote "DIGCRAWL_BIN=${DIGCRAWL_BIN}")
 StandardOutput=journal
 StandardError=journal
 EOF
@@ -749,6 +750,7 @@ main() {
       validate_service_identity
       prepare_install
       apply_explicit_runtime_overrides
+      if (( !CHROME_PATH_EXPLICIT )); then CHROME_PATH=""; fi
       validate_config
       validate_service_identity
       case "${OS_NAME}" in Darwin) install_macos ;; Linux) install_linux ;; *) fail "unsupported OS: ${OS_NAME}" ;; esac

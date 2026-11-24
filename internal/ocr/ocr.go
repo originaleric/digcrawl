@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html"
 	"io"
@@ -35,26 +36,31 @@ type ImageRef struct {
 	DataURL   string
 	Source    string
 	Type      string
+	Error     string // controlled acquisition failure; prevents remote URL fallback
 }
 
 // Result stores OCR output for one image.
 type Result struct {
-	SourceURL string `json:"source_url,omitempty"`
-	LocalPath string `json:"local_path,omitempty"`
-	Source    string `json:"source,omitempty"`
-	Type      string `json:"type,omitempty"`
-	Text      string `json:"text,omitempty"`
-	Provider  string `json:"provider,omitempty"`
-	Model     string `json:"model,omitempty"`
-	Error     string `json:"error,omitempty"`
+	SourceURL  string `json:"source_url,omitempty"`
+	LocalPath  string `json:"local_path,omitempty"`
+	Source     string `json:"source,omitempty"`
+	Type       string `json:"type,omitempty"`
+	Text       string `json:"text,omitempty"`
+	Provider   string `json:"provider,omitempty"`
+	Model      string `json:"model,omitempty"`
+	Error      string `json:"error,omitempty"`
+	HTTPStatus int    `json:"http_status,omitempty"`
+	ErrorCode  string `json:"error_code,omitempty"`
+	Retryable  bool   `json:"retryable,omitempty"`
 }
 
 // EnrichOptions controls OCR enrichment source selection.
 type EnrichOptions struct {
-	AssetsDir   string
-	Downloaded  []map[string]any
-	ExtraImages []ImageRef
-	Force       bool
+	AssetsDir      string
+	Downloaded     []map[string]any
+	ExtraImages    []ImageRef
+	ResolvedImages bool // session collection is authoritative, including an empty set
+	Force          bool
 }
 
 type provider interface {
@@ -118,6 +124,7 @@ func EnrichMap(ctx context.Context, out map[string]any, cfg config.OCRConfig, op
 	if len(refs) == 0 {
 		meta["ocr_enabled"] = true
 		meta["ocr_count"] = 0
+		meta["ocr_status"] = "no_images"
 		return nil
 	}
 
@@ -144,7 +151,7 @@ func recognizeRefs(ctx context.Context, cfg config.OCRConfig, refs []ImageRef) (
 	results := make([]Result, 0, len(refs))
 	for _, ref := range refs {
 		result := Result{
-			SourceURL: ref.URL,
+			SourceURL: safeImageSourceURL(ref.URL),
 			Source:    ref.Source,
 			Provider:  p.Name(),
 			Model:     p.Model(),
@@ -156,9 +163,21 @@ func recognizeRefs(ctx context.Context, cfg config.OCRConfig, refs []ImageRef) (
 		} else {
 			result.Type = ref.Type
 		}
-		text, err := p.Recognize(ctx, ref)
+		var text string
+		var err error
+		if ref.Error != "" {
+			reason := safeImageFailure(ref.Error)
+			result.ErrorCode = "image_" + reason
+			err = fmt.Errorf("OCR image acquisition failed: %s", reason)
+		} else {
+			text, err = p.Recognize(ctx, ref)
+		}
 		if err != nil {
 			result.Error = err.Error()
+			var pe *providerError
+			if errors.As(err, &pe) {
+				result.HTTPStatus, result.ErrorCode, result.Retryable = pe.status, pe.code, pe.retryable
+			}
 		} else {
 			result.Text = strings.TrimSpace(text)
 		}
@@ -300,6 +319,9 @@ func collectImageRefs(out map[string]any, opts EnrichOptions, cfg config.OCRConf
 		add(ImageRef{URL: rawURL, LocalPath: local, Type: mediaType})
 	}
 
+	if opts.ResolvedImages {
+		return refs
+	}
 	for _, item := range mediaItems(out) {
 		rawURL, _ := item["url"].(string)
 		mediaType, _ := item["type"].(string)
@@ -429,6 +451,12 @@ func writeResults(out map[string]any, meta map[string]any, cfg config.OCRConfig,
 		}
 		if r.Error != "" {
 			m["error"] = r.Error
+			if r.HTTPStatus != 0 {
+				m["http_status"] = r.HTTPStatus
+			}
+			if r.ErrorCode != "" {
+				m["error_code"], m["retryable"] = r.ErrorCode, r.Retryable
+			}
 		}
 		encoded = append(encoded, m)
 	}
@@ -444,6 +472,26 @@ func writeResults(out map[string]any, meta map[string]any, cfg config.OCRConfig,
 	meta["ocr_enabled"] = true
 	meta["ocr_count"] = successCount
 	meta["ocr_results"] = encoded
+	succeeded, failed, empty := 0, 0, 0
+	for _, r := range encoded {
+		if stringValue(r, "error") != "" {
+			failed++
+		} else {
+			succeeded++
+			if stringValue(r, "text") == "" {
+				empty++
+			}
+		}
+	}
+	meta["ocr_success_count"], meta["ocr_failure_count"], meta["ocr_empty_count"] = succeeded, failed, empty
+	meta["ocr_status"] = "completed"
+	if failed > 0 || meta["ocr_truncated"] == true {
+		meta["ocr_status"] = "degraded"
+		meta["ocr_failure_reason"] = "partial_failure"
+		if succeeded == 0 && failed > 0 {
+			meta["ocr_failure_reason"] = "all_images_failed"
+		}
+	}
 	if successCount == 0 {
 		return
 	}
@@ -638,7 +686,7 @@ func (p *openAICompatibleProvider) Recognize(ctx context.Context, ref ImageRef) 
 		return "", err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", fmt.Errorf("OCR provider HTTP %d", resp.StatusCode)
+		return "", classifyProviderError(resp.StatusCode, respBody)
 	}
 	var parsed struct {
 		Choices []struct {
@@ -659,10 +707,10 @@ func (p *openAICompatibleProvider) Recognize(ctx context.Context, ref ImageRef) 
 			return text, nil
 		}
 	}
-	if len(parsed.Choices) == 0 {
-		return "", fmt.Errorf("OCR provider returned empty text")
+	if len(parsed.Choices) > 0 && parsed.Choices[0].Message.Content != nil {
+		return "", nil
 	}
-	return "", fmt.Errorf("OCR provider returned empty text")
+	return "", fmt.Errorf("OCR provider returned empty response")
 }
 
 func ocrResponseText(value any) string {
@@ -819,4 +867,22 @@ func validateRemoteImageURL(rawURL string) error {
 		return fmt.Errorf("OCR image host %q is local", host)
 	}
 	return nil
+}
+
+// OCR diagnostics identify the source without reflecting signed query values,
+// fragments or URL userinfo. Original references remain internal for acquisition.
+func safeImageSourceURL(raw string) string {
+	if raw == "" {
+		return ""
+	}
+	u, err := url.Parse(raw)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
+		return ""
+	}
+	u.User = nil
+	u.RawQuery = ""
+	u.ForceQuery = false
+	u.Fragment = ""
+	u.RawFragment = ""
+	return u.String()
 }

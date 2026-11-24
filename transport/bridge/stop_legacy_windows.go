@@ -6,49 +6,57 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
-	"strconv"
 	"strings"
+
+	"golang.org/x/sys/windows"
 )
 
 type windowsBridgeProcess struct {
-	PID     int    `json:"ProcessId"`
-	Command string `json:"CommandLine"`
+	PID        int    `json:"ProcessId"`
+	Executable string `json:"ExecutablePath"`
+	Created    string `json:"CreationDate"`
+	Command    string `json:"CommandLine"`
 }
 
-// stopBridgeOwner is the Windows counterpart to Unix's private process group.
-// taskkill /T terminates the exact Bridge process and the Chromium tree it
-// owns. Process selection still requires the full generated socket argument;
-// it never targets a broad `digcrawl` image name.
+// Windows uses the private HTTP shutdown request for task draining. If that
+// socket is unreachable, identify the owner for an explicit error; forcibly
+// terminating its tree cannot establish that current tasks have finished.
 func stopBridgeOwner(ctx context.Context, socket string) (bool, error) {
 	processes, err := listWindowsBridgeProcesses(ctx)
 	if err != nil {
 		return false, err
 	}
-	stopped := false
 	for _, candidate := range processes {
 		pid := candidate.PID
-		if pid <= 0 || !strings.Contains(candidate.Command, "bridge serve") || !windowsHasSocketArgument(candidate.Command, socket) {
+		if pid <= 0 || !windowsIsBridgeCommand(candidate) || !windowsHasSocketArgument(candidate.Command, socket) {
 			continue
 		}
 
-		output, err := exec.CommandContext(ctx, "taskkill", "/PID", strconv.Itoa(pid), "/T", "/F").CombinedOutput()
-		if err != nil && ctx.Err() != nil {
-			return false, ctx.Err()
+		// Re-enumerate before reporting a live owner and reject PID reuse.
+		current, err := listWindowsBridgeProcesses(ctx)
+		if err != nil {
+			return false, err
 		}
-		if err != nil && !strings.Contains(strings.ToLower(string(output)), "not found") {
-			return false, fmt.Errorf("force-stop local bridge process tree: %w: %s", err, strings.TrimSpace(string(output)))
+		verified := false
+		for _, p := range current {
+			if p.PID == pid && p.Created != "" && p.Created == candidate.Created && p.Executable == candidate.Executable && p.Command == candidate.Command {
+				verified = true
+				break
+			}
 		}
-		stopped = true
+		if !verified {
+			continue
+		}
+
+		return false, fmt.Errorf("live Bridge is unreachable; cannot confirm current tasks have finished; restore its connection before stopping")
 	}
-	if !stopped {
-		return false, ErrBridgeOwnerNotFound
-	}
-	return stopped, nil
+	return false, ErrBridgeOwnerNotFound
 }
 
 func listWindowsBridgeProcesses(ctx context.Context) ([]windowsBridgeProcess, error) {
-	output, err := exec.CommandContext(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", "Get-CimInstance Win32_Process | Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress").Output()
+	output, err := exec.CommandContext(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", "Get-CimInstance Win32_Process | Select-Object ProcessId,CommandLine,ExecutablePath,CreationDate | ConvertTo-Json -Compress").Output()
 	if err != nil {
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
@@ -74,8 +82,15 @@ func listWindowsBridgeProcesses(ctx context.Context) ([]windowsBridgeProcess, er
 }
 
 func windowsHasSocketArgument(command, socket string) bool {
-	for _, needle := range []string{"--socket " + socket, "--socket \"" + socket + "\""} {
-		if strings.Contains(command, needle+" ") || strings.HasSuffix(command, needle) {
+	args, err := windows.DecomposeCommandLine(command)
+	if err != nil {
+		return false
+	}
+	for i, arg := range args {
+		if arg == "--socket" && i+1 < len(args) && args[i+1] == socket {
+			return true
+		}
+		if strings.HasPrefix(arg, "--socket=") && strings.TrimPrefix(arg, "--socket=") == socket {
 			return true
 		}
 	}
@@ -84,4 +99,52 @@ func windowsHasSocketArgument(command, socket string) bool {
 
 func stopLegacyBridgeCandidates(ctx context.Context, socket string) (bool, error) {
 	return stopBridgeOwner(ctx, socket)
+}
+
+func windowsIsBridgeCommand(p windowsBridgeProcess) bool {
+	if p.Created == "" || !isBridgeExecutable(p.Executable) {
+		return false
+	}
+	args, err := windows.DecomposeCommandLine(p.Command)
+	return err == nil && len(args) >= 3 && args[1] == "bridge" && args[2] == "serve" && isBridgeExecutable(args[0])
+}
+
+func InspectOwners(ctx context.Context, profile string) ([]OwnerDiagnostic, error) {
+	socket, err := SocketPath(profile)
+	if err != nil {
+		return nil, err
+	}
+	owners, err := inspectSocketOwners(ctx, socket)
+	if err != nil {
+		return nil, err
+	}
+	legacy, err := legacySocketPathForSocket(socket)
+	if err != nil {
+		return nil, err
+	}
+	if legacy != socket {
+		previous, err := inspectSocketOwners(ctx, legacy)
+		if err != nil {
+			return nil, err
+		}
+		owners = append(owners, previous...)
+	}
+	return owners, nil
+}
+func inspectSocketOwners(ctx context.Context, socket string) ([]OwnerDiagnostic, error) {
+	processes, err := listWindowsBridgeProcesses(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var result []OwnerDiagnostic
+	for _, p := range processes {
+		if p.PID == os.Getpid() || !windowsHasSocketArgument(p.Command, socket) || !strings.Contains(p.Command, "bridge serve") {
+			continue
+		}
+		result = append(result, OwnerDiagnostic{PID: p.PID, Executable: p.Executable, Verified: windowsIsBridgeCommand(p)})
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return result, nil
 }

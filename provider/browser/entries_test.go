@@ -92,7 +92,8 @@ func TestBrowseEntryAppliesSkillOCRWithoutReturningInternalMedia(t *testing.T) {
 	browsePage = func(_ context.Context, req *internalbrowser.BrowserBrowseRequest) (*internalbrowser.BrowserBrowseResponse, error) {
 		return &internalbrowser.BrowserBrowseResponse{
 			URL: req.URL, Markdown: "body",
-			Metadata: map[string]any{"image_urls": []any{"https://images.example.test/browser.png"}},
+			Metadata:  map[string]any{"image_urls": []any{"https://images.example.test/browser.png"}},
+			ImageData: []map[string]string{{"url": "https://images.example.test/browser.png", "data": "data:image/png;base64,YQ=="}},
 		}, nil
 	}
 	t.Cleanup(func() { browsePage = oldBrowsePage })
@@ -125,7 +126,8 @@ func TestBrowseEntryPreservesPageContentWhenConfiguredOCRProviderFails(t *testin
 	browsePage = func(_ context.Context, req *internalbrowser.BrowserBrowseRequest) (*internalbrowser.BrowserBrowseResponse, error) {
 		return &internalbrowser.BrowserBrowseResponse{
 			URL: req.URL, Markdown: "page body",
-			Metadata: map[string]any{"image_urls": []any{server.URL + "/image.png"}},
+			Metadata:  map[string]any{"image_urls": []any{server.URL + "/image.png"}},
+			ImageData: []map[string]string{{"url": server.URL + "/image.png", "data": "data:image/png;base64,YQ=="}},
 		}, nil
 	}
 	t.Cleanup(func() { browsePage = oldBrowsePage })

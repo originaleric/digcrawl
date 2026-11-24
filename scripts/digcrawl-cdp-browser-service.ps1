@@ -41,6 +41,10 @@ $ExplicitPort = $Port
 $ExplicitUserDataDir = $UserDataDir
 $ExplicitLogDir = $LogDir
 $ExplicitChromePath = if ($ChromePathExplicit) { $env:DIGCRAWL_CHROME_PATH } else { $null }
+$DigCrawlBinExplicit = -not [string]::IsNullOrWhiteSpace($env:DIGCRAWL_BIN)
+$BrowserDirExplicit = -not [string]::IsNullOrWhiteSpace($env:DIGCRAWL_BROWSER_DIR)
+$ExplicitDigCrawlBin = $env:DIGCRAWL_BIN
+$ExplicitBrowserDir = $env:DIGCRAWL_BROWSER_DIR
 
 function Fail([string]$Message) {
     throw "error: $Message"
@@ -84,29 +88,10 @@ function Remove-ActiveServiceIfCurrent {
 }
 
 function Get-ChromePath {
-    $candidates = @()
-    if ($env:DIGCRAWL_CHROME_PATH) { $candidates += $env:DIGCRAWL_CHROME_PATH }
-    foreach ($registryPath in @(
-        'HKCU:\Software\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe',
-        'HKLM:\Software\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe',
-        'HKCU:\Software\Microsoft\Windows\CurrentVersion\App Paths\msedge.exe',
-        'HKLM:\Software\Microsoft\Windows\CurrentVersion\App Paths\msedge.exe'
-    )) {
-        if (Test-Path $registryPath) {
-            $candidates += (Get-ItemProperty -Path $registryPath -ErrorAction SilentlyContinue).'(default)'
-        }
-    }
-    foreach ($base in @($env:ProgramFiles, ${env:ProgramFiles(x86)}, $env:LOCALAPPDATA)) {
-        if ($base) {
-            $candidates += (Join-Path $base 'Google\Chrome\Application\chrome.exe')
-            $candidates += (Join-Path $base 'Chromium\Application\chrome.exe')
-            $candidates += (Join-Path $base 'Microsoft\Edge\Application\msedge.exe')
-        }
-    }
-    foreach ($candidate in $candidates | Where-Object { $_ } | Select-Object -Unique) {
-        if (Test-Path -LiteralPath $candidate -PathType Leaf) { return $candidate }
-    }
-    Fail 'no supported system Chrome/Chromium/Edge found; install one or set DIGCRAWL_CHROME_PATH'
+    $digcrawl = if ($env:DIGCRAWL_BIN) { $env:DIGCRAWL_BIN } else { Join-Path $HOME '.local\bin\digcrawl.exe' }
+    $result = if ($env:DIGCRAWL_CHROME_PATH) { & $digcrawl browser runtime --expect $env:DIGCRAWL_CHROME_PATH } else { & $digcrawl browser runtime }
+    if ($LASTEXITCODE -ne 0 -or -not $result) { Fail 'isolated runtime unavailable; run digcrawl browser install and reinstall this service' }
+    return "$result".Trim()
 }
 
 function Get-CdpUrl { "http://127.0.0.1:$Port/json/version" }
@@ -167,6 +152,8 @@ function Import-ServiceConfig([string]$Path = $ServiceConfigPath) {
         if (-not [string]::IsNullOrWhiteSpace([string]$saved.user_data_dir)) { $script:UserDataDir = [string]$saved.user_data_dir }
         if (-not [string]::IsNullOrWhiteSpace([string]$saved.log_dir)) { $script:LogDir = [string]$saved.log_dir }
         if (-not [string]::IsNullOrWhiteSpace([string]$saved.chrome_path)) { $env:DIGCRAWL_CHROME_PATH = [string]$saved.chrome_path }
+        if ($saved.PSObject.Properties.Name -contains "digcrawl_bin" -and $saved.digcrawl_bin) { $env:DIGCRAWL_BIN = [string]$saved.digcrawl_bin }
+        if ($saved.PSObject.Properties.Name -contains "browser_dir" -and $saved.browser_dir) { $env:DIGCRAWL_BROWSER_DIR = [string]$saved.browser_dir }
         Validate-ServiceName
         Validate-Config
         return $true
@@ -180,6 +167,8 @@ function Apply-ExplicitRuntimeOverrides {
     if ($UserDataDirExplicit) { $script:UserDataDir = $ExplicitUserDataDir }
     if ($LogDirExplicit) { $script:LogDir = $ExplicitLogDir }
     if ($ChromePathExplicit) { $env:DIGCRAWL_CHROME_PATH = $ExplicitChromePath }
+    if ($DigCrawlBinExplicit) { $env:DIGCRAWL_BIN = $ExplicitDigCrawlBin }
+    if ($BrowserDirExplicit) { $env:DIGCRAWL_BROWSER_DIR = $ExplicitBrowserDir }
 }
 
 function Validate-ExplicitRuntimeOverrides {
@@ -188,10 +177,14 @@ function Validate-ExplicitRuntimeOverrides {
     $savedLogDir = $LogDir
     $hadChromePath = Test-Path Env:DIGCRAWL_CHROME_PATH
     $savedChromePath = $env:DIGCRAWL_CHROME_PATH
+    $savedDigCrawlBin = $env:DIGCRAWL_BIN
+    $savedBrowserDir = $env:DIGCRAWL_BROWSER_DIR
     try {
         Apply-ExplicitRuntimeOverrides
         Validate-Config
     } finally {
+        $env:DIGCRAWL_BIN = $savedDigCrawlBin
+        $env:DIGCRAWL_BROWSER_DIR = $savedBrowserDir
         $script:Port = $savedPort
         $script:UserDataDir = $savedUserDataDir
         $script:LogDir = $savedLogDir
@@ -234,6 +227,8 @@ function Save-ServiceConfig([string]$ChromePath) {
         user_data_dir = $UserDataDir
         log_dir = $LogDir
         chrome_path = $ChromePath
+        digcrawl_bin = $env:DIGCRAWL_BIN
+        browser_dir = $env:DIGCRAWL_BROWSER_DIR
     }
     $temporaryPath = "$ServiceConfigPath.$PID.tmp"
     try {
@@ -255,7 +250,7 @@ function Get-ManagedChromeProcesses {
     # token boundaries, so neither port/profile prefixes nor helpers match.
     $profilePattern = '(?<!\S)"?--user-data-dir="?' + [regex]::Escape($UserDataDir) + '"?(?=\s|$)'
     $helperPattern = '(?<!\S)"?--type='
-    Get-CimInstance Win32_Process -Filter "Name='chrome.exe' OR Name='msedge.exe'" | Where-Object {
+    Get-CimInstance Win32_Process -Filter "Name='chrome.exe' OR Name='msedge.exe' OR Name='chrome-headless-shell.exe'" | Where-Object {
         $_.CommandLine -and $_.CommandLine -match $portPattern -and $_.CommandLine -match $profilePattern -and $_.CommandLine -notmatch $helperPattern
     }
 }
@@ -270,7 +265,7 @@ function Get-MutedManagedChromeProcesses {
 
 function Get-ChromeLaunchArguments {
     @(
-        '--headless=new',
+        '--headless=new', '--enable-automation',
         '--remote-debugging-address=127.0.0.1',
         "--remote-debugging-port=$Port",
         "--user-data-dir=$UserDataDir",
@@ -283,6 +278,7 @@ function Get-ChromeLaunchArguments {
 }
 
 function Run-Foreground {
+    if ((Split-Path -Leaf $UserDataDir) -ne 'digcrawl-isolated') { $script:UserDataDir = Join-Path $UserDataDir 'digcrawl-isolated' }
     Validate-Config
     if (Test-CdpReady) {
         if (-not (Test-ServiceCdpReady)) {
@@ -310,13 +306,16 @@ function Install-Service {
     Validate-ServiceName
     Prepare-Install
     Apply-ExplicitRuntimeOverrides
+    if (-not $ChromePathExplicit) { Remove-Item Env:DIGCRAWL_CHROME_PATH -ErrorAction SilentlyContinue }
     Validate-Config
     Validate-ServiceName
     Ensure-Directories
     $chrome = Get-ChromePath
+    $env:DIGCRAWL_BROWSER_DIR = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $chrome))
     # Task Scheduler does not inherit the installer's transient environment.
     # Persist the complete validated launch configuration beside the per-user
     # profile so every later task start uses the same source of truth.
+    if ((Split-Path -Leaf $UserDataDir) -ne 'digcrawl-isolated') { $script:UserDataDir = Join-Path $UserDataDir 'digcrawl-isolated' }
     Save-ServiceConfig $chrome
     # The scheduled Task executes a fresh PowerShell process without this
     # installer's environment. Publish the active identity before a later
