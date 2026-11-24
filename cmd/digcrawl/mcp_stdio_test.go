@@ -342,15 +342,21 @@ func TestMain(m *testing.M) {
 		if runtime.GOOS == "darwin" {
 			base = "/tmp"
 		}
-		root, err := os.MkdirTemp(base, "dck-test-")
+		prefix := "dck-test-"
+		if runtime.GOOS == "windows" {
+			prefix = "dc-"
+		}
+		root, err := os.MkdirTemp(base, prefix)
 		if err != nil {
 			panic(err)
 		}
 		_ = os.Setenv("HOME", root)
 		if runtime.GOOS == "windows" {
+			// Keep both derived socket roots below AF_UNIX's path limit even
+			// with Windows' longer native temporary directory.
 			_ = os.Setenv("USERPROFILE", root)
-			_ = os.Setenv("APPDATA", filepath.Join(root, "roaming"))
-			_ = os.Setenv("LOCALAPPDATA", filepath.Join(root, "local"))
+			_ = os.Setenv("APPDATA", filepath.Join(root, "r"))
+			_ = os.Setenv("LOCALAPPDATA", filepath.Join(root, "c"))
 		}
 		_ = os.Setenv("DIGCRAWL_TEST_HOME", root)
 		temporaryHome = root
