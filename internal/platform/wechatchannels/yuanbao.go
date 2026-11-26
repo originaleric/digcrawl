@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -270,22 +271,39 @@ func bindYuanbaoLoginProfile(err error, cfg *config.Config) error {
 	if !errors.As(err, &login) || login.Code != platform.ErrLoginRequired || cfg.SourcePath == "" {
 		return err
 	}
-	quote := func(value string) string {
-		return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
-	}
-	command := "digcrawl browser login --platform wechat_channels --config " + quote(cfg.SourcePath)
+	workingDir := ""
 	login.Meta["login_config_path"] = cfg.SourcePath
 	// Existing project profiles may resolve their session directory relative
 	// to the running process. Preserve that directory when logging in.
 	if !filepath.IsAbs(cfg.LocalBrowser.CookieStoreDir) {
 		if dir, err := os.Getwd(); err == nil {
 			login.Meta["login_working_directory"] = dir
-			command = "(cd " + quote(dir) + " && " + command + ")"
+			workingDir = dir
 		}
 	}
+	command := yuanbaoLoginCommand(cfg.SourcePath, workingDir, runtime.GOOS)
 	login.Meta["login_command"] = command
 	login.Message = "需要登录腾讯元宝。请运行 " + command + "，登录后重试原链接。"
 	return login
+}
+
+// yuanbaoLoginCommand preserves the request's session directory in the native
+// shell without changing the user's working directory after login.
+func yuanbaoLoginCommand(profile, workingDir, goos string) string {
+	quote := func(value string) string {
+		if goos == "windows" {
+			return "'" + strings.ReplaceAll(value, "'", "''") + "'"
+		}
+		return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
+	}
+	command := "digcrawl browser login --platform wechat_channels --config " + quote(profile)
+	if workingDir == "" {
+		return command
+	}
+	if goos == "windows" {
+		return "& { Push-Location -LiteralPath " + quote(workingDir) + " -ErrorAction Stop; try { " + command + " } finally { Pop-Location } }"
+	}
+	return "(cd " + quote(workingDir) + " && " + command + ")"
 }
 
 func isHTTPSURL(u *url.URL) bool {

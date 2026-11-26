@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -269,7 +270,7 @@ func TestBridgeCapturesExplicitDiagnosticPageHTMLBeforeInjection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm()&0o077 != 0 {
+	if runtime.GOOS != "windows" && info.Mode().Perm()&0o077 != 0 {
 		t.Fatalf("diagnostic capture permissions=%#o; must not expose group/world access", info.Mode().Perm())
 	}
 }
@@ -346,7 +347,7 @@ func TestBridgeCapturesOnlySafeCandidateMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm()&0o077 != 0 {
+	if runtime.GOOS != "windows" && info.Mode().Perm()&0o077 != 0 {
 		t.Fatalf("diagnostic metadata permissions=%#o; must not expose group/world access", info.Mode().Perm())
 	}
 }

@@ -6,7 +6,10 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
+	"slices"
 	"strings"
 	"testing"
 
@@ -135,9 +138,44 @@ func TestYuanbaoLoginActionUsesRequestProfile(t *testing.T) {
 		errors.As(err, &login)
 		command, _ := login.Meta["login_command"].(string)
 		if login.Meta["login_config_path"] != profile || login.Meta["login_working_directory"] != dir ||
-			!strings.Contains(command, `--config '`+dir+`/user'"'"'s profile.yaml'`) || !strings.HasPrefix(command, "(cd ") {
+			command != yuanbaoLoginCommand(profile, dir, runtime.GOOS) {
 			t.Fatalf("login action is not bound to the request profile and working directory: %+v", login.Meta)
 		}
+	}
+}
+
+func TestYuanbaoLoginCommandQuotesEachShell(t *testing.T) {
+	for _, tc := range []struct{ goos, want string }{
+		{"darwin", `(cd '/work dir' && digcrawl browser login --platform wechat_channels --config 'user'"'"'s $profile.yaml')`},
+		{"windows", `& { Push-Location -LiteralPath '/work dir' -ErrorAction Stop; try { digcrawl browser login --platform wechat_channels --config 'user''s $profile.yaml' } finally { Pop-Location } }`},
+	} {
+		if got := yuanbaoLoginCommand("user's $profile.yaml", "/work dir", tc.goos); got != tc.want {
+			t.Fatalf("%s command=%s; want %s", tc.goos, got, tc.want)
+		}
+	}
+}
+
+func TestYuanbaoLoginCommandPreservesNativeShellArgumentsAndDirectory(t *testing.T) {
+	original := t.TempDir()
+	t.Chdir(original)
+	workingDir := filepath.Join(original, "user's $work [dir]")
+	if err := os.Mkdir(workingDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	profile := filepath.Join(workingDir, "user's $profile.yaml")
+	command := yuanbaoLoginCommand(profile, workingDir, runtime.GOOS)
+	shell, args := "sh", []string{"-c", `digcrawl() { printf '%s\n' "$PWD" "$@"; }; ` + command + `; pwd`}
+	if runtime.GOOS == "windows" {
+		shell, args = "powershell", []string{"-NoProfile", "-NonInteractive", "-Command", `function digcrawl { (Get-Location).Path; $args }; ` + command + `; (Get-Location).Path`}
+	}
+	out, err := exec.CommandContext(t.Context(), shell, args...).CombinedOutput()
+	if err != nil {
+		t.Fatalf("execute login command: %v: %s", err, out)
+	}
+	got := strings.Split(strings.TrimSpace(strings.ReplaceAll(string(out), "\r\n", "\n")), "\n")
+	want := []string{workingDir, "browser", "login", "--platform", "wechat_channels", "--config", profile, original}
+	if !slices.Equal(got, want) {
+		t.Fatalf("login shell output=%q; want %q", got, want)
 	}
 }
 

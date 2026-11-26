@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -33,7 +34,7 @@ func TestNewWechatChannelsCaptureStateDirUsesTimestampAndRandomSuffix(t *testing
 		t.Fatalf("timestamped directory = %q", filepath.Base(first))
 	}
 	info, err := os.Stat(first)
-	if err != nil || !info.IsDir() || info.Mode().Perm() != 0o700 {
+	if err != nil || !info.IsDir() || (runtime.GOOS != "windows" && info.Mode().Perm() != 0o700) {
 		t.Fatalf("state directory info=%#v err=%v", info, err)
 	}
 }
