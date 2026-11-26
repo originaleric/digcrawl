@@ -13,6 +13,7 @@ import (
 	"github.com/originaleric/digcrawl/internal/platform/instagram"
 	"github.com/originaleric/digcrawl/internal/platform/threads"
 	"github.com/originaleric/digcrawl/internal/platform/toutiao"
+	"github.com/originaleric/digcrawl/internal/platform/wechatchannels"
 	"github.com/originaleric/digcrawl/internal/platform/xiaohongshu"
 	"github.com/originaleric/digcrawl/internal/platform/youtube"
 )
@@ -38,16 +39,23 @@ func Check(ctx context.Context, opts Options) error {
 	ctx, cancel := context.WithTimeout(ctx, opts.Timeout)
 	defer cancel()
 
-	resp, err := browser.BrowserBrowse(ctx, &browser.BrowserBrowseRequest{
-		URL:             spec.IndexURL,
-		Action:          "read",
-		Mode:            "summary",
-		UseCookieDomain: spec.CookieDomain,
-	})
-	if err != nil {
-		return fmt.Errorf("pong 失败: %w", err)
+	if platformName == wechatchannels.PlatformName {
+		if err := wechatchannels.CheckYuanbaoSession(config.Get()); err != nil {
+			return err
+		}
+		fmt.Println("[check] 检测到本地元宝会话，使用 --url 可验证联网解析")
+	} else {
+		resp, err := browser.BrowserBrowse(ctx, &browser.BrowserBrowseRequest{
+			URL:             spec.IndexURL,
+			Action:          "read",
+			Mode:            "summary",
+			UseCookieDomain: spec.CookieDomain,
+		})
+		if err != nil {
+			return fmt.Errorf("pong 失败: %w", err)
+		}
+		fmt.Printf("[check] pong ok platform=%s url=%s\n", spec.Platform, resp.URL)
 	}
-	fmt.Printf("[check] pong ok platform=%s url=%s\n", spec.Platform, resp.URL)
 
 	probeURL := strings.TrimSpace(opts.ProbeURL)
 	if probeURL == "" {
@@ -76,6 +84,8 @@ func Check(ctx context.Context, opts Options) error {
 		content, err = instagram.ReadContent(ctx, in)
 	case "youtube":
 		content, err = youtube.ReadVideo(ctx, in)
+	case wechatchannels.PlatformName:
+		content, _, err = wechatchannels.ResolveShareVideo(ctx, in, config.Get())
 	default:
 		return fmt.Errorf("不支持试读平台 %q", platformName)
 	}

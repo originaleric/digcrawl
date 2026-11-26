@@ -131,12 +131,12 @@ func EntryFromExport(url, platform string, out map[string]any, paths OutputPaths
 	title, _ := out["title"].(string)
 	files := map[string]string{}
 	for _, w := range written {
-		switch filepath.Ext(w) {
-		case ".md":
+		switch w {
+		case paths.Markdown:
 			files["md"] = w
-		case ".html":
+		case paths.HTML:
 			files["html"] = w
-		case ".json":
+		case paths.JSON:
 			files["json"] = w
 		}
 	}

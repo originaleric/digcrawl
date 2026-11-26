@@ -80,6 +80,8 @@ The installer verifies downloads and installs the program, complete Skill, and d
 - **Video and content platforms**: Douyin, Toutiao, Bilibili, Kuaishou, YouTube.
 - **Web and feeds**: Web pages, RSS, Atom, sitemaps, platform lists, and profiles.
 
+- **Local experiment**: WeChat Channels share links, local transcription, and chat-card capture. See the [local guide](./docs/微信视频号本地抓取使用手册.md) and [integration update](./updates/2026-11-24-微信视频号短链与本机转写接入更新.md).
+
 See [source details](./USAGE.md#supported-content-sources) for platform capabilities and login requirements.
 
 ## Collect, Export, and Watch

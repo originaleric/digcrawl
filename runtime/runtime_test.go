@@ -96,7 +96,7 @@ func TestRecommendedCallTimeoutIncludesOptedInImageRetention(t *testing.T) {
 	cfg := &config.Config{
 		LocalBrowser: config.LocalBrowserConfig{TotalTimeoutSec: 90},
 		ImageDownload: config.ImageDownloadConfig{
-			Providers:  map[string]bool{"reddit": true},
+			Providers:  map[string]bool{"reddit": true, "web": true},
 			TimeoutSec: 300,
 		},
 	}
@@ -105,6 +105,10 @@ func TestRecommendedCallTimeoutIncludesOptedInImageRetention(t *testing.T) {
 	call := &protocol.ToolCall{Tool: "reddit.post.read", Input: json.RawMessage(`{"url":"https://example.com/post"}`)}
 	if got, want := RecommendedCallTimeout(cfg, call), 420*time.Second; got != want {
 		t.Fatalf("image retention timeout=%s want %s", got, want)
+	}
+	web := &protocol.ToolCall{Tool: "browser.browse", Input: call.Input}
+	if got, want := RecommendedCallTimeout(cfg, web), 420*time.Second; got != want {
+		t.Fatalf("browser image retention timeout=%s want %s", got, want)
 	}
 	notOptedIn := &protocol.ToolCall{Tool: "x.post.read", Input: call.Input}
 	if got, want := RecommendedCallTimeout(cfg, notOptedIn), 120*time.Second; got != want {
@@ -164,6 +168,60 @@ func TestRecommendedCallTimeoutIncludesExplicitOCRBudgets(t *testing.T) {
 	call := &protocol.ToolCall{Input: json.RawMessage(`{"include_ocr":true}`)}
 	if got, want := RecommendedCallTimeout(cfg, call), 290*time.Second; got != want {
 		t.Fatalf("OCR timeout=%s want %s", got, want)
+	}
+}
+
+func TestRecommendedCallTimeoutIncludesDefaultReadOCRBudgets(t *testing.T) {
+	enabled := true
+	cfg := &config.Config{Skill: config.SkillConfig{
+		Media: config.SkillMediaConfig{DownloadMedia: true, TimeoutSec: 300},
+		OCR: config.OCRConfig{
+			Enabled: &enabled, TimeoutSec: 20, MaxImages: 3,
+			VideoFrames: config.VideoFrameOCRConfig{Enabled: &enabled, TimeoutSec: 40, MaxTotalFrames: 2},
+		},
+	}}
+	for _, tc := range []struct {
+		tool string
+		want time.Duration
+	}{
+		{"wechat.channels.read", 600 * time.Second},
+		{"youtube.video.read", 560 * time.Second},
+		{"browser.browse", 560 * time.Second},
+		{"source.discover", 120 * time.Second},
+	} {
+		call := &protocol.ToolCall{Tool: tc.tool, Input: json.RawMessage(`{"include_ocr":false}`)}
+		if got := RecommendedCallTimeout(cfg, call); got != tc.want {
+			t.Errorf("%s timeout = %s, want %s", tc.tool, got, tc.want)
+		}
+	}
+}
+
+func TestRecommendedBrowserOCRBudgetUsesEffectiveConfiguration(t *testing.T) {
+	enabled := true
+	root := config.OCRConfig{Enabled: &enabled, MaxImages: 3, TimeoutSec: 80}
+	skill := config.OCRConfig{Enabled: &enabled, MaxImages: 2, TimeoutSec: 20}
+	for _, tc := range []struct {
+		name, tool string
+		skill      config.OCRConfig
+		explicit   bool
+		want       time.Duration
+	}{
+		{"root fallback", "browser.browse", config.OCRConfig{}, false, 360 * time.Second},
+		{"enabled Skill takes precedence", "browser.browse", skill, false, 160 * time.Second},
+		{"explicit request selects disabled Skill", "browser.browse", config.OCRConfig{}, true, 120 * time.Second},
+		{"platform reader ignores root OCR", "wechat.channels.read", config.OCRConfig{}, false, 160 * time.Second},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &config.Config{OCR: root, Skill: config.SkillConfig{OCR: tc.skill}}
+			input, err := json.Marshal(map[string]bool{"include_ocr": tc.explicit})
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := RecommendedCallTimeout(cfg, &protocol.ToolCall{Tool: tc.tool, Input: input})
+			if got != tc.want {
+				t.Fatalf("timeout = %s, want %s", got, tc.want)
+			}
+		})
 	}
 }
 
@@ -408,5 +466,23 @@ func TestMapBrowserFailureRetainsRecoveryInstructions(t *testing.T) {
 	out := mapError(e)
 	if out.Code != browser.ErrorBrowserTimeout || out.Details["operation"] != "send_queue" || out.Details["diagnostic_id"] != "read-1" || out.Details["next_actions"] == nil {
 		t.Fatalf("recovery instruction lost: %+v", out)
+	}
+}
+
+func TestWechatBudgetCoversResolutionScreenshotAndMedia(t *testing.T) {
+	cfg := &config.Config{
+		LocalBrowser: config.LocalBrowserConfig{TotalTimeoutSec: 15},
+		Skill:        config.SkillConfig{Media: config.SkillMediaConfig{TimeoutSec: 20}},
+	}
+	call := &protocol.ToolCall{Tool: "wechat.channels.read", Input: json.RawMessage(`{"include_media":true,"include_screenshot":true}`)}
+	if got := RecommendedCallTimeout(cfg, call); got < 75*time.Second {
+		t.Fatalf("resolution, screenshot and download truncated: %s", got)
+	}
+	call.Policy.TimeoutMs = 1000
+	rt := New(registry.New(), Options{TimeoutForCall: func(call *protocol.ToolCall) time.Duration {
+		return RecommendedCallTimeout(cfg, call)
+	}})
+	if got := rt.ExecutionTimeout(call); got != time.Second {
+		t.Fatalf("explicit caller deadline lost: %s", got)
 	}
 }

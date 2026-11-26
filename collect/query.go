@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -40,10 +41,15 @@ func ShowCollect(ctx context.Context, cfg *config.Config, idOrURL string) (*stor
 	defer db.Close()
 
 	idOrURL = strings.TrimSpace(idOrURL)
-	if strings.HasPrefix(idOrURL, "http://") || strings.HasPrefix(idOrURL, "https://") {
+	if isSourceURL(idOrURL) {
 		return db.GetByURL(ctx, idOrURL)
 	}
 	return db.GetByID(ctx, idOrURL)
+}
+
+func isSourceURL(raw string) bool {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	return err == nil && u.Scheme != "" && u.Host != ""
 }
 
 // SearchCollects searches SQLite by URL/title/platform substring.
@@ -107,6 +113,8 @@ func platformToolName(platform string) string {
 	switch platform {
 	case "wechat":
 		return "wechat.article.read"
+	case "wechat_channels":
+		return "wechat.channels.import"
 	case "xiaohongshu":
 		return "xiaohongshu.note.read"
 	case "douyin":

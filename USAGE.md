@@ -217,6 +217,17 @@ This is a manual service for the current user. `install` only saves configuratio
 
 Public WeChat articles use static HTTP HTML parsing first, returning `read_channel=http` and `extraction_source=html` in `platform_metadata` on success. Only transient network failures or uncertain parsing enter browser fallback. Captchas, rate limits, deletions, private content, login requirements, and final URLs outside WeChat domains return structured errors directly.
 
+### Local WeChat Channels card import
+
+For Channels chat cards without a stable public URL, start the local macOS bridge, open and play the card in WeChat, and run the import command in another terminal:
+
+```bash
+digcrawl wechat-channels bridge start --yes
+digcrawl wechat-channels import
+```
+
+The bridge requires confirmation before temporarily installing a local CA and enabling a loopback PAC for `*.qq.com`. Stop it with Ctrl-C or `digcrawl wechat-channels bridge stop` to restore its networking changes and remove its certificate. Import previews the active card and asks for confirmation; automated import requires `--yes`. This import command archives metadata only. See the [local guide](./docs/微信视频号本地抓取使用手册.md) for proxy restrictions, custom bridge addresses, state directories, and the separate video download workflow.
+
 X single-post reading first tries the public Syndication endpoint, without Cookies, an account, or a paid API. On success it parses post text, public images, and the best available direct MP4 reference. Rate limiting, endpoint unavailability, mismatched content IDs, or response changes fall back to the existing Tweet lookup API, public oEmbed, and finally the browser. Login walls, deletions, invisible content, and empty shells return structured errors. These paths do not access private or login-restricted content.
 
 Keep the default `Platform.X` settings unless disabling the public endpoint or replacing it in a controlled environment:
@@ -803,6 +814,9 @@ digcrawl stdio [flags]         # Line-delimited JSON protocol
 digcrawl dev-host [flags]      # Local reference host (development only)
 digcrawl collect <url>         # Collect a single URL
 digcrawl collect inbox         # Process the inbox
+digcrawl wechat-channels bridge start --yes # Start the macOS bridge and open WeChat
+digcrawl wechat-channels bridge stop # Stop the bridge and restore system settings
+digcrawl wechat-channels import # Import metadata for the actively played Channels card
 digcrawl browser login         # Interactive/platform QR login and Cookie storage
 digcrawl browser check         # Check platform sessions, optionally with trial reads
 digcrawl asr setup --yes        # Select project/user Skill configuration, install isolated faster-whisper, and verify the selected local model

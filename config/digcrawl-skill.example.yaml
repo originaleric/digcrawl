@@ -16,6 +16,7 @@ Gateway:
     - skill.media.configure
     - browser.browse
     - wechat.article.read
+    - wechat.channels.read
     - xiaohongshu.note.read
     - douyin.video.read
     - toutiao.article.read

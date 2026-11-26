@@ -499,6 +499,7 @@ func TestDefaultAllowedToolsIncludeSocialAndDomesticProviders(t *testing.T) {
 		"kuaishou.video.read",
 		"zhihu.content.read",
 		"youtube.video.read",
+		"wechat.channels.read",
 	} {
 		if !stringSliceContains(cfg.Gateway.AllowedTools, tool) {
 			t.Fatalf("gateway allowed tools missing %s", tool)
@@ -533,6 +534,7 @@ func TestDefaultAllowedToolsIncludeSocialAndDomesticProviders(t *testing.T) {
 		"m.youtube.com",
 		"youtu.be",
 		"www.youtu.be",
+		"channels.weixin.qq.com",
 	} {
 		if !stringSliceContains(cfg.LocalBrowser.AllowedDomains, domain) {
 			t.Fatalf("local browser allowed domains missing %s", domain)
@@ -552,7 +554,7 @@ func TestDigCrawlSkillExampleUsesReadOnlyToolProfile(t *testing.T) {
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		t.Fatal(err)
 	}
-	for _, tool := range []string{"gateway.ping", "skill.asr.enable", "skill.media.configure", "browser.browse", "wechat.article.read", "feed.read"} {
+	for _, tool := range []string{"gateway.ping", "skill.asr.enable", "skill.media.configure", "browser.browse", "wechat.article.read", "wechat.channels.read", "feed.read"} {
 		if !stringSliceContains(cfg.Gateway.AllowedTools, tool) {
 			t.Fatalf("skill profile missing %s", tool)
 		}

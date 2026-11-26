@@ -908,3 +908,85 @@ func TestPlatformReadHandlerFailsWhenScreenshotCannotBePersisted(t *testing.T) {
 		t.Fatalf("handler must not return an unusable artifact id: out=%+v artifacts=%+v", out, artifacts)
 	}
 }
+
+func TestPlatformScreenshotHonorsGlobalMediaConfiguration(t *testing.T) {
+	for _, platform := range []struct {
+		name, tool, url string
+		domains         []string
+	}{
+		{"toutiao", ToolToutiaoVideoRead, "https://www.toutiao.com/video/7200000000000000000/", toutiaoDefaultDomains},
+		{"wechat_channels", ToolWechatChannelsRead, "https://weixin.qq.com/sph/AauAggqePs", wechatDefaultDomains},
+	} {
+		for _, settings := range []struct {
+			name           string
+			frames, retain bool
+		}{
+			{name: "screenshot"},
+			{name: "frame OCR", frames: true},
+			{name: "retention", retain: true},
+			{name: "frame OCR and retention", frames: true, retain: true},
+		} {
+			t.Run(platform.name+"/"+settings.name, func(t *testing.T) {
+				root := t.TempDir()
+				yes := true
+				cfg := &config.Config{}
+				if settings.frames {
+					cfg.Skill.OCR = config.OCRConfig{Enabled: &yes, Provider: "stub",
+						VideoFrames: config.VideoFrameOCRConfig{Enabled: &yes}}
+				}
+				if settings.retain {
+					blocked := filepath.Join(root, "blocked")
+					if err := os.WriteFile(blocked, nil, 0o600); err != nil {
+						t.Fatal(err)
+					}
+					cfg.VideoDownload = config.VideoDownloadConfig{
+						Dir: blocked, Providers: map[string]bool{platform.name: true},
+					}
+				}
+				store, err := artifact.NewDiskStore(filepath.Join(root, "artifacts"), time.Hour)
+				if err != nil {
+					t.Fatal(err)
+				}
+				reads := 0
+				reader := func(_ context.Context, in iplatform.ReadInput) (*iplatform.Content, error) {
+					reads++
+					if !in.IncludeScreenshot || in.IncludeMedia != (settings.frames || settings.retain) {
+						t.Fatalf("unexpected effective read input: %+v", in)
+					}
+					return &iplatform.Content{
+						Platform: platform.name, ContentType: "video", SourceURL: in.URL,
+						ScreenshotBase64: "iVBORw0KGgo=",
+						Media:            []iplatform.MediaItem{{Type: "video", URL: "https://example.com/video.mp4"}},
+					}, nil
+				}
+				entry := platformReadEntryWithConfig(platform.tool, "", nil, platform.domains, nil, store, reader, cfg)
+				input, err := json.Marshal(platformReadInput{URL: platform.url, IncludeScreenshot: true})
+				if err != nil {
+					t.Fatal(err)
+				}
+				out, attachments, err := entry.Handler(t.Context(), &protocol.ToolCall{Tool: platform.tool, Input: input})
+				if reads != 1 {
+					t.Fatalf("public reader ran %d times", reads)
+				}
+				switch {
+				case settings.retain:
+					var retentionErr *providerVideoDownloadError
+					if !errors.As(err, &retentionErr) || outputPlatformMetadata(out)["video_download_status"] != "failed" || len(attachments) != 0 {
+						t.Fatalf("global retention must apply: out=%v attachments=%v err=%v", out, attachments, err)
+					}
+				case settings.frames:
+					if err == nil || !strings.Contains(err.Error(), "Skill.Media.DownloadMedia must be true") || len(attachments) != 0 {
+						t.Fatalf("global frame OCR must enforce its media opt-in: out=%v err=%v", out, err)
+					}
+				default:
+					if err != nil || len(attachments) != 1 || out["screenshot_artifact_id"] != attachments[0].ID {
+						t.Fatalf("screenshot delivery: out=%v attachments=%v err=%v", out, attachments, err)
+					}
+					if _, mime, err := store.Get(t.Context(), attachments[0].ID); err != nil || mime != "image/png" {
+						t.Fatalf("screenshot unavailable: mime=%s err=%v", mime, err)
+					}
+				}
+			})
+		}
+	}
+}

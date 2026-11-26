@@ -35,11 +35,18 @@ ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd -P)"
 
 SERVICE_NAME="${DIGCRAWL_SERVICE_NAME:-digcrawl-watchlist}"
 SERVICE_LABEL="${DIGCRAWL_SERVICE_LABEL:-com.digcrawl.watchlist}"
+SERVICE_COMMAND="${DIGCRAWL_SERVICE_COMMAND:-watchlist}"
+SERVICE_LOG_PREFIX="${DIGCRAWL_SERVICE_LOG_PREFIX:-watchlist}"
+GATEWAY_ADDR="${DIGCRAWL_GATEWAY_ADDR:-127.0.0.1:8788}"
+case "${SERVICE_COMMAND}" in
+  watchlist|gateway) ;;
+  *) echo "error: unsupported service command: ${SERVICE_COMMAND}" >&2; exit 1 ;;
+esac
 WORKDIR="${DIGCRAWL_WORKDIR:-${ROOT_DIR}}"
 CONFIG_PATH="${DIGCRAWL_CONFIG:-${WORKDIR}/config/config.yaml}"
 LOG_DIR="${DIGCRAWL_LOG_DIR:-${WORKDIR}/logs}"
 DIGCRAWL_AUTO_BUILD="${DIGCRAWL_AUTO_BUILD:-1}"
-DIGCRAWL_BUILD_TAGS="${DIGCRAWL_BUILD_TAGS:-digflow_embedded}"
+DIGCRAWL_BUILD_TAGS="${DIGCRAWL_BUILD_TAGS-digflow_embedded}"
 DIGCRAWL_BUILD_GOCACHE="${DIGCRAWL_BUILD_GOCACHE:-/private/tmp/digcrawl-gocache}"
 DIGCRAWL_BUILD_GOMODCACHE="${DIGCRAWL_BUILD_GOMODCACHE:-${WORKDIR}/.tmp/go-mod-watchlist}"
 DIGCRAWL_SERVICE_PATH="${DIGCRAWL_SERVICE_PATH:-/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin}"
@@ -50,7 +57,7 @@ DIGCRAWL_CLI_BIN_DIR="${DIGCRAWL_CLI_BIN_DIR:-${HOME}/.local/bin}"
 if [[ -n "${DIGCRAWL_BIN:-}" ]]; then
   BIN_PATH="${DIGCRAWL_BIN}"
 elif [[ "${DIGCRAWL_AUTO_BUILD}" == "1" ]]; then
-  BIN_PATH="${WORKDIR}/bin/digcrawl-watchlist"
+  BIN_PATH="${WORKDIR}/bin/${SERVICE_NAME}"
 elif [[ -x "${WORKDIR}/digcrawl" ]]; then
   BIN_PATH="${WORKDIR}/digcrawl"
 else
@@ -65,7 +72,7 @@ COLOR_RESET=$'\033[0m'
 
 usage() {
   cat <<EOF
-Usage: $(basename "$0") <install|install-cli|build|rebuild|rebuild-restart|configure-ffmpeg|start|stop|restart|status|logs|uninstall|run-foreground>
+Usage: ${DIGCRAWL_SERVICE_SCRIPT_NAME:-$(basename "$0")} <install|install-cli|build|rebuild|rebuild-restart|configure-ffmpeg|start|stop|restart|status|logs|uninstall|run-foreground>
 
 Environment:
   DIGCRAWL_BIN            default: ${BIN_PATH:-<not found>}
@@ -74,6 +81,8 @@ Environment:
   DIGCRAWL_LOG_DIR        default: ${LOG_DIR}
   DIGCRAWL_SERVICE_NAME   default: ${SERVICE_NAME}
   DIGCRAWL_SERVICE_LABEL  default: ${SERVICE_LABEL}
+  DIGCRAWL_SERVICE_COMMAND default: ${SERVICE_COMMAND}
+  DIGCRAWL_GATEWAY_ADDR   default: ${GATEWAY_ADDR}
   DIGCRAWL_AUTO_BUILD     default: ${DIGCRAWL_AUTO_BUILD}
   DIGCRAWL_BUILD_TAGS     default: ${DIGCRAWL_BUILD_TAGS}
   DIGCRAWL_BUILD_GOCACHE  default: ${DIGCRAWL_BUILD_GOCACHE}
@@ -135,6 +144,15 @@ ensure_ffmpeg_env() {
   export PATH="${DIGCRAWL_SERVICE_PATH}:${PATH:-}"
 }
 
+prepare_service_env() {
+  export PATH="${DIGCRAWL_SERVICE_PATH}:${PATH:-}"
+  if [[ "${SERVICE_COMMAND}" == "watchlist" ]]; then
+    ensure_ffmpeg_env
+  elif detect_ffmpeg_path >/dev/null; then
+    ensure_ffmpeg_env
+  fi
+}
+
 configure_ffmpeg() {
   require_config
   ensure_ffmpeg_env
@@ -191,7 +209,9 @@ build_binary() (
     fi
     build_log="$(mktemp "${DIGCRAWL_BUILD_GOCACHE%/}/digcrawl-build.XXXXXX")" || fail "failed to create Go build log"
     staged_binary="$(mktemp "${BIN_PATH}.tmp.XXXXXX")" || fail "failed to stage digcrawl binary"
-    if ! GOCACHE="${DIGCRAWL_BUILD_GOCACHE}" GOMODCACHE="${DIGCRAWL_BUILD_GOMODCACHE}" "${go_bin}" build "${build_args[@]}" -o "${staged_binary}" ./cmd/digcrawl >"${build_log}" 2>&1; then
+    # Keep the array nonempty for macOS Bash 3.2 with nounset enabled.
+    build_args+=(-o "${staged_binary}" ./cmd/digcrawl)
+    if ! GOCACHE="${DIGCRAWL_BUILD_GOCACHE}" GOMODCACHE="${DIGCRAWL_BUILD_GOMODCACHE}" "${go_bin}" build "${build_args[@]}" >"${build_log}" 2>&1; then
       cat "${build_log}" >&2
       fail "failed to build digcrawl binary: ${BIN_PATH}"
     fi
@@ -295,12 +315,12 @@ mac_plist_path() {
 }
 
 mac_launcher_path() {
-  printf '%s/Library/Application Support/DigCrawl/bin/digcrawl-watchlist-service.sh' "${HOME}"
+  printf '%s/Library/Application Support/DigCrawl/bin/%s-service.sh' "${HOME}" "${SERVICE_NAME}"
 }
 
 stage_macos_launcher() {
   # launchd can be denied execution of scripts under protected folders such
-  # as Documents. Keep the single Watchlist launcher in Application Support,
+  # as Documents. Keep the service launcher in Application Support,
   # where the user-level service can execute it reliably.
   local launcher
   local temporary
@@ -314,16 +334,17 @@ stage_macos_launcher() {
 }
 
 reconcile_macos_launcher_reference() {
-  # Existing installations may still point launchd at a project script under
-  # Documents. Migrate only the executable entry, preserving the installed
-  # binary, config, log, and build settings already stored in the plist.
+  # Normalize the owned launch command, including legacy project launchers.
+  # Preserve the installed binary, config, log, and build settings in the plist.
   local plist
   local launcher
   plist="$(mac_plist_path)"
   [[ -f "${plist}" ]] || fail "plist not found; run install first: ${plist}"
-  command -v plutil >/dev/null 2>&1 || fail "plutil is required to update the macOS Watchlist service; run install from macOS"
+  command -v plutil >/dev/null 2>&1 || fail "plutil is required to update the macOS service; run install from macOS"
   launcher="$(stage_macos_launcher)"
-  plutil -replace ProgramArguments.0 -string "${launcher}" "${plist}" >/dev/null || fail "failed to update launchd executable in ${plist}; run install again"
+  # plutil's indexed array replace inserts an element on macOS. Replace the
+  # complete owned argv so migration and repeated starts are idempotent.
+  plutil -replace ProgramArguments -xml "<array><string>$(xml_escape "${launcher}")</string><string>run-foreground</string></array>" "${plist}" >/dev/null || fail "failed to update launchd executable in ${plist}; run install again"
 }
 
 linux_unit_path() {
@@ -360,6 +381,19 @@ use_installed_bin_path_if_available() {
   fi
 }
 
+macos_install_workdir() {
+  # The checkout selects build inputs, while an installed service owns its cwd.
+  # Reinstall preserves that cwd unless the caller explicitly requests a move.
+  local directory="${WORKDIR}"
+  local plist
+  plist="$(mac_plist_path)"
+  if [[ -z "${DIGCRAWL_WORKDIR:-}" && -f "${plist}" ]]; then
+    directory="$(plutil -extract WorkingDirectory raw -o - "${plist}")" || fail "cannot read installed WorkingDirectory from ${plist}; set DIGCRAWL_WORKDIR explicitly to repair it"
+  fi
+  [[ -d "${directory}" ]] || fail "service working directory is unavailable: ${directory}; set DIGCRAWL_WORKDIR explicitly to move it"
+  printf '%s\n' "${directory}"
+}
+
 install_macos() (
   install_plist=""
   restore_service=0
@@ -372,7 +406,9 @@ install_macos() (
     exit "${install_exit}"
   ' EXIT
   require_config
-  ensure_ffmpeg_env
+  local service_workdir
+  service_workdir="$(macos_install_workdir)" || exit 1
+  prepare_service_env
   mkdir -p "${HOME}/Library/LaunchAgents" "${LOG_DIR}"
   local launcher
   launcher="$(stage_macos_launcher)"
@@ -392,15 +428,25 @@ install_macos() (
     <string>run-foreground</string>
   </array>
   <key>WorkingDirectory</key>
-  <string>$(xml_escape "${WORKDIR}")</string>
+  <string>$(xml_escape "${service_workdir}")</string>
   <key>EnvironmentVariables</key>
   <dict>
+    <key>DIGCRAWL_SERVICE_NAME</key>
+    <string>$(xml_escape "${SERVICE_NAME}")</string>
+    <key>DIGCRAWL_SERVICE_LABEL</key>
+    <string>$(xml_escape "${SERVICE_LABEL}")</string>
+    <key>DIGCRAWL_SERVICE_COMMAND</key>
+    <string>$(xml_escape "${SERVICE_COMMAND}")</string>
+    <key>DIGCRAWL_SERVICE_LOG_PREFIX</key>
+    <string>$(xml_escape "${SERVICE_LOG_PREFIX}")</string>
+    <key>DIGCRAWL_GATEWAY_ADDR</key>
+    <string>$(xml_escape "${GATEWAY_ADDR}")</string>
     <key>DIGCRAWL_BIN</key>
     <string>$(xml_escape "${BIN_PATH}")</string>
     <key>DIGCRAWL_CONFIG</key>
     <string>$(xml_escape "${CONFIG_PATH}")</string>
     <key>DIGCRAWL_WORKDIR</key>
-    <string>$(xml_escape "${WORKDIR}")</string>
+    <string>$(xml_escape "${service_workdir}")</string>
     <key>DIGCRAWL_LOG_DIR</key>
     <string>$(xml_escape "${LOG_DIR}")</string>
     <key>DIGCRAWL_AUTO_BUILD</key>
@@ -423,9 +469,9 @@ install_macos() (
   <key>KeepAlive</key>
   <true/>
   <key>StandardOutPath</key>
-  <string>$(xml_escape "${LOG_DIR}/watchlist.out.log")</string>
+  <string>$(xml_escape "${LOG_DIR}/${SERVICE_LOG_PREFIX}.out.log")</string>
   <key>StandardErrorPath</key>
-  <string>$(xml_escape "${LOG_DIR}/watchlist.err.log")</string>
+  <string>$(xml_escape "${LOG_DIR}/${SERVICE_LOG_PREFIX}.err.log")</string>
 </dict>
 </plist>
 EOF
@@ -452,19 +498,24 @@ install_linux() (
     exit "${install_exit}"
   ' EXIT
   require_config
-  ensure_ffmpeg_env
+  prepare_service_env
   mkdir -p "${HOME}/.config/systemd/user" "${LOG_DIR}"
   local unit
   unit="$(linux_unit_path)"
   install_unit="$(mktemp "${unit}.tmp.XXXXXX")"
   cat >"${install_unit}" <<EOF
 [Unit]
-Description=DigCrawl Watchlist Scheduler
+Description=DigCrawl ${SERVICE_NAME}
 After=network-online.target
 
 [Service]
 Type=simple
 WorkingDirectory=$(systemd_quote "${WORKDIR}")
+Environment=$(systemd_quote "DIGCRAWL_SERVICE_NAME=${SERVICE_NAME}")
+Environment=$(systemd_quote "DIGCRAWL_SERVICE_LABEL=${SERVICE_LABEL}")
+Environment=$(systemd_quote "DIGCRAWL_SERVICE_COMMAND=${SERVICE_COMMAND}")
+Environment=$(systemd_quote "DIGCRAWL_SERVICE_LOG_PREFIX=${SERVICE_LOG_PREFIX}")
+Environment=$(systemd_quote "DIGCRAWL_GATEWAY_ADDR=${GATEWAY_ADDR}")
 Environment=$(systemd_quote "DIGCRAWL_BIN=${BIN_PATH}")
 Environment=$(systemd_quote "DIGCRAWL_CONFIG=${CONFIG_PATH}")
 Environment=$(systemd_quote "DIGCRAWL_WORKDIR=${WORKDIR}")
@@ -650,17 +701,20 @@ logs_linux() {
 
 logs_file() {
   mkdir -p "${LOG_DIR}"
-  touch "${LOG_DIR}/watchlist.out.log" "${LOG_DIR}/watchlist.err.log"
-  tail -n 100 -f "${LOG_DIR}/watchlist.out.log" "${LOG_DIR}/watchlist.err.log"
+  touch "${LOG_DIR}/${SERVICE_LOG_PREFIX}.out.log" "${LOG_DIR}/${SERVICE_LOG_PREFIX}.err.log"
+  tail -n 100 -f "${LOG_DIR}/${SERVICE_LOG_PREFIX}.out.log" "${LOG_DIR}/${SERVICE_LOG_PREFIX}.err.log"
 }
 
 run_foreground() {
   require_config
   require_binary
-  ensure_ffmpeg_env
+  prepare_service_env
   mkdir -p "${LOG_DIR}"
   cd "${WORKDIR}"
-  exec "${BIN_PATH}" watchlist serve --config "${CONFIG_PATH}"
+  case "${SERVICE_COMMAND}" in
+    gateway) exec "${BIN_PATH}" gateway --config "${CONFIG_PATH}" --addr "${GATEWAY_ADDR}" ;;
+    watchlist) exec "${BIN_PATH}" watchlist serve --config "${CONFIG_PATH}" ;;
+  esac
 }
 
 dispatch_platform() {

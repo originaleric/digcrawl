@@ -11,8 +11,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/go-rod/rod"
 	"github.com/go-rod/rod/lib/launcher"
 	"github.com/go-rod/rod/lib/launcher/flags"
+	"github.com/go-rod/rod/lib/proto"
 	"github.com/originaleric/digcrawl/config"
 	"golang.org/x/term"
 )
@@ -25,7 +27,19 @@ type LoginSpec struct {
 	CookieURLs   []string
 }
 
+const (
+	YuanbaoHost     = "yuanbao.tencent.com"
+	YuanbaoOrigin   = "https://" + YuanbaoHost
+	YuanbaoParseURL = YuanbaoOrigin + "/api/weixin/get_parse_result"
+)
+
 var loginSpecs = map[string]LoginSpec{
+	"wechat_channels": {
+		Platform:     "wechat_channels",
+		IndexURL:     YuanbaoOrigin,
+		CookieDomain: YuanbaoHost,
+		CookieURLs:   []string{YuanbaoOrigin},
+	},
 	"xiaohongshu": {
 		Platform:     "xiaohongshu",
 		IndexURL:     "https://www.xiaohongshu.com",
@@ -75,7 +89,7 @@ var loginSpecs = map[string]LoginSpec{
 func LoginSpecFor(platform string) (LoginSpec, error) {
 	spec, ok := loginSpecs[strings.ToLower(strings.TrimSpace(platform))]
 	if !ok {
-		return LoginSpec{}, fmt.Errorf("不支持的平台 %q，可选: xiaohongshu, douyin, toutiao, threads, instagram, youtube", platform)
+		return LoginSpec{}, fmt.Errorf("不支持的平台 %q，可选: xiaohongshu, douyin, toutiao, threads, instagram, youtube, wechat_channels", platform)
 	}
 	return spec, nil
 }
@@ -159,7 +173,12 @@ func InteractiveLogin(ctx context.Context, platform string, cfg config.LocalBrow
 	defer func() { resultErr = finishInteractiveLogin(resultErr, cookieSaved, connection) }()
 
 	pageCtx, pageCancel := browserOperationContext(ctx, 5*time.Second)
-	page, err := createStealthPage(pageCtx, connection.browser)
+	var page *rod.Page
+	if spec.CookieDomain == YuanbaoHost {
+		page, err = connection.browser.Context(pageCtx).Page(proto.TargetCreateTarget{URL: "about:blank"})
+	} else {
+		page, err = createStealthPage(pageCtx, connection.browser)
+	}
 	pageCancel()
 	if err != nil {
 		return fmt.Errorf("创建页面失败: %w", err)

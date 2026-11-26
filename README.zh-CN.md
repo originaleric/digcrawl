@@ -80,6 +80,8 @@ curl -fsSL https://raw.githubusercontent.com/originaleric/digcrawl/main/scripts/
 - **视频与内容平台**：抖音、头条、B站、快手、YouTube。
 - **网页与订阅**：通用网页、RSS、Atom、sitemap、平台列表与主页。
 
+- **本地实验功能**：微信视频号分享短链、本机转写及聊天卡片捕获，见[本地使用手册](./docs/微信视频号本地抓取使用手册.md)和[短链接入更新](./updates/2026-11-24-微信视频号短链与本机转写接入更新.md)。
+
 各平台的内容范围与登录要求见[平台说明](./USAGE.zh-CN.md#支持的内容来源)。
 
 ## 采集、导出与监控

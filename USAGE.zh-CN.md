@@ -211,6 +211,23 @@ Codex 的 MCP proxy 是 stdio 协议所需的宿主子进程，各代理共享�
 
 微信公众号公开文章默认优先使用 HTTP HTML 静态解析，成功时会在 `platform_metadata` 中标记 `read_channel=http`、`extraction_source=html`。只有网络 transient 或解析状态不确定时才进入 Browser 兜底；验证码、频控、删除、私密、登录要求和最终 URL 跳出微信域名会直接返回结构化错误。
 
+### 微信视频号短链与本机转写
+
+本地微信实验分支提供 `wechat.channels.read`，使用同一 profile 的腾讯元宝会话读取普通视频分享短链。转写使用已配置的 ASR，登录与服务管理见[本地使用手册](docs/微信视频号本地抓取使用手册.md)和[本次更新](updates/2026-11-24-微信视频号短链与本机转写接入更新.md)。
+
+### 微信视频号聊天卡片导入
+
+视频号聊天卡片没有稳定公开 URL 时，先启动 macOS 本地桥接；它会唤起微信。在微信桌面端打开并播放卡片后，从第二个终端执行导入：
+
+```bash
+digcrawl wechat-channels bridge start --yes
+digcrawl wechat-channels import
+```
+
+`bridge start` 默认监听 `127.0.0.1:20261`，自动识别当前 macOS 网络服务并在得到明确确认后创建仅当前用户可见的本地 CA、临时启用 PAC、唤起 `/Applications/WeChat.app`。PAC 只将 `*.qq.com` 指向 loopback 桥接；桥接的出站请求会继续使用启动前的 HTTP/HTTPS/SOCKS 手动代理，其余请求也维持原有路径，不要求用户重新填写代理密码。带认证的手动代理会被明确拒绝，不会读取或请求密码。它只对 `qq.com` 做 TLS 解密，并只将当前视频的 `object_id`、`object_nonce_id`、标题、描述、作者、发布时间和封面 URL 保存于进程内存。Cookie、请求头、视频直链和响应正文均不会保存。若当前网络服务已启用 PAC 或自动代理发现，命令会拒绝覆盖，以避免破坏既有分流规则。
+
+`bridge stop` 会经本地受保护控制通道通知运行中的桥接进程，由该进程先撤销 PAC、使 `*.qq.com` 立即回到启动前的原代理路径，再停止服务并按精确证书指纹删除本桥接安装的证书；运行终端中的 Ctrl-C 走同一清理路径。异常退出后，命令仅在确认原进程已不在运行时执行恢复。导入端通过受保护的 `GET /v1/wechat-channels/active-video` 读取桥接，默认地址为 `http://127.0.0.1:20261`，可用 `--bridge-url` 覆盖，但只接受 `localhost` 或 loopback IP 的 `http/https` 地址；若启动时传了 `--state-dir`，导入时也需传相同的 `--bridge-state-dir`。导入会先预览并要求确认；自动化调用必须显式传 `--yes`。本功能只归档最小元数据，不下载视频、封面或其他媒体，也不调用 ASR。
+
 X 单帖读取默认先尝试公开 Syndication 分发端点，无需 Cookie、账号或付费 API；成功时会解析正文、公开图片以及可用的最佳直链 MP4 引用。该端点限流、不可用、返回内容 ID 不匹配或结构变化时，继续既有 Tweet lookup API、公开 oEmbed 和 Browser 兜底。Browser 仅作为最后兜底，登录墙、删除、不可见和空壳页会返回结构化错误；这些链路都不会读取私密或登录受限内容。
 
 `Platform.X` 可保留默认值；仅在需要关闭或为受控环境替换公开端点时配置：
@@ -501,7 +518,10 @@ Instagram 已支持：
 小红书已支持：
 
 - `xiaohongshu_note` / `xhs_note`：固定笔记 URL 监控，例如 `https://www.xiaohongshu.com/explore/...` 或 `/discovery/item/...`，发现结果使用 `xiaohongshu:<note_id>` 去重。
-- `xiaohongshu_user` / `xhs_user`：用户页或列表页笔记链接发现，发现结果会规范化为 `/explore/<note_id>` 并使用稳定 note id 去重；登录态平台建议先执行 `digcrawl browser login --platform xiaohongshu`。
+- `xiaohongshu_user` / `xhs_user`：用户页或列表页笔记链接发现，发现结果会规范化为 `/explore/<note_id>` 并使用稳定 note id 去重；登录态平台建议先执行 `digcrawl wechat-channels bridge start --yes # 启动 macOS 桥接并唤起微信
+digcrawl wechat-channels bridge stop # 停止桥接并恢复其系统改动
+digcrawl wechat-channels import # 导入当前已播放的视频号聊天卡片元数据
+digcrawl browser login --platform xiaohongshu`。
 
 B站已支持：
 
@@ -1414,6 +1434,7 @@ MCP 返回操作前后的进度通知需要宿主随请求提供 progress token�
 - 仓库：<https://github.com/originaleric/digcrawl>
 - 示例配置：[`config/config.yaml`](config/config.yaml)
 - Collect 模块：[`collect/README.md`](collect/README.md)
+- 更新记录：[`updates/`](updates/)
 
 ---
 
