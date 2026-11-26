@@ -33,6 +33,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/originaleric/digcrawl/internal/browser"
 	"golang.org/x/net/http2"
 )
 
@@ -737,8 +738,9 @@ func ownerProcessAlive(pid int) bool {
 	if pid < 1 {
 		return false
 	}
-	err := syscall.Kill(pid, 0)
-	return err == nil || errors.Is(err, syscall.EPERM)
+	alive, err := browser.ProcessAlive(pid)
+	// An unknown owner must retain its recovery state until it can be checked.
+	return alive || err != nil
 }
 
 func (b *Bridge) handler(cert *tls.Certificate) http.Handler {
