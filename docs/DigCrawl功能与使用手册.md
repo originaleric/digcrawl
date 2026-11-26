@@ -25,14 +25,14 @@ source/list discover -> collect detail -> normalize -> media/OCR/ASR enrich -> s
 | 飞书通知 | Watchlist 新增内容或无更新通知可推送到 Feishu |
 | OCR/ASR | 图片 OCR、视频下载后 ffmpeg + ASR 转写，视频摘要可把 ASR 文本交给 summary agent |
 | 本机浏览器 | 复用 Chrome/Chromium、Cookie、allowed domain 和本地登录态 |
-| 微信视频号本地实验 | 仅 `local/wechat-channels-bridge`：macOS 本地桥接、明确确认的单视频下载与可选本地转写；不随 `main` 发布 |
+| 微信视频号 | 主程序读取分享短链，通过本人腾讯元宝会话解析视频，复用本机转写和媒体导出；保留可选 macOS 桌面卡片捕获 |
 
 ## 3. 平台与抓取路径
 
 | 平台 | 详情读取 | 列表/Watchlist 发现 |
 |------|----------|---------------------|
 | 微信公众号 | HTTP HTML 静态解析优先，必要时浏览器兜底 | `wechat_list` 通过链接发现文章 |
-| 微信视频号（本地实验） | macOS 微信桌面端桥接与页面适配器；当前视频仅在明确确认后下载，默认 2 GiB 上限 | 不支持 Watchlist/列表发现；仅本地分支使用 |
+| 微信视频号 | `wechat.channels.read` 读取分享短链；视频解析使用专用元宝会话，可按配置转写、OCR 与保存；桌面卡片使用可选 macOS 桥接 | 未提供视频号账号/列表发现 |
 | 小红书 | 页面上下文/API 尝试 + 浏览器兜底 | `xiaohongshu_user` 发现笔记 |
 | 抖音 | 页面上下文/API 尝试 + 浏览器兜底 | `douyin_user` 发现视频/图文 |
 | 今日头条文章 | API 探测 + 多策略浏览器兜底 | `toutiao_author`、`?tab=wtt`、文章/微头条列表 |
@@ -50,7 +50,7 @@ source/list discover -> collect detail -> normalize -> media/OCR/ASR enrich -> s
 
 本机浏览器路径底层统一走 `internal/browser.BrowserBrowse`。头条、新增平台和列表 fallback 复用同一套 Chrome/Chromium 配置、Cookie store、allowed domain 和登录态；差别在于头条详情 provider 已有更完整的多策略 fallback，新平台详情 provider 后续会逐步补齐。Threads/Instagram 默认是 `auth_mode=public`，不读取本机 Cookie；只有全局 `Social.<Platform>.AuthMode=local_session` 和 source options `auth_mode=local_session` 同时开启时才复用登录态。
 
-微信视频号本地实验需要 macOS 和用户已登录的微信桌面端；桥接会在用户确认后临时设置只覆盖 `*.qq.com` 的 PAC 并安装本地 CA。它不属于常规公开采集能力，也不应合并到 `main`。操作、停止恢复、大小限制与旧桥接兼容处理见[微信视频号本地抓取使用手册](微信视频号本地抓取使用手册.md)。
+微信视频号短链已随主程序提供，使用本人在 DigCrawl 专用浏览器中的腾讯元宝会话，登录完成后重试原链接。聊天卡片捕获另需 macOS 和本人已登录的微信桌面端；此可选桥接会在确认后临时设置仅覆盖 `*.qq.com` 的 PAC 并安装本地 CA，结束时恢复。操作、转写准备和服务管理见[微信视频号使用手册](微信视频号本地抓取使用手册.md)。
 
 ### Agent Skill 与 MCP
 

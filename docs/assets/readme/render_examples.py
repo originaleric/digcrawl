@@ -2,6 +2,7 @@
 """Render bilingual README comparison cards from verified, sanitized examples."""
 from pathlib import Path
 import base64
+import mimetypes
 import hashlib
 import json
 import re
@@ -52,7 +53,7 @@ for case in DATA['cases']:
         topic = case['topic'] if zh else case['topic_en']
         ok = case['status'] == 'success'
         body = '<rect x="1" y="1" width="1198" height="598" rx="20" fill="var(--bg)" stroke="var(--line)"/>'
-        body += logo(cid) + text(72, 47, name.upper(), 16, '', 650)
+        body += logo(case.get("logo_id", cid)) + text(72, 47, name.upper(), 16, '', 650)
         body += text(28, 94, topic, 30, '', 750)
         body += panel(28) + panel(618)
         original = case['original']
@@ -60,20 +61,23 @@ for case in DATA['cases']:
             label = ('原页面截图' if zh else 'ORIGINAL PAGE')
             if cid == 'youtube':
                 label = '会话同步后 · 原视频页面' if zh else 'AFTER SESSION SYNC · ORIGINAL VIDEO'
+            label = original.get('label_zh' if zh else 'label_en', label)
             body += text(48, 151, label, 14, 'muted', 600)
             image_path = ROOT / original['path']
-            uri = 'data:image/jpeg;base64,' + base64.b64encode(image_path.read_bytes()).decode()
+            mime = mimetypes.guess_type(image_path.name)[0] or 'image/jpeg'
+            uri = f'data:{mime};base64,' + base64.b64encode(image_path.read_bytes()).decode()
             body += '<rect x="44" y="168" width="522" height="320" rx="8" fill="#fff" stroke="var(--line)"/>'
             body += f'<image x="45" y="169" width="520" height="318" preserveAspectRatio="xMidYMid meet" href="{uri}"/>'
         else:
-            body += text(48, 151, '原文摘录（非页面截图）' if zh else 'SOURCE EXCERPT · NOT A SCREENSHOT', 14, 'muted', 600)
+            label = ('原视频信息（非截图）' if zh else 'SOURCE VIDEO INFO · NOT A SCREENSHOT') if original['kind'] == 'source_metadata' else ('原文摘录（非页面截图）' if zh else 'SOURCE EXCERPT · NOT A SCREENSHOT')
+            body += text(48, 151, label, 14, 'muted', 600)
             body += text(52, 209, case['author'], 17, 'muted', 550)
             y = 257
             for line in wrap(case['title'], 476, 24):
                 body += text(52, y, line, 24, '', 700)
                 y += 34
             y += 25
-            for value in case['excerpt'].splitlines():
+            for value in ('' if original['kind'] == 'source_metadata' else case['excerpt']).splitlines():
                 for line in wrap(value, 476, 18):
                     body += text(52, y, line, 18)
                     y += 27
@@ -83,7 +87,7 @@ for case in DATA['cases']:
         label = ('登录后 · 抓取结果' if zh else 'AFTER SIGN-IN · DIGCRAWL') if case.get('before_login') else ('抓取结果' if zh else 'DIGCRAWL RESULT')
         body += text(642, 151, label, 14, 'muted', 600)
         body += text(1048 if ok else 996, 151, 'SUCCESS' if ok else case['error']['code'], 13, 'status-ok mono' if ok else 'status-error mono', 650)
-        title = case['title'] if ok else 'Sign in to confirm you’re not a bot'
+        title = ('转写与 Agent 摘要' if zh else 'Transcript & Agent summary') if case.get('asr_characters') else (case['title'] if ok else 'Sign in to confirm you’re not a bot')
         title_lines = wrap(title, 498, 22)
         if cid == 'bilibili':
             title_lines = title.replace('【', '\n【', 1).splitlines()
@@ -96,7 +100,7 @@ for case in DATA['cases']:
         elif cid == 'youtube' and ok:
             lines = case['excerpt'].splitlines() + ['字幕正文未取回' if zh else 'Caption text was not retrieved']
         elif ok:
-            lines = case['excerpt'].splitlines()
+            lines = case.get('result_excerpt_zh' if zh else 'result_excerpt_en', case['excerpt']).splitlines()
         else:
             lines = ['来源要求完成本机登录验证。', '尚未取得正文、字幕或转写结果。'] if zh else ['The source requires local sign-in verification.', 'No text, captions, or transcript were retrieved.']
         lines = [line for value in lines for line in wrap(value, 498, 19)]
@@ -104,8 +108,12 @@ for case in DATA['cases']:
         for i, line in enumerate(lines):
             body += text(642, 312 + i * 28, line, 19, '' if ok else 'muted')
         if ok:
-            count = case['markdown_characters']
-            body += text(642, 506, f'Markdown {count:,} 字符' if zh else f'{count:,} Markdown characters', 15, 'muted mono')
+            if case.get('asr_characters'):
+                count = case['asr_characters']
+                body += text(642, 506, f'ASR {count:,} 字符 · local / small' if zh else f'{count:,} ASR characters · local / small', 15, 'muted mono')
+            else:
+                count = case['markdown_characters']
+                body += text(642, 506, f'Markdown {count:,} 字符' if zh else f'{count:,} Markdown characters', 15, 'muted mono')
             labels = {'image': '图片' if zh else 'image', 'video': '视频' if zh else 'video', 'audio': '音频' if zh else 'audio'}
             media = ' · '.join(f'{labels.get(k,k)} × {v}' for k,v in case['media_references'].items())
             body += text(642, 535, ('媒体引用 ' if zh else 'MEDIA REFERENCES ') + media, 14, 'muted mono')
@@ -124,4 +132,4 @@ for lang, name in [('zh-CN', 'README.zh-CN.md'), ('en', 'README.md')]:
         url = './docs/assets/readme/' + path
         content = re.sub(re.escape(url) + r'(?:\?v=[^" ]+)?', url + '?v=' + digest, content)
     readme.write_text(content)
-print('Rendered 10 bilingual comparison cards and refreshed README image URLs.')
+print(f'Rendered {len(DATA["cases"]) * 2} bilingual comparison cards and refreshed README image URLs.')

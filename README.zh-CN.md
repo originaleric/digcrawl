@@ -77,10 +77,10 @@ curl -fsSL https://raw.githubusercontent.com/originaleric/digcrawl/main/scripts/
 ## 支持的来源
 
 - **图文与社区**：微信公众号、小红书、微博、知乎、X、Reddit、Threads、Instagram。
-- **视频与内容平台**：抖音、头条、B站、快手、YouTube。
+- **视频与内容平台**：微信视频号、抖音、头条、B站、快手、YouTube。
 - **网页与订阅**：通用网页、RSS、Atom、sitemap、平台列表与主页。
 
-- **本地实验功能**：微信视频号分享短链、本机转写及聊天卡片捕获，见[本地使用手册](./docs/微信视频号本地抓取使用手册.md)和[短链接入更新](./updates/2026-11-24-微信视频号短链与本机转写接入更新.md)。
+微信视频号支持分享短链读取、按需本机转写及视频保存，使用专用腾讯元宝登录会话。聊天卡片捕获使用可选的 macOS 桌面桥接。见[使用说明](./USAGE.zh-CN.md#微信视频号短链与本机转写)和[更新记录](./updates/2026-11-26-微信视频号登录转写与服务生命周期修复.md)。请使用包含本次更新的构建，源码合并不会自动升级已有安装。
 
 各平台的内容范围与登录要求见[平台说明](./USAGE.zh-CN.md#支持的内容来源)。
 
@@ -97,6 +97,10 @@ curl -fsSL https://raw.githubusercontent.com/originaleric/digcrawl/main/scripts/
 digcrawl collect "https://mp.weixin.qq.com/s/..." --format md,html,json
 digcrawl collect --file urls.txt --out ./collect-output
 
+# 微信视频号：用同一 profile 登录并采集
+digcrawl browser login --platform wechat_channels --config config/config.yaml
+digcrawl collect "https://weixin.qq.com/sph/..." --config config/config.yaml --format md,json
+
 # 按配置解析本地视频
 digcrawl video ./meeting.mp4
 
@@ -111,7 +115,44 @@ digcrawl watchlist serve --config config/config.yaml
 
 ## 在 AI Agent 中使用
 
-原页面与抓取结果对照（2026-10-17）。微信保留原文摘录；视频例子未运行语音转写。
+### 微信视频号 · 转写与摘要（新增）
+
+```text
+帮我读取这个微信视频号视频，转写语音并总结要点。
+https://weixin.qq.com/sph/AftthwWPO7
+```
+
+<p align="center">
+  <img src="./docs/assets/readme/examples/wechat_channels.zh-CN.svg?v=a0f61a64" width="100%" alt="微信视频号：实测视频信息与本机转写、摘要对照">
+</p>
+
+获取流程：通过腾讯元宝解析视频号分享短链并获取视频 → DigCrawl 在本机下载、转写 → Agent 根据正文与转写生成摘要。首次使用或会话失效时，按提示在元宝专用窗口完成授权并保存会话。
+
+<details>
+<summary>如何获取微信视频链接</summary>
+
+<p align="center">
+  <img src="./docs/assets/readme/wechat-channels/link-flow.zh-CN.svg?v=cdbe5c8a" width="100%" alt="如何获取微信视频链接">
+</p>
+
+打开微信中的视频卡片，在分享菜单点“复制链接”，再把短链发给 Agent。首次使用或元宝会话失效时，按提示在专用窗口完成微信授权，并确认保存本机会话；随后获取视频、转写和摘要。分享菜单中的其他联系人已做隐私处理。
+
+</details>
+
+[来源](https://weixin.qq.com/sph/AftthwWPO7) · 本机验收已取得 451 字符转写，专有名词未人工校对。首次使用需准备 ASR 依赖，见[登录与转写步骤](./USAGE.zh-CN.md#微信视频号短链与本机转写)。
+
+<details>
+<summary>查看转写节选与摘要示例</summary>
+
+转写节选：
+
+> This is, this is my first day of work. I don't have a computer, so the IT department is going to give me a new PC.
+
+宿主 Agent 摘要示例：讲话者提到第一天上班、尚未拿到电脑，随后感谢支持，并为过去的错误致歉，表示会努力回归。
+
+[验证数据](./docs/assets/readme/examples/wechat_channels.json)
+
+</details>
 
 ### 网页 · 微信公众号
 
@@ -401,6 +442,7 @@ digcrawl doctor --config "$HOME/.config/digcrawl/digcrawl-skill.yaml"
 
 - [安装与使用](./USAGE.zh-CN.md) · [功能手册](./docs/DigCrawl功能与使用手册.md) · [浏览器排障](./USAGE.zh-CN.md#浏览器超时或反复失败)
 - [Agent Skill](./.agents/skills/digcrawl/) · [MCP 接入](./.agents/skills/digcrawl/mcp/README.md)
+- [微信视频号使用手册](./docs/微信视频号本地抓取使用手册.md) · [更新记录](./updates/)
 
 **开发者**
 

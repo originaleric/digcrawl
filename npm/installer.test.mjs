@@ -138,7 +138,7 @@ test('failed Bridge stop preserves the installed executable and user settings', 
 test('program-only and explicit Claude installations respect host scope', async () => {
   const only = await sandbox();
   const dirs = await install({ skipAgents: true }, only);
-  assert.ok(only.requests.every(url => url.includes('/v1.0.5/')));
+  assert.ok(only.requests.every(url => url.includes('/v1.0.6/')));
   await assert.rejects(fs.stat(dirs.profile), { code: 'ENOENT' });
   await assert.rejects(fs.stat(dirs.codexHome), { code: 'ENOENT' });
   const claude = await sandbox();
@@ -213,7 +213,7 @@ test('npm tarball contains only the public installer and documents; npx entry re
   const packed = JSON.parse(result.stdout)[0];
   assert.deepEqual(packed.files.map(f => f.path).sort(), ['LICENSE', 'README.md', 'README.zh-CN.md', 'npm/cli.mjs', 'npm/install.mjs', 'package.json'].sort());
   const pkg = JSON.parse(await fs.readFile(new URL('../package.json', import.meta.url), 'utf8'));
-  assert.equal(pkg.digcrawlRelease, '1.0.5');
+  assert.equal(pkg.digcrawlRelease, '1.0.6');
   assert.equal(pkg.scripts.postinstall, undefined);
   const extracted = path.join(root, 'packed');
   await fs.mkdir(extracted);

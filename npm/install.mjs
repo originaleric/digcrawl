@@ -274,7 +274,7 @@ export async function install(options = {}, context = {}) {
   const platform = context.platform || process.platform;
   const home = context.home || os.homedir();
   const log = context.log || console.log;
-  const version = (options.version || '1.0.5').replace(/^v/, '');
+  const version = (options.version || '1.0.6').replace(/^v/, '');
   const asset = assetName(version, platform, context.arch || process.arch);
   const dirs = locations(env, platform, home);
   if (options.installDir) {

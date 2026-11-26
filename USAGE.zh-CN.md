@@ -213,7 +213,29 @@ Codex 的 MCP proxy 是 stdio 协议所需的宿主子进程，各代理共享�
 
 ### 微信视频号短链与本机转写
 
-本地微信实验分支提供 `wechat.channels.read`，使用同一 profile 的腾讯元宝会话读取普通视频分享短链。转写使用已配置的 ASR，登录与服务管理见[本地使用手册](docs/微信视频号本地抓取使用手册.md)和[本次更新](updates/2026-11-24-微信视频号短链与本机转写接入更新.md)。
+普通视频分享短链（如 `https://weixin.qq.com/sph/…`）使用 `wechat.channels.read`，已接入主程序 `digcrawl` 的 MCP、Collect 和 HTTP，无需单独安装微信版或运行专属服务。若已安装构建的工具清单没有该工具，请升级到包含本次更新的构建，或[从源码运行](#从源码运行仅开发者)，随后重新连接 MCP 客户端。
+
+短链的复制步骤见[微信操作图解](./docs/assets/readme/wechat-channels/link-flow.zh-CN.svg)。
+
+视频解析使用 DigCrawl 专用浏览器中的本人腾讯元宝会话。会话缺失或过期时保留 `LOGIN_REQUIRED`，按返回的 `login_command`、profile 和工作目录打开专用登录窗口。完成登录后，在原终端按 Enter 保存，再重试原短链。短链路径无需在微信桌面端打开卡片，也不修改系统代理。
+
+使用仓库配置的示例：
+
+```bash
+digcrawl browser login --platform wechat_channels --config config/config.yaml
+digcrawl collect "https://weixin.qq.com/sph/..." --config config/config.yaml --format md,json
+```
+
+需要转写时，在相同 ASR 配置域准备 ffmpeg、Python 和模型。项目根配置示例：
+
+```bash
+digcrawl asr setup --config config/config.yaml --scope root --yes
+digcrawl asr check --config config/config.yaml --scope root
+```
+
+Collect 遵循根 `ASR.Enabled`；MCP 使用实际 profile 的 `Skill.ASR` 及 `include_asr: true`，检查该 Skill profile 时改用 `--scope skill`。宿主 Agent 根据返回正文与 `asr_text` 生成摘要。仅阅读公开分享页不代表下载或转写已成功。
+
+Collect 媒体导出由 `Collect.IncludeMedia`、`Collect.DownloadMedia` 控制，Provider 长期保留使用 `VideoDownload.Providers.wechat_channels: true`。超过 MCP 内联大小限制的视频可使用 Collect 或 Provider 保留。原 `digcrawl-wechat` Gateway 脚本继续作为可选隔离部署入口，已有服务和会话不会自动迁移。短链读取及本机转写已在 macOS 验证，Linux/Windows 原生验收尚未完成。详见[微信视频号使用手册](docs/微信视频号本地抓取使用手册.md)和[本次更新](updates/2026-11-26-微信视频号登录转写与服务生命周期修复.md)。
 
 ### 微信视频号聊天卡片导入
 
@@ -518,10 +540,7 @@ Instagram 已支持：
 小红书已支持：
 
 - `xiaohongshu_note` / `xhs_note`：固定笔记 URL 监控，例如 `https://www.xiaohongshu.com/explore/...` 或 `/discovery/item/...`，发现结果使用 `xiaohongshu:<note_id>` 去重。
-- `xiaohongshu_user` / `xhs_user`：用户页或列表页笔记链接发现，发现结果会规范化为 `/explore/<note_id>` 并使用稳定 note id 去重；登录态平台建议先执行 `digcrawl wechat-channels bridge start --yes # 启动 macOS 桥接并唤起微信
-digcrawl wechat-channels bridge stop # 停止桥接并恢复其系统改动
-digcrawl wechat-channels import # 导入当前已播放的视频号聊天卡片元数据
-digcrawl browser login --platform xiaohongshu`。
+- `xiaohongshu_user` / `xhs_user`：用户页或列表页笔记链接发现，发现结果会规范化为 `/explore/<note_id>` 并使用稳定 note id 去重；登录态平台建议先执行 `digcrawl browser login --platform xiaohongshu`。
 
 B站已支持：
 
@@ -793,7 +812,7 @@ context:
 
 | 字段 | 说明 |
 |------|------|
-| `PlatformEnabled` | 公众号 / 小红书 / 抖音 / X 平台工具 |
+| `PlatformEnabled` | 公众号及视频号 / 小红书 / 抖音 / X 平台工具 |
 | `BrowserEnabled` | `browser.browse` / `snapshot` / `action` |
 | `ASREnabled` | `asr.transcribe` 视频/音频转写工具 |
 | `ExampleEnabled` | `gateway.ping`、`file.read` |
@@ -844,6 +863,8 @@ digcrawl video "https://cdn.example.com/meeting.mp4" --keep ./meeting.mp4
 ```
 
 直链下载默认使用私有临时目录，并受 `--max-bytes`（默认 512 MiB）与 `--download-timeout`（默认 300 秒）限制，处理结束后删除。仅在用户明确要求保留该次直链下载时使用 `--keep <path>`；它不会读取或修改 `Skill.Media.RetainDownloadedVideo`。未传 `--config` 时，项目根级 ASR/OCR 中已启用的处理器优先，未启用的处理器可从标准用户 Skill profile 的 `Skill.ASR` / `Skill.OCR` 补齐；显式 `--config` 始终只使用指定 profile。
+
+微信桌面卡片捕获保留为可选 macOS 工作流：`digcrawl wechat-channels capture --yes` 等待一张卡片、下载并恢复临时代理和证书设置。需要转写时再加 `--transcribe`，详见[视频号使用手册](docs/微信视频号本地抓取使用手册.md)。
 
 ### Watchlist 常驻服务脚本
 
@@ -1090,6 +1111,7 @@ Collect 在**无云端宿主**的情况下，把链接抓取并导出到本地�
 | 类型 | 检测方式 | 底层工具 |
 |------|----------|----------|
 | 微信公众号 | `mp.weixin.qq.com` 等 | `wechat.article.read` |
+| 微信视频号 | `weixin.qq.com/sph/…` | `wechat.channels.read` |
 | 小红书 | `xiaohongshu.com`、`xhslink.com` 等 | `xiaohongshu.note.read` |
 | 抖音 | `douyin.com` 等 | `douyin.video.read` |
 | 今日头条文章 | `toutiao.com`、`m.toutiao.com` 等 | `toutiao.article.read` |
@@ -1131,6 +1153,7 @@ digcrawl browser login --platform toutiao
 digcrawl browser login --platform threads
 digcrawl browser login --platform instagram
 digcrawl browser login --platform youtube
+digcrawl browser login --platform wechat_channels
 ```
 
 YouTube 登录使用专用 Chrome for Testing 的独立 profile：登录阶段不连接 CDP、不注入脚本。用户点击“登录”，完成 Google 登录并返回 YouTube，再确认保存；DigCrawl 正常关闭该专用 Chrome、等待 profile 释放后，才启动后台会话同步。Windows 用户需先关闭该专用 Chrome 的全部窗口，再确认。`youtube.video.read` 默认复用该配置目录中的 YouTube 会话；不会复制日常浏览器会话，也不会将 Google 域的 Cookie 写入 YouTube Cookie 存储。登录不保证消除平台的验证要求；若仍返回 `LOGIN_REQUIRED` 或 `CAPTCHA_REQUIRED`，按原错误处理。该会话接入用于浏览器读取，`yt-dlp` 媒体下载不自动继承它。
@@ -1239,6 +1262,7 @@ collect-inbox/
 |--------|------|
 | `source.discover` | 只读来源链接发现、快照覆盖范围和分页 |
 | `wechat.article.read` | 微信公众号文章 |
+| `wechat.channels.read` | 微信视频号短链，可选本机转写与媒体 |
 | `xiaohongshu.note.read` | 小红书笔记 |
 | `douyin.video.read` | 抖音视频页 |
 | `toutiao.article.read` | 今日头条文章 |
@@ -1483,6 +1507,7 @@ GOROOT=/Users/dig/.gvm/gos/go1.26.1 /Users/dig/.gvm/gos/go1.26.1/bin/go build -o
 ./digcrawl browser login --platform threads
 ./digcrawl browser login --platform instagram
 ./digcrawl browser login --platform youtube
+digcrawl browser login --platform wechat_channels
 
 ./digcrawl browser check --platform toutiao \
   --url "https://www.toutiao.com/article/你的文章ID/" --trial

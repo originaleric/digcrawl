@@ -4,13 +4,13 @@
 `package.json` `digcrawlRelease` field pins an existing public GitHub Release.
 Never move an existing Go tag to publish an installer update.
 
-Version 1.0.5 adds read-only `source.discover`, its Skill reference,
-example authorization, and bilingual usage documentation. Publish GitHub
-`v1.0.5` and verify its assets before npm `1.0.5`.
+Version 1.0.6 adds WeChat Channels short-link reading through Tencent
+Yuanbao, local transcription, media validation, and service lifecycle fixes.
+Publish GitHub `v1.0.6` and verify its assets before npm `1.0.6`.
 Older Go releases require their matching older npm installer; overriding
 `--version` alone does not provide backward compatibility for install commands.
 
-1. Work on public `main` only. Do not merge or publish `local/*` branches.
+1. Publish the reviewed, authorized changes from public `main` only. Do not push unrelated local branches.
 2. Set the npm package version and `digcrawlRelease`, then refresh the lockfile.
    Confirm all five binary assets and `checksums.txt` exist for that release
    and can be downloaded anonymously. A private GitHub repository returns 404

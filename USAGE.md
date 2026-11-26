@@ -217,7 +217,33 @@ This is a manual service for the current user. `install` only saves configuratio
 
 Public WeChat articles use static HTTP HTML parsing first, returning `read_channel=http` and `extraction_source=html` in `platform_metadata` on success. Only transient network failures or uncertain parsing enter browser fallback. Captchas, rate limits, deletions, private content, login requirements, and final URLs outside WeChat domains return structured errors directly.
 
-### Local WeChat Channels card import
+### WeChat Channels short links
+
+Use `wechat.channels.read` for ordinary video share links such as `https://weixin.qq.com/sph/…`. It is available in the main `digcrawl` program through MCP, Collect, and HTTP; a separate WeChat installation or service is optional. If your installed build does not expose this tool, upgrade to a build containing this update or [build from source](#build-from-source-developers-only), then reconnect the MCP client.
+
+See the [illustrated WeChat steps](./docs/assets/readme/wechat-channels/link-flow.en.svg) for copying a short link.
+
+Video resolution uses your Tencent Yuanbao session in a DigCrawl-only browser profile. When the session is absent or expired, preserve `LOGIN_REQUIRED`, follow its `login_command` with the returned profile and working directory, complete sign-in in the dedicated window, and press Enter in the same terminal to save. Retry the original link after the command succeeds. The short-link path does not require opening the card in desktop WeChat or changing the system proxy.
+
+Example using the repository configuration:
+
+```bash
+digcrawl browser login --platform wechat_channels --config config/config.yaml
+digcrawl collect "https://weixin.qq.com/sph/..." --config config/config.yaml --format md,json
+```
+
+For transcription, prepare ffmpeg, Python, and the model in the same ASR scope. With a root configuration:
+
+```bash
+digcrawl asr setup --config config/config.yaml --scope root --yes
+digcrawl asr check --config config/config.yaml --scope root
+```
+
+Collect follows root `ASR.Enabled`; MCP uses the active profile's `Skill.ASR` and `include_asr: true`. Use `--scope skill` when checking that Skill profile. A host Agent summarizes the returned content and `asr_text`. Public-page reading without video work does not imply a successful download or transcription.
+
+`Collect.IncludeMedia` and `Collect.DownloadMedia` control Collect media export. Explicit provider retention uses `VideoDownload.Providers.wechat_channels: true`. Large videos above the MCP inline limit can be saved through Collect or provider retention. The optional `digcrawl-wechat` Gateway wrapper remains compatible; existing services and sessions are not migrated automatically. Short-link retrieval and local transcription were verified on macOS; native Linux/Windows acceptance remains pending. See the [Channels guide (Chinese)](docs/微信视频号本地抓取使用手册.md) and [update](updates/2026-11-26-微信视频号登录转写与服务生命周期修复.md).
+
+### Local WeChat Channels card import (macOS)
 
 For Channels chat cards without a stable public URL, start the local macOS bridge, open and play the card in WeChat, and run the import command in another terminal:
 
@@ -302,7 +328,7 @@ Local video-frame OCR can be explicitly enabled for videos with only background 
 
 ### Provider video retention
 
-`VideoDownload` retains results from existing platform readers without adding a second downloader. Only platforms explicitly set to `true` under `Providers` are asked to read media and retain resolved single-file videos, each in a private subdirectory. Readers may return multiple qualities, codecs, or playlists; the shared retention path tries only the first downloadable video candidate, retaining at most one final file per request under `VideoDownload.MaxBytes`. YouTube may temporarily use up to three times that size in the same private directory to merge audio/video; temporary files are cleaned on completion or failure, and the retained file still obeys `MaxBytes`. Supported platforms: `bilibili`, `douyin`, `instagram`, `kuaishou`, `threads`, `toutiao`, `weibo`, `xiaohongshu`, `youtube`, `zhihu`. X, Reddit, and WeChat articles are outside this scope. Login restrictions, risk controls, DRM, playlists, or non-video responses never produce a false success.
+`VideoDownload` retains results from existing platform readers without adding a second downloader. Only platforms explicitly set to `true` under `Providers` are asked to read media and retain resolved single-file videos, each in a private subdirectory. Readers may return multiple qualities, codecs, or playlists; the shared retention path tries only the first downloadable video candidate, retaining at most one final file per request under `VideoDownload.MaxBytes`. YouTube may temporarily use up to three times that size in the same private directory to merge audio/video; temporary files are cleaned on completion or failure, and the retained file still obeys `MaxBytes`. Supported platforms: `bilibili`, `douyin`, `instagram`, `kuaishou`, `threads`, `toutiao`, `wechat_channels`, `weibo`, `xiaohongshu`, `youtube`, `zhihu`. X, Reddit, and WeChat articles are outside this scope. Login restrictions, risk controls, DRM, playlists, or non-video responses never produce a false success.
 
 ```yaml
 VideoDownload:
@@ -790,7 +816,7 @@ Table prefix conventions:
 
 | Field | Description |
 |------|------|
-| `PlatformEnabled` | WeChat / Xiaohongshu / Douyin / X platform tools |
+| `PlatformEnabled` | WeChat articles and Channels / Xiaohongshu / Douyin / X platform tools |
 | `BrowserEnabled` | `browser.browse` / `snapshot` / `action` |
 | `ASREnabled` | `asr.transcribe` video/audio transcription tool |
 | `ExampleEnabled` | `gateway.ping`、`file.read` |
@@ -844,6 +870,8 @@ digcrawl video "https://cdn.example.com/meeting.mp4" --keep ./meeting.mp4
 ```
 
 Direct downloads use a private temporary directory, bounded by `--max-bytes` (default 512 MiB) and `--download-timeout` (default 300 seconds), and are deleted after processing. Use `--keep <path>` only when the user explicitly requests retaining this direct download. It does not read or change `Skill.Media.RetainDownloadedVideo`. Without `--config`, enabled project root ASR/OCR processors take priority; disabled processors can be supplied by standard user Skill profile `Skill.ASR` / `Skill.OCR`. Explicit `--config` always uses only the selected profile.
+
+WeChat Channels desktop capture remains an optional macOS workflow: `digcrawl wechat-channels capture --yes` waits for one card, downloads it, and restores its temporary proxy and certificate changes. Add `--transcribe` only when transcription is wanted. See the [Channels guide](docs/微信视频号本地抓取使用手册.md).
 
 ### Watchlist service scripts
 
@@ -1090,6 +1118,7 @@ Collect retrieves links and exports them locally **without a cloud host**, for k
 | Type | Detection | Underlying tool |
 |------|----------|----------|
 | WeChat Official Accounts | `mp.weixin.qq.com`, etc. | `wechat.article.read` |
+| WeChat Channels | `weixin.qq.com/sph/…` | `wechat.channels.read` |
 | Xiaohongshu | `xiaohongshu.com`, `xhslink.com`, etc. | `xiaohongshu.note.read` |
 | Douyin | `douyin.com`, etc. | `douyin.video.read` |
 | Toutiao articles | `toutiao.com`, `m.toutiao.com`, etc. | `toutiao.article.read` |
@@ -1131,6 +1160,7 @@ digcrawl browser login --platform toutiao
 digcrawl browser login --platform threads
 digcrawl browser login --platform instagram
 digcrawl browser login --platform youtube
+digcrawl browser login --platform wechat_channels
 ```
 
 YouTube sign-in uses a dedicated profile in Chrome for Testing without CDP or script injection during login. Click "Sign in", complete Google authentication, return to YouTube, then confirm saving. DigCrawl closes its Chrome and waits for profile release before starting background session synchronization. Windows users must close every window of that dedicated Chrome before confirming. `youtube.video.read` reuses the YouTube session in that configuration directory by default. It does not copy your everyday browser session or write Google-domain Cookies to YouTube Cookie storage. Login does not guarantee removal of platform checks; preserve `LOGIN_REQUIRED` or `CAPTCHA_REQUIRED` if still returned. This session is for browser reads; `yt-dlp` downloads do not inherit it automatically.
@@ -1239,6 +1269,7 @@ Inspect complete schemas through `GET /manifest` or MCP. Common tool names are l
 |--------|------|
 | `source.discover` | Read-only source links, snapshot coverage, and paging |
 | `wechat.article.read` | WeChat Official Account article |
+| `wechat.channels.read` | WeChat Channels short link; optional local transcription and media |
 | `xiaohongshu.note.read` | Xiaohongshu note |
 | `douyin.video.read` | Douyin video page |
 | `toutiao.article.read` | Toutiao article |
@@ -1482,6 +1513,7 @@ These commands use current project configuration. To verify an MCP session, pass
 ./digcrawl browser login --platform threads
 ./digcrawl browser login --platform instagram
 ./digcrawl browser login --platform youtube
+digcrawl browser login --platform wechat_channels
 
 ./digcrawl browser check --platform toutiao \
   --url "https://www.toutiao.com/article/YOUR_ARTICLE_ID/" --trial

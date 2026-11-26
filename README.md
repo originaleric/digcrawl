@@ -77,10 +77,10 @@ The installer verifies downloads and installs the program, complete Skill, and d
 ## Supported Sources
 
 - **Posts and communities**: WeChat Official Accounts, Xiaohongshu, Weibo, Zhihu, X, Reddit, Threads, Instagram.
-- **Video and content platforms**: Douyin, Toutiao, Bilibili, Kuaishou, YouTube.
+- **Video and content platforms**: WeChat Channels, Douyin, Toutiao, Bilibili, Kuaishou, YouTube.
 - **Web and feeds**: Web pages, RSS, Atom, sitemaps, platform lists, and profiles.
 
-- **Local experiment**: WeChat Channels share links, local transcription, and chat-card capture. See the [local guide](./docs/微信视频号本地抓取使用手册.md) and [integration update](./updates/2026-11-24-微信视频号短链与本机转写接入更新.md).
+WeChat Channels short links support reading, optional local transcription, and video saving through a dedicated Tencent Yuanbao session. Desktop chat-card capture uses the optional macOS bridge. See [usage](./USAGE.md#wechat-channels-short-links) and the [update](./updates/2026-11-26-微信视频号登录转写与服务生命周期修复.md). Use a build containing this update; source merges do not upgrade existing installations.
 
 See [source details](./USAGE.md#supported-content-sources) for platform capabilities and login requirements.
 
@@ -97,6 +97,10 @@ Save retrieved content as Markdown, HTML, JSON, and optional media files, or mon
 digcrawl collect "https://mp.weixin.qq.com/s/..." --format md,html,json
 digcrawl collect --file urls.txt --out ./collect-output
 
+# WeChat Channels: sign in and collect with the same profile
+digcrawl browser login --platform wechat_channels --config config/config.yaml
+digcrawl collect "https://weixin.qq.com/sph/..." --config config/config.yaml --format md,json
+
 # Analyze local video using the configured processors
 digcrawl video ./meeting.mp4
 
@@ -111,7 +115,44 @@ Transcription and OCR require the relevant dependencies; see [video analysis](./
 
 ## Use with AI Agents
 
-Original pages beside actual retrieval results (2026-10-17). WeChat uses a source excerpt; video examples did not run speech transcription.
+### WeChat Channels · Transcription and Summary (New)
+
+```text
+Read this WeChat Channels video, transcribe the speech, and summarize the key points.
+https://weixin.qq.com/sph/AftthwWPO7
+```
+
+<p align="center">
+  <img src="./docs/assets/readme/examples/wechat_channels.en.svg?v=7ce30320" width="100%" alt="WeChat Channels: verified video information beside local transcription and a host summary">
+</p>
+
+Retrieval flow: Tencent Yuanbao resolves the Channels share link and obtains the video → DigCrawl downloads and transcribes it locally → the Agent summarizes the returned content and transcript. On first use or when the session expires, follow the prompt to authorize and save a session in the dedicated Yuanbao window.
+
+<details>
+<summary>How to copy a WeChat Channels video link</summary>
+
+<p align="center">
+  <img src="./docs/assets/readme/wechat-channels/link-flow.en.svg?v=759c1ff0" width="100%" alt="How to copy a WeChat Channels video link">
+</p>
+
+Open the video card in WeChat, choose “复制链接” (Copy link), and paste the short link into your Agent chat. On first use or when the Yuanbao session expires, complete WeChat authorization in the dedicated window and confirm saving the local session. Video retrieval, transcription, and the Agent summary then follow. Other suggested recipients have been removed for privacy.
+
+</details>
+
+[Source](https://weixin.qq.com/sph/AftthwWPO7) · Local acceptance retrieved a 451-character transcript; proper names have not been manually checked. Prepare ASR dependencies before first use; see [sign-in and transcription](./USAGE.md#wechat-channels-short-links).
+
+<details>
+<summary>View a transcript excerpt and example summary</summary>
+
+Transcript excerpt:
+
+> This is, this is my first day of work. I don't have a computer, so the IT department is going to give me a new PC.
+
+Example host Agent summary: The speaker describes a first day at work without a computer, thanks supporters, apologizes for past mistakes, and says they will work on coming back.
+
+[Verification data](./docs/assets/readme/examples/wechat_channels.json)
+
+</details>
 
 ### Article · WeChat
 
@@ -401,6 +442,7 @@ See [Runtime](./runtime/README.md), [Transport](./transport/README.md), and [Pro
 
 - [Installation and usage](./USAGE.md) · [Product guide](./docs/DigCrawl功能与使用手册.md) · [Browser troubleshooting](./USAGE.md#browser-timeouts-or-repeated-failures)
 - [Agent Skill](./.agents/skills/digcrawl/) · [MCP setup](./.agents/skills/digcrawl/mcp/README.md)
+- [WeChat Channels guide (Chinese)](./docs/微信视频号本地抓取使用手册.md) · [Updates](./updates/)
 
 **For developers**
 

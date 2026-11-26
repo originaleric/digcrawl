@@ -1,12 +1,55 @@
 {
-  "verified_on": "2026-10-17",
   "runtime": "DigCrawl 0.1.0, commit 4ee930d1321c9e0a6704fa932ffe0c700a90ba78",
   "notes": [
-    "Original-page screenshots paired with verified result excerpts, not screenshots of an Agent interface. WeChat uses a clearly labeled source excerpt.",
-    "Video cases expose retrieved metadata and references; no ASR was requested.",
+    "Original-page screenshots or explicitly labeled source excerpts/metadata paired with verified result excerpts; not screenshots of an Agent interface.",
+    "Bilibili, X and YouTube show metadata and references without ASR. The WeChat Channels case includes actual local ASR and a separately labeled host Agent summary.",
     "YouTube retains the actual pre-login LOGIN_REQUIRED result and a successful local working-tree read after manual Chrome sign-in. Captions were advertised but no caption text was retrieved."
   ],
   "cases": [
+    {
+      "id": "wechat_channels",
+      "logo_id": "wechat",
+      "tool": "wechat.channels.read",
+      "kind": "video",
+      "url": "https://weixin.qq.com/sph/AftthwWPO7",
+      "name": "微信视频号",
+      "name_en": "WeChat Channels",
+      "topic": "视频转写与摘要",
+      "topic_en": "Video transcription & summary",
+      "prompt": "读取这个微信视频号视频，转写语音并总结要点。",
+      "prompt_en": "Read this WeChat Channels video, transcribe the speech, and summarize the key points.",
+      "status": "success",
+      "response_sha256": "84ac59a3892307bb73e2065f54763071b666a62dac89268babcf28fb58a5e815",
+      "title": "完整讲话！黄仁勋重返英伟达总部 \"很抱歉让你们经历这一切 我会努力重新站起来！\"",
+      "author": "券商中国",
+      "captured_on": "2026-11-26",
+      "runtime": "local WeChat Channels build; isolated macOS acceptance",
+      "markdown_characters": 40,
+      "media_references": {
+        "image": 1
+      },
+      "read_channel": "yuanbao",
+      "error": null,
+      "asr_text": "This is, this is my first day of work.I don't have a computer, so the IT department is going to give me a new PC.BGX Park.I'm hoping it's an RTEX park.I want to, I want to thank, I want to thank all of you.Thank you.I want to thank all of you.I'm terribly sorry for putting you through all of this.I'm terribly sorry for putting all of you through all of this.I've made some very terrible mistakes.And I'm going to work on coming back.Alright, thanks.",
+      "asr_characters": 451,
+      "asr_provider": "local",
+      "asr_model": "small",
+      "excerpt": "This is, this is my first day of work.",
+      "result_excerpt_zh": "转写：This is, this is my first day of work.\nAgent 摘要：第一天上班，电脑尚待配置。\n感谢支持，并为过去的错误致歉，表示会努力回归。",
+      "result_excerpt_en": "ASR: This is, this is my first day of work.\nHost summary: A first day without a computer.\nThanks supporters and apologizes for past mistakes; intends to work on coming back.",
+      "summary_zh": "讲话者提到第一天上班、尚未拿到电脑，随后感谢支持，并为过去的错误致歉，表示会努力回归。",
+      "summary_en": "The speaker describes a first day at work without a computer, thanks supporters, apologizes for past mistakes, and says they will work on coming back.",
+      "summary_basis": "Host Agent summary of the retrieved transcript, not a DigCrawl tool response field.",
+      "original": {
+        "kind": "screenshot",
+        "path": "wechat-channels/video-card.png",
+        "source_url": "https://weixin.qq.com/sph/AftthwWPO7",
+        "captured_on": "2026-11-26",
+        "capture_method": "User-provided WeChat video-card screenshot",
+        "label_zh": "微信中的视频卡片",
+        "label_en": "VIDEO CARD IN WECHAT"
+      }
+    },
     {
       "id": "wechat",
       "tool": "wechat.article.read",
@@ -213,5 +256,6 @@
         }
       }
     }
-  ]
+  ],
+  "initial_examples_verified_on": "2026-10-17"
 }

@@ -5,6 +5,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 SERVICE_SCRIPT="${SCRIPT_DIR}/digcrawl-watchlist-service.sh"
+TEST_HOST_OS="$(uname -s)"
 
 assert_contains() {
   local haystack="$1"
@@ -34,7 +35,7 @@ setup_runtime() {
 setup_plutil() {
   # macOS owns the real plist parser. The Linux CI runner simulates launchd,
   # so it needs only the plutil operations exercised by this test.
-  if [[ "${DIGCRAWL_TEST_FORCE_MOCK_PLUTIL:-}" == "1" ]] || ! command -v plutil >/dev/null 2>&1; then
+  if [[ "${DIGCRAWL_TEST_FORCE_MOCK_PLUTIL:-}" == "1" || "${TEST_HOST_OS}" != "Darwin" ]] || ! command -v plutil >/dev/null 2>&1; then
     plutil() {
       case "$1" in
         -lint)
@@ -402,7 +403,7 @@ MOCK_BINARY
   local attempt
   for attempt in 1 2; do
     if [[ "${entry}" == "wrapper" ]]; then
-      (cd /private/tmp && "${BASH}" "${script}" install >/dev/null)
+      (cd "${TEST_ROOT}" && "${BASH}" "${script}" install >/dev/null)
     else
       (cd "${checkout}" && "${BASH}" "${script}" install >/dev/null)
     fi
@@ -440,6 +441,7 @@ PY_LAUNCH
 test_gateway_uses_shared_service_lifecycle() (
   local test_os="$1"
   setup_runtime
+  setup_plutil
   export DIGCRAWL_SERVICE_NAME=digcrawl-wechat-video
   export DIGCRAWL_SERVICE_LABEL=com.digcrawl.wechat-video
   export DIGCRAWL_SERVICE_COMMAND=gateway
@@ -480,7 +482,7 @@ MOCK
   chmod +x "${DIGCRAWL_BIN}"
   export DIGCRAWL_WATCHLIST_SERVICE_TEST=0
   local wrapper="${SCRIPT_DIR}/digcrawl-wechat-video-service.sh"
-  (cd /private/tmp && "${BASH}" "${wrapper}" run-foreground)
+  (cd "${TEST_ROOT}" && "${BASH}" "${wrapper}" run-foreground)
   local expected
   expected="$(printf '%s\n' gateway --config "${DIGCRAWL_CONFIG}" --addr 127.0.0.1:8788)"
   [[ "$(<"${DIGCRAWL_WORKDIR}/args.txt")" == "${expected}" ]] || {
