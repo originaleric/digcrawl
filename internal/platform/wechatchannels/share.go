@@ -2,32 +2,31 @@ package wechatchannels
 
 import (
 	"context"
-	"fmt"
 	"net/url"
 	"regexp"
 	"strings"
 	"time"
 
 	"github.com/originaleric/digcrawl/internal/browser"
+	"github.com/originaleric/digcrawl/internal/media"
 	"github.com/originaleric/digcrawl/internal/platform"
 )
 
 const (
-	shareHost               = "weixin.qq.com"
-	sharePathPrefix         = "/sph/"
-	previewHost             = "channels.weixin.qq.com"
-	previewPath             = "/finder-preview/pages/sph"
-	shareWaitSelector       = "video, .page-feed, .warning-page"
-	shareContentSelector    = "body"
-	shareBrowserReadTimeout = 45 * time.Second
+	shareHost            = "weixin.qq.com"
+	sharePathPrefix      = "/sph/"
+	previewHost          = "channels.weixin.qq.com"
+	previewPath          = "/finder-preview/pages/sph"
+	shareWaitSelector    = "video, .page-feed, .warning-page"
+	shareContentSelector = "body"
+	SharePageTimeout     = 45 * time.Second
 )
 
 var shareIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{6,256}$`)
 
 // ReadShare reads a public WeChat Channels share URL. It deliberately does
 // not load a WeChat cookie domain or use the desktop bridge: the public share
-// page is the sole source of data. Video media URLs are returned only when the
-// caller explicitly requests include_media.
+// page supplies text, a screenshot, and the optional public cover.
 func ReadShare(ctx context.Context, in platform.ReadInput) (*platform.Content, error) {
 	rawURL := strings.TrimSpace(in.URL)
 	if err := validateShareURL(rawURL); err != nil {
@@ -37,14 +36,13 @@ func ReadShare(ctx context.Context, in platform.ReadInput) (*platform.Content, e
 		return nil, platform.NewReadError(platform.ErrScopeViolation, "视频号分享链接读取不支持复用 Cookie", PlatformName, nil)
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, shareBrowserReadTimeout)
+	ctx, cancel := context.WithTimeout(ctx, SharePageTimeout)
 	defer cancel()
 	start := time.Now()
 	resp, err := platform.Browse(ctx, rawURL, in, platform.BrowseSpec{
 		WaitSelector:    shareWaitSelector,
 		ContentSelector: shareContentSelector,
 		MetadataScript:  shareMetadataScript(),
-		CaptureMedia:    in.IncludeMedia,
 	})
 	if err != nil {
 		return nil, err
@@ -65,9 +63,9 @@ func ReadShare(ctx context.Context, in platform.ReadInput) (*platform.Content, e
 func validateShareURL(raw string) error {
 	u, err := url.Parse(strings.TrimSpace(raw))
 	if err != nil {
-		return fmt.Errorf("invalid WeChat Channels share URL: %w", err)
+		return platform.NewReadError(platform.ErrContentTypeMismatch, "无效的视频号分享链接", PlatformName, nil)
 	}
-	if u.Scheme != "https" || u.User != nil || !strings.EqualFold(u.Hostname(), shareHost) {
+	if u.Scheme != "https" || u.User != nil || (u.Port() != "" && u.Port() != "443") || !strings.EqualFold(u.Hostname(), shareHost) {
 		return platform.NewReadError(platform.ErrScopeViolation, "视频号分享链接必须为 https://weixin.qq.com/sph/...", PlatformName, nil)
 	}
 	shareID := strings.TrimPrefix(u.EscapedPath(), sharePathPrefix)
@@ -86,6 +84,7 @@ func contentFromShareResponse(in platform.ReadInput, sourceURL string, resp *bro
 		return nil, err
 	}
 	meta := cloneShareMeta(resp.Metadata)
+	delete(meta, "video_urls")
 	if code := strings.TrimSpace(platform.MetaErrorCode(meta)); code != "" {
 		return nil, platform.NewReadError(code, platform.MetaString(meta, "error_message"), PlatformName, meta)
 	}
@@ -116,20 +115,7 @@ func contentFromShareResponse(in platform.ReadInput, sourceURL string, resp *bro
 		content.PublishedAt = publishedAt
 	}
 	if in.IncludeMedia {
-		for _, mediaURL := range platform.MetaStringSlice(meta, "video_urls") {
-			content.Media = append(content.Media, platform.MediaItem{Type: "video", URL: mediaURL})
-		}
-		for _, mediaURL := range resp.MediaURLs {
-			if !containsShareMedia(content.Media, mediaURL) {
-				content.Media = append(content.Media, platform.MediaItem{Type: "video", URL: mediaURL})
-			}
-		}
-		if coverURL := strings.TrimSpace(platform.MetaString(meta, "cover_url")); coverURL != "" {
-			content.Media = append(content.Media, platform.MediaItem{Type: "image", URL: coverURL})
-		}
-		if len(content.Media) == 0 && sharePlaybackRestricted(meta) {
-			return nil, platform.NewReadError(platform.ErrContentPrivate, "公开分享页要求扫码进入微信，无法获取可转写的视频媒体", PlatformName, meta)
-		}
+		content.Media = shareCover(platform.MetaString(meta, "cover_url"))
 	}
 	if in.IncludeScreenshot {
 		content.ScreenshotBase64 = resp.ScreenshotBase
@@ -137,9 +123,12 @@ func contentFromShareResponse(in platform.ReadInput, sourceURL string, resp *bro
 	return content, nil
 }
 
-func sharePlaybackRestricted(meta map[string]any) bool {
-	restricted, _ := meta["playback_restricted"].(bool)
-	return restricted
+func shareCover(rawURL string) []platform.MediaItem {
+	rawURL = strings.TrimSpace(rawURL)
+	if rawURL == "" || media.ValidateRemoteURL(rawURL) != nil {
+		return nil
+	}
+	return []platform.MediaItem{{Type: "image", URL: rawURL}}
 }
 
 func validatePreviewURL(raw string) error {
@@ -148,15 +137,6 @@ func validatePreviewURL(raw string) error {
 		return platform.NewReadError(platform.ErrScopeViolation, "视频号分享页跳转到了未允许的地址", PlatformName, nil)
 	}
 	return nil
-}
-
-func containsShareMedia(media []platform.MediaItem, rawURL string) bool {
-	for _, item := range media {
-		if item.Type == "video" && item.URL == rawURL {
-			return true
-		}
-	}
-	return false
 }
 
 func cloneShareMeta(meta map[string]any) map[string]any {
@@ -173,7 +153,6 @@ func cloneShareMeta(meta map[string]any) map[string]any {
 func shareMetadataScript() string {
 	return `() => {
   const text = (selector) => (document.querySelector(selector)?.innerText || document.querySelector(selector)?.textContent || '').trim();
-  const urls = (items) => [...new Set(items.map(value => String(value || '').trim()).filter(value => /^https?:\/\//i.test(value)))];
   const body = (document.body?.innerText || '').slice(0, 6000);
   const error = (code, message) => ({ error_code: code, error_message: message, extraction_source: 'page_state', final_url: String(location.href || '') });
   if (['内容不存在', '页面不存在', '链接已失效', '已被删除'].some(hint => body.includes(hint))) return error('CONTENT_NOT_FOUND', '视频号内容不存在或已失效');
@@ -184,17 +163,16 @@ func shareMetadataScript() string {
   const description = title;
   const author_name = text('.author-name') || text('[class*="author-name"]') || '';
   const published_at = text('.feed-create-time-wrap') || text('[class*="create-time"]') || '';
-  const video_urls = urls(video ? [video.currentSrc, video.src, video.getAttribute('src'), ...Array.from(video.querySelectorAll('source')).map(source => source.src || source.getAttribute('src'))] : []);
+  const has_video = Boolean(video && (video.currentSrc || video.src || video.querySelector('source[src]')));
   const cover_url = video?.poster || '';
-  if (!title && !video_urls.length) return error('SELECTOR_STALE', '视频号分享页未加载出视频内容');
+  if (!title && !has_video) return error('SELECTOR_STALE', '视频号分享页未加载出视频内容');
   return {
-    extraction_source: video_urls.length ? 'dom_video' : 'dom',
+    extraction_source: has_video ? 'dom_video' : 'dom',
     title,
     description,
     author_name,
     published_at,
     cover_url,
-    video_urls,
     playback_restricted,
     final_url: String(location.href || ''),
     body_text_length: (document.body?.innerText || '').length,

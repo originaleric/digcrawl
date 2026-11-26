@@ -4,7 +4,7 @@ Report DigCrawl errors directly and avoid fabricating content.
 
 | Error code or condition | Explain | Safe next action |
 |---|---|---|
-| `LOGIN_REQUIRED` | The local session is absent or expired. | For xiaohongshu, douyin, toutiao, threads, instagram, or youtube, explain that DigCrawl uses its own local Cookie store and ask whether to open its login window. Only after explicit approval, run `digcrawl browser login --platform <platform>` when the host can keep interactive stdin; after the user confirms login completion, send Enter to the same session. Otherwise show the command for manual use. Without `--config`, the command resolves a current project `config/config.yaml` before the standard user Skill profile. To recover an MCP session whose profile differs, pass that same profile with `--config`; never guess an unknown profile path. Retry once after successful exit. |
+| `LOGIN_REQUIRED` | The local session is absent or expired. | For xiaohongshu, douyin, toutiao, threads, instagram, youtube, or wechat_channels, explain that DigCrawl uses its own local Cookie store and ask whether to open its login window. Only after explicit approval, run `digcrawl browser login --platform <platform>` when the host can keep interactive stdin; after the user confirms login completion, send Enter to the same session. Otherwise show the command for manual use. Without `--config`, the command resolves a current project `config/config.yaml` before the standard user Skill profile. To recover an MCP session whose profile differs, pass that same profile with `--config`; never guess an unknown profile path. Retry once after successful exit. |
 | `CAPTCHA_REQUIRED` | The platform requires human verification. | Ask the user to finish the verification in the local browser; do not automate it. |
 | `RATE_LIMITED` | The platform has temporarily limited requests. | Ask the user to wait and retry later. |
 | `CONTENT_TYPE_MISMATCH` | The link does not match the selected reader. | Select the correct tool based on the final URL or ask for a corrected link. |
@@ -24,3 +24,5 @@ Report DigCrawl errors directly and avoid fabricating content.
 | Removed, private, or unavailable content | The source cannot be retrieved by the local reader. | State that no content was retrieved and ask for an accessible source. |
 
 When an error response includes structured output, preserve any available title, canonical URL, or platform diagnostic as context. Do not treat partial metadata as the article body.
+
+For a WeChat Channels link, `login_platform: wechat_channels` opens Tencent Yuanbao. Pass the returned `login_config_path` as the `--config` argument and use `login_working_directory` when present. Retry the short link after login completes. When only optional video work fails, preserve the available content and use the login information under `platform_metadata.video_error` if the user asks to complete the video work.

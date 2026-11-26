@@ -6,7 +6,11 @@ import (
 	"time"
 
 	"github.com/originaleric/digcrawl/config"
+	"github.com/originaleric/digcrawl/internal/platform/wechatchannels"
 	"github.com/originaleric/digcrawl/protocol"
+	browserprov "github.com/originaleric/digcrawl/provider/browser"
+	platformprov "github.com/originaleric/digcrawl/provider/platform"
+	"github.com/originaleric/digcrawl/skill"
 )
 
 const runtimeCallOverheadSeconds = 30
@@ -26,16 +30,11 @@ func RecommendedCallTimeout(cfg *config.Config, call *protocol.ToolCall) time.Du
 	skillASRSeconds := 1800
 	directASRSeconds := 1800
 	summarySeconds := 60
-	ocrSeconds := config.OCRConfig{}.TimeoutSecOrDefault()
-	maxOCRImages := config.OCRConfig{}.MaxImagesOrDefault()
-	videoFrameSeconds := config.VideoFrameOCRConfig{}.TimeoutSecOrDefault()
-	maxVideoFrames := config.VideoFrameOCRConfig{}.MaxTotalFramesOrDefault()
-	skillOCREnabled := false
-	videoFrameOCREnabled := false
+	var skillCfg config.SkillConfig
+	var rootOCR config.OCRConfig
 	videoDownloadSeconds := 0
 	imageDownloadSeconds := 0
 	if cfg != nil {
-		var skillCfg config.SkillConfig
 		var videoDownloadCfg config.VideoDownloadConfig
 		var imageDownloadCfg config.ImageDownloadConfig
 		if cfg == config.Get() {
@@ -43,8 +42,7 @@ func RecommendedCallTimeout(cfg *config.Config, call *protocol.ToolCall) time.Du
 			// tool while MCP workers are being dispatched. Read its mutable
 			// section through the synchronized snapshot accessor so the timeout
 			// matches one coherent media configuration.
-			skillCfg, videoDownloadCfg = config.SkillVideoDownload()
-			_, imageDownloadCfg = config.SkillImageDownload()
+			skillCfg, videoDownloadCfg, imageDownloadCfg = config.SkillMediaSettings()
 		} else {
 			// Collect and focused tests inject an execution-local config that is
 			// immutable for that execution.
@@ -60,16 +58,14 @@ func RecommendedCallTimeout(cfg *config.Config, call *protocol.ToolCall) time.Du
 		skillASRSeconds = skillCfg.ASR.MaxTimeoutSecOrDefault()
 		directASRSeconds = cfg.ASR.MaxTimeoutSecOrDefault()
 		summarySeconds = skillCfg.Summary.TimeoutSecOrDefault()
-		ocrSeconds = skillCfg.OCR.TimeoutSecOrDefault()
-		maxOCRImages = skillCfg.OCR.MaxImagesOrDefault()
-		videoFrameSeconds = skillCfg.OCR.VideoFrames.TimeoutSecOrDefault()
-		maxVideoFrames = skillCfg.OCR.VideoFrames.MaxTotalFramesOrDefault()
-		skillOCREnabled = skillCfg.OCR.EnabledOrDefault()
-		videoFrameOCREnabled = skillOCREnabled && skillCfg.OCR.VideoFrames.EnabledOrDefault()
+		rootOCR = cfg.OCR
 		if call != nil {
 			provider, _, hasProvider := strings.Cut(strings.ToLower(strings.TrimSpace(call.Tool)), ".")
-			if hasProvider && config.IsSupportedVideoDownloadProvider(provider) && videoDownloadCfg.EnabledFor(provider) {
+			if videoProvider := platformprov.VideoDownloadProviderForTool(call.Tool); videoDownloadCfg.EnabledFor(videoProvider) {
 				videoDownloadSeconds = videoDownloadCfg.TimeoutSecOrDefault()
+			}
+			if call.Tool == browserprov.ToolBrowserBrowse {
+				provider = "web"
 			}
 			if hasProvider && config.IsSupportedImageDownloadProvider(provider) && imageDownloadCfg.EnabledFor(provider) {
 				imageDownloadSeconds = imageDownloadCfg.TimeoutSecOrDefault()
@@ -87,6 +83,11 @@ func RecommendedCallTimeout(cfg *config.Config, call *protocol.ToolCall) time.Du
 	}
 
 	seconds := browserSeconds + runtimeCallOverheadSeconds
+	// Native resolution precedes the optional screenshot and media download.
+	// It is independent of the browser invocation's own deadline.
+	if call != nil && call.Tool == platformprov.ToolWechatChannelsRead {
+		seconds += int(wechatchannels.ShareVideoResolveTimeout / time.Second)
+	}
 	var input struct {
 		IncludeMedia   bool `json:"include_media"`
 		IncludeOCR     bool `json:"include_ocr"`
@@ -108,13 +109,24 @@ func RecommendedCallTimeout(cfg *config.Config, call *protocol.ToolCall) time.Du
 	if input.IncludeSummary {
 		seconds += summarySeconds
 	}
-	if input.IncludeOCR && skillOCREnabled {
-		// Image OCR is sequential and bounded by MaxImages. Video-frame OCR
-		// additionally acquires one bounded local video candidate, extracts a
-		// bounded frame set, then recognizes each frame with the same provider.
-		seconds += maxOCRImages * ocrSeconds
-		if videoFrameOCREnabled {
-			seconds += mediaSeconds + videoFrameSeconds + maxVideoFrames*ocrSeconds
+	// Direct readers apply the profile's OCR default even without an input flag.
+	// Other tools keep their explicit-input budget. Collect can set its own
+	// timeout, which Runtime uses before consulting this recommendation.
+	ocrCfg, skillOCR := skillCfg.OCR, true
+	ocrRequested := input.IncludeOCR
+	if call != nil && call.Tool == browserprov.ToolBrowserBrowse {
+		ocrCfg, skillOCR = browserprov.DirectOCRConfig(skillCfg, rootOCR, input.IncludeOCR)
+		ocrRequested = skillOCR || ocrCfg.EnabledOrDefault()
+	} else if call != nil && strings.HasSuffix(call.Tool, ".read") {
+		ocrRequested = skill.OCRRequested(skillCfg, input.IncludeOCR)
+	}
+	if ocrRequested && ocrCfg.EnabledOrDefault() {
+		// Image OCR is sequential and bounded by MaxImages.
+		ocrSeconds := ocrCfg.TimeoutSecOrDefault()
+		seconds += ocrCfg.MaxImagesOrDefault() * ocrSeconds
+		// Only Skill enhancement extracts frames from a local video.
+		if frames := ocrCfg.VideoFrames; skillOCR && frames.EnabledOrDefault() {
+			seconds += mediaSeconds + frames.TimeoutSecOrDefault() + frames.MaxTotalFramesOrDefault()*ocrSeconds
 		}
 	}
 	// Provider retention happens after page extraction and before any optional

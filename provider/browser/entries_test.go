@@ -113,6 +113,33 @@ func TestBrowseEntryAppliesSkillOCRWithoutReturningInternalMedia(t *testing.T) {
 	}
 }
 
+func TestBrowseEntryUsesRootOCRWhenSkillDoesNotRequestIt(t *testing.T) {
+	enabled := true
+	cfg := &config.Config{OCR: config.OCRConfig{Enabled: &enabled, Provider: "stub", MaxImages: 3}}
+	previous := browsePage
+	t.Cleanup(func() { browsePage = previous })
+	browsePage = func(_ context.Context, req *internalbrowser.BrowserBrowseRequest) (*internalbrowser.BrowserBrowseResponse, error) {
+		if req.ImageMaxItems != 3 {
+			t.Fatalf("root OCR image budget = %d", req.ImageMaxItems)
+		}
+		return &internalbrowser.BrowserBrowseResponse{
+			URL: req.URL, Markdown: "body",
+			ImageData: []map[string]string{{"url": "https://images.example.test/browser.png", "data": "data:image/png;base64,YQ=="}},
+		}, nil
+	}
+	input, err := json.Marshal(browseInput{URL: "https://example.com/article"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, _, err := BrowseEntry(nil, nil, cfg).Handler(t.Context(), &protocol.ToolCall{Tool: ToolBrowserBrowse, Input: input})
+	if err != nil || !strings.Contains(out["markdown"].(string), "stub OCR text") {
+		t.Fatalf("root OCR not applied: out=%v err=%v", out, err)
+	}
+	if _, ok := out["media"]; ok {
+		t.Fatal("root OCR changed the response media contract")
+	}
+}
+
 func TestBrowseEntryPreservesPageContentWhenConfiguredOCRProviderFails(t *testing.T) {
 	enabled := true
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

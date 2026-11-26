@@ -41,8 +41,11 @@ func TestContentFromShareResponse(t *testing.T) {
 	if content.Platform != PlatformName || content.ContentType != ContentType || content.Title != "公开视频标题" || content.Author == nil || content.Author.Name != "发布者" {
 		t.Fatalf("content = %#v", content)
 	}
-	if len(content.Media) != 3 {
+	if len(content.Media) != 1 || content.Media[0].Type != "image" || content.Media[0].URL != "https://example.com/cover.jpg" {
 		t.Fatalf("media = %#v", content.Media)
+	}
+	if content.PlatformMetadata["video_urls"] != nil {
+		t.Fatal("public result exposed playback URLs")
 	}
 }
 
@@ -54,16 +57,16 @@ func TestContentFromShareResponseRejectsUnexpectedFinalURL(t *testing.T) {
 	}
 }
 
-func TestContentFromShareResponseReportsQRRestrictedPlayback(t *testing.T) {
-	_, err := contentFromShareResponse(platform.ReadInput{IncludeMedia: true}, "https://weixin.qq.com/sph/AKFbOmNOLl", &browser.BrowserBrowseResponse{
+func TestContentFromShareResponseOffersCoverWhenPlaybackIsRestricted(t *testing.T) {
+	content, err := contentFromShareResponse(platform.ReadInput{IncludeMedia: true}, "https://weixin.qq.com/sph/AKFbOmNOLl", &browser.BrowserBrowseResponse{
 		URL: "https://channels.weixin.qq.com/finder-preview/pages/sph?id=AKFbOmNOLl",
 		Metadata: map[string]any{
 			"title":               "公开视频标题",
 			"playback_restricted": true,
+			"cover_url":           "https://example.com/cover.jpg",
 		},
 	})
-	var readErr *platform.ReadError
-	if !errors.As(err, &readErr) || readErr.Code != platform.ErrContentPrivate {
-		t.Fatalf("error = %v", err)
+	if err != nil || len(content.Media) != 1 || content.Media[0].Type != "image" || content.PlatformMetadata["playback_restricted"] != true {
+		t.Fatalf("content = %#v, error = %v", content, err)
 	}
 }

@@ -31,6 +31,45 @@ setup_runtime() {
   export DIGCRAWL_WATCHLIST_SERVICE_TEST=1
 }
 
+setup_plutil() {
+  # macOS owns the real plist parser. The Linux CI runner simulates launchd,
+  # so it needs only the plutil operations exercised by this test.
+  if [[ "${DIGCRAWL_TEST_FORCE_MOCK_PLUTIL:-}" == "1" ]] || ! command -v plutil >/dev/null 2>&1; then
+    plutil() {
+      case "$1" in
+        -lint)
+          [[ -f "$2" ]]
+          ;;
+        -extract)
+          [[ "$3" == "raw" && "$4" == "-o" && "$5" == "-" ]] || return 1
+          python3 - "$2" "$6" <<'PY_EXTRACT'
+import plistlib, sys
+from pathlib import Path
+value = plistlib.loads(Path(sys.argv[2]).read_bytes())
+for key in sys.argv[1].split("."):
+    value = value[key]
+print(value)
+PY_EXTRACT
+          ;;
+        -replace)
+          [[ "$2" == "ProgramArguments" && "$3" == "-xml" && -f "$5" ]] || return 1
+          python3 - "$4" "$5" <<'PY_PLIST'
+import plistlib, sys
+from pathlib import Path
+path = Path(sys.argv[2])
+value = plistlib.loads(path.read_bytes())
+value["ProgramArguments"] = plistlib.loads(("<plist>" + sys.argv[1] + "</plist>").encode())
+path.write_bytes(plistlib.dumps(value))
+PY_PLIST
+          ;;
+        *)
+          return 64
+          ;;
+      esac
+    }
+  fi
+}
+
 test_macos_install_starts_and_reports_running() {
   setup_runtime
   local lifecycle="${TEST_ROOT}/launchctl.log"
@@ -52,34 +91,7 @@ test_macos_install_starts_and_reports_running() {
       ;;
     esac
   }
-  # macOS owns the real plist parser. The Linux CI runner simulates launchd,
-  # so it needs only the two plutil operations exercised by this test.
-  if [[ "${DIGCRAWL_TEST_FORCE_MOCK_PLUTIL:-}" == "1" ]] || ! command -v plutil >/dev/null 2>&1; then
-    plutil() {
-      case "$1" in
-        -lint)
-          [[ -f "$2" ]]
-          ;;
-        -replace)
-          [[ "$2" == "ProgramArguments.0" && "$3" == "-string" && -f "$5" ]] || return 1
-          awk -v replacement="$4" '
-            /<key>ProgramArguments<\/key>/ {
-              print
-              getline; print
-              getline
-              sub(/<string>[^<]*<\/string>/, "<string>" replacement "</string>")
-              print
-              next
-            }
-            { print }
-          ' "$5" >"$5.tmp" && mv "$5.tmp" "$5"
-          ;;
-        *)
-          return 64
-          ;;
-      esac
-    }
-  fi
+  setup_plutil
   source "${SERVICE_SCRIPT}"
   install_macos
   local calls
@@ -101,13 +113,26 @@ test_macos_install_starts_and_reports_running() {
     exit 1
   fi
   assert_contains "${status}" $'status=\033[31mexited\033[0m' 'macOS non-running status must be red'
-  plutil -replace ProgramArguments.0 -string "${TEST_ROOT}/Documents/digcrawl-watchlist-service.sh" "${plist}"
+  # Include duplicated launchers left by older indexed migrations.
+  plutil -replace ProgramArguments -xml "<array><string>legacy-launcher</string><string>legacy-launcher</string><string>run-foreground</string></array>" "${plist}"
   task_state="running"
   start_macos
   assert_contains "$(<"${plist}")" "<string>${launcher}</string>" 'macOS start must migrate a legacy plist to the staged launcher'
+  start_macos
+  python3 - "${plist}" "${launcher}" <<'PY_ARGV'
+import plistlib, sys
+from pathlib import Path
+value = plistlib.loads(Path(sys.argv[1]).read_bytes())
+assert value["ProgramArguments"] == [sys.argv[2], "run-foreground"], value["ProgramArguments"]
+PY_ARGV
   printf 'stale\n' >"${launcher}"
   restart_macos
   cmp -s "${SERVICE_SCRIPT}" "${launcher}" || { printf 'assertion failed: macOS restart must refresh the staged launcher\n' >&2; exit 1; }
+  python3 - "${plist}" "${launcher}" <<'PY_ARGV'
+import plistlib, sys
+from pathlib import Path
+assert plistlib.loads(Path(sys.argv[1]).read_bytes())["ProgramArguments"] == [sys.argv[2], "run-foreground"]
+PY_ARGV
   uninstall_macos
   [[ ! -e "${launcher}" ]] || { printf 'assertion failed: macOS uninstall must remove the staged launcher\n' >&2; exit 1; }
   rm -rf "${TEST_ROOT}"
@@ -306,6 +331,170 @@ test_upgrade_prepares_before_stopping() (
   done
 )
 
+assert_macos_workdir() {
+  python3 - "$1" "$2" <<'PY_WORKDIR'
+import plistlib, sys
+from pathlib import Path
+value = plistlib.loads(Path(sys.argv[1]).read_bytes())
+assert value["WorkingDirectory"] == sys.argv[2], value
+assert value["EnvironmentVariables"]["DIGCRAWL_WORKDIR"] == sys.argv[2], value
+PY_WORKDIR
+}
+
+test_macos_reinstall_preserves_workdir() (
+  local entry="$1"
+  setup_runtime
+  trap 'rm -rf "${TEST_ROOT}"' EXIT
+  setup_plutil
+  local lifecycle="${TEST_ROOT}/lifecycle.log"
+  export lifecycle
+  uname() { printf 'Darwin\n'; }
+  launchctl() {
+    printf '%s\n' "$*" >>"${lifecycle}"
+    if [[ "$1" == "print" ]]; then
+      printf '    state = running\n    pid = 4242\n'
+    fi
+  }
+  export -f uname launchctl
+  if declare -F plutil >/dev/null; then export -f plutil; fi
+  export DIGCRAWL_WATCHLIST_SERVICE_TEST=0
+  export DIGCRAWL_LOG_DIR="${TEST_ROOT}/logs"
+  local script="${SERVICE_SCRIPT}"
+  local label=com.digcrawl.watchlist
+  if [[ "${entry}" == "wrapper" ]]; then
+    script="${SCRIPT_DIR}/digcrawl-wechat-video-service.sh"
+    label=com.digcrawl.wechat
+  fi
+  local plist="${HOME}/Library/LaunchAgents/${label}.plist"
+  local checkout
+  checkout="$(cd "${SCRIPT_DIR}/.." && pwd -P)"
+  # No previous installation: retain the existing source-directory default.
+  unset DIGCRAWL_WORKDIR
+  "${BASH}" "${script}" install >/dev/null
+  assert_macos_workdir "${plist}" "${checkout}"
+  # An explicit directory moves both persisted cwd fields together.
+  local stable="${TEST_ROOT}/installed runtime & data"
+  mkdir -p "${stable}"
+  stable="$(cd "${stable}" && pwd -P)"
+  DIGCRAWL_WORKDIR="${stable}" "${BASH}" "${script}" install >/dev/null
+  assert_macos_workdir "${plist}" "${stable}"
+  # A default reinstall builds from the checkout, even while preserving cwd.
+  mock_go() {
+    pwd >"${DIGCRAWL_LOG_DIR}/build-cwd.txt"
+    while (( $# )); do
+      if [[ "$1" == "-o" ]]; then
+        cat >"$2" <<'MOCK_BINARY'
+#!/usr/bin/env bash
+pwd >"${DIGCRAWL_LOG_DIR}/runtime-cwd.txt"
+printf '%s\n' "$@" >"${DIGCRAWL_LOG_DIR}/args.txt"
+MOCK_BINARY
+        chmod +x "$2"
+        return 0
+      fi
+      shift
+    done
+    return 1
+  }
+  export -f mock_go
+  export GO=mock_go DIGCRAWL_AUTO_BUILD=1
+  export DIGCRAWL_BUILD_GOCACHE="${TEST_ROOT}/gocache"
+  export DIGCRAWL_BUILD_GOMODCACHE="${TEST_ROOT}/gomodcache"
+  local attempt
+  for attempt in 1 2; do
+    if [[ "${entry}" == "wrapper" ]]; then
+      (cd /private/tmp && "${BASH}" "${script}" install >/dev/null)
+    else
+      (cd "${checkout}" && "${BASH}" "${script}" install >/dev/null)
+    fi
+    assert_macos_workdir "${plist}" "${stable}"
+    [[ "$(<"${DIGCRAWL_LOG_DIR}/build-cwd.txt")" == "${checkout}" ]] || exit 1
+  done
+  # Execute the actual staged launcher with the persisted environment.
+  python3 - "${plist}" "${stable}" <<'PY_LAUNCH'
+import os, plistlib, subprocess, sys
+from pathlib import Path
+value = plistlib.loads(Path(sys.argv[1]).read_bytes())
+assert len(value["ProgramArguments"]) == 2, value["ProgramArguments"]
+env = dict(os.environ, **value["EnvironmentVariables"])
+subprocess.run(value["ProgramArguments"], cwd=value["WorkingDirectory"], env=env, check=True)
+assert Path(env["DIGCRAWL_LOG_DIR"], "runtime-cwd.txt").read_text().strip() == sys.argv[2]
+PY_LAUNCH
+  # A missing or unreadable installed cwd must fail before touching the service.
+  rmdir "${stable}"
+  local before_calls before_plist
+  before_calls="$(<"${lifecycle}")"
+  before_plist="$(<"${plist}")"
+  if "${BASH}" "${script}" install >"${TEST_ROOT}/error" 2>&1; then
+    printf 'assertion failed: reinstall accepted a missing runtime directory\n' >&2; exit 1
+  fi
+  assert_contains "$(<"${TEST_ROOT}/error")" 'working directory is unavailable' 'missing cwd must have an actionable error'
+  [[ "$(<"${lifecycle}")" == "${before_calls}" && "$(<"${plist}")" == "${before_plist}" ]] || exit 1
+  printf 'invalid plist\n' >"${plist}"
+  if "${BASH}" "${script}" install >"${TEST_ROOT}/error" 2>&1; then
+    printf 'assertion failed: reinstall accepted an unreadable installed cwd\n' >&2; exit 1
+  fi
+  assert_contains "$(<"${TEST_ROOT}/error")" 'cannot read installed WorkingDirectory' 'invalid plist must fail explicitly'
+  [[ "$(<"${lifecycle}")" == "${before_calls}" && "$(<"${plist}")" == 'invalid plist' ]] || exit 1
+)
+
+test_gateway_uses_shared_service_lifecycle() (
+  local test_os="$1"
+  setup_runtime
+  export DIGCRAWL_SERVICE_NAME=digcrawl-wechat-video
+  export DIGCRAWL_SERVICE_LABEL=com.digcrawl.wechat-video
+  export DIGCRAWL_SERVICE_COMMAND=gateway
+  export DIGCRAWL_CLI_NAME=digcrawl-wechat
+  export DIGCRAWL_SERVICE_LOG_PREFIX=wechat-video
+  export DIGCRAWL_GATEWAY_ADDR=127.0.0.1:8788
+  uname() { printf '%s\n' "${test_os}"; }
+  launchctl() {
+    if [[ "$1" == "print" ]]; then
+      printf '    state = running\n    pid = 4242\n'
+    fi
+  }
+  systemctl() { return 0; }
+  source "${SERVICE_SCRIPT}"
+  # A video gateway can start before optional transcription tools are installed.
+  detect_ffmpeg_path() { return 1; }
+  export DIGCRAWL_FFMPEG_PATH=""
+  local definition
+  if [[ "${test_os}" == "Darwin" ]]; then
+    install_macos
+    definition="$(mac_plist_path)"
+    assert_contains "$(<"${definition}")" '<string>gateway</string>' 'launchd must preserve the gateway command'
+    assert_contains "$(<"${definition}")" '<string>127.0.0.1:8788</string>' 'launchd must preserve the gateway address'
+    assert_contains "$(<"${definition}")" 'digcrawl-wechat-video-service.sh' 'gateway must have its own staged launcher'
+    assert_contains "$(<"${definition}")" 'wechat-video.err.log' 'gateway must have its own log files'
+  else
+    install_linux
+    definition="$(linux_unit_path)"
+    assert_contains "$(<"${definition}")" 'DIGCRAWL_SERVICE_COMMAND=gateway' 'systemd must preserve the gateway command'
+    assert_contains "$(<"${definition}")" 'DIGCRAWL_GATEWAY_ADDR=127.0.0.1:8788' 'systemd must preserve the gateway address'
+  fi
+  # Exercise the public wrapper, including execution from outside the checkout.
+  cat >"${DIGCRAWL_BIN}" <<'MOCK'
+#!/usr/bin/env bash
+printf '%s\n' "$@" >"${DIGCRAWL_WORKDIR}/args.txt"
+pwd >"${DIGCRAWL_WORKDIR}/cwd.txt"
+MOCK
+  chmod +x "${DIGCRAWL_BIN}"
+  export DIGCRAWL_WATCHLIST_SERVICE_TEST=0
+  local wrapper="${SCRIPT_DIR}/digcrawl-wechat-video-service.sh"
+  (cd /private/tmp && "${BASH}" "${wrapper}" run-foreground)
+  local expected
+  expected="$(printf '%s\n' gateway --config "${DIGCRAWL_CONFIG}" --addr 127.0.0.1:8788)"
+  [[ "$(<"${DIGCRAWL_WORKDIR}/args.txt")" == "${expected}" ]] || {
+    printf 'assertion failed: gateway launch arguments differ\n' >&2; exit 1;
+  }
+  [[ "$(<"${DIGCRAWL_WORKDIR}/cwd.txt")" == "$(cd "${DIGCRAWL_WORKDIR}" && pwd -P)" ]] || {
+    printf 'assertion failed: gateway working directory differs\n' >&2; exit 1;
+  }
+)
+
+(test_macos_reinstall_preserves_workdir manager)
+(test_macos_reinstall_preserves_workdir wrapper)
+(test_gateway_uses_shared_service_lifecycle Darwin)
+(test_gateway_uses_shared_service_lifecycle Linux)
 (test_macos_install_starts_and_reports_running)
 (test_linux_install_restarts_and_reports_running)
 for test_os in Darwin Linux; do

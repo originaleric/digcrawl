@@ -33,24 +33,13 @@ type browseInput struct {
 
 var browsePage = browser.BrowserBrowse
 
-type directBrowserOCRPolicy struct {
-	requested  bool
-	skillOwned bool
-	rootConfig config.OCRConfig
-}
-
-// resolveDirectBrowserOCR keeps browser.browse on the same Skill policy as
-// platform readers, while retaining the root OCR fallback used by standalone
-// gateway configurations. An explicit include_ocr remains Skill-owned so a
-// caller receives the existing opt-in validation when Skill OCR is disabled.
-func resolveDirectBrowserOCR(ctx context.Context, skillCfg config.SkillConfig, rootCfg config.OCRConfig, explicitlyRequested bool) directBrowserOCRPolicy {
-	if skill.DirectReadOCRRequested(ctx, skillCfg, explicitlyRequested) {
-		return directBrowserOCRPolicy{requested: true, skillOwned: true}
+// DirectOCRConfig selects the settings for a direct browser read. An explicit
+// OCR request selects Skill even when its validation will reject the request.
+func DirectOCRConfig(skillCfg config.SkillConfig, rootCfg config.OCRConfig, explicitlyRequested bool) (cfg config.OCRConfig, skillOwned bool) {
+	if skill.OCRRequested(skillCfg, explicitlyRequested) {
+		return skillCfg.OCR, true
 	}
-	if !executor.IsCollectExecution(ctx) && rootCfg.EnabledOrDefault() {
-		return directBrowserOCRPolicy{requested: true, rootConfig: rootCfg}
-	}
-	return directBrowserOCRPolicy{}
+	return rootCfg, false
 }
 
 // BrowseEntry returns registry entry for browser.browse.
@@ -104,26 +93,21 @@ func BrowseEntry(configDomains []string, artStore artifact.Store, runtimeConfigs
 				skillCfg, imageDownloadCfg = runtimeCfg.Skill, runtimeCfg.ImageDownload
 			}
 			isCollect := executor.IsCollectExecution(ctx)
-			ocrPolicy := resolveDirectBrowserOCR(ctx, skillCfg, runtimeCfg.OCR, in.IncludeOCR)
+			ocrCfg, skillOCR := DirectOCRConfig(skillCfg, runtimeCfg.OCR, in.IncludeOCR)
+			ocrRequested := !isCollect && (skillOCR || ocrCfg.EnabledOrDefault())
 			retainProviderImages := imageDownloadCfg.EnabledFor("web")
 			returnMedia := in.IncludeMedia
 			if !isCollect && in.IncludeOCR {
 				returnMedia = true
 			}
 			metadataScript := ""
-			if returnMedia || ocrPolicy.requested || retainProviderImages {
+			if returnMedia || ocrRequested || retainProviderImages {
 				metadataScript = browserImageMetadataScript()
 			}
 			var imageBytes int64
 			var imageItems int
-			if !isCollect && ocrPolicy.requested {
-				ocrCfg := ocrPolicy.rootConfig
-				if ocrPolicy.skillOwned {
-					ocrCfg = skillCfg.OCR
-				}
-				if ocrCfg.EnabledOrDefault() {
-					imageBytes, imageItems = ocrCfg.MaxImageBytesOrDefault(), ocrCfg.MaxImagesOrDefault()
-				}
+			if ocrRequested && ocrCfg.EnabledOrDefault() {
+				imageBytes, imageItems = ocrCfg.MaxImageBytesOrDefault(), ocrCfg.MaxImagesOrDefault()
 			}
 			resp, err := browsePage(ctx, &browser.BrowserBrowseRequest{
 				URL: in.URL, Action: in.Action, CaptureScreenshot: in.IncludeScreenshot, Mode: in.Mode, TabID: in.TabID,
@@ -156,7 +140,7 @@ func BrowseEntry(configDomains []string, artStore artifact.Store, runtimeConfigs
 			if strings.EqualFold(strings.TrimSpace(in.Mode), "snapshot") {
 				out["elements"] = append([]browser.AXNode{}, resp.Elements...)
 			}
-			if returnMedia || ocrPolicy.requested || retainProviderImages {
+			if returnMedia || ocrRequested || retainProviderImages {
 				if media := browserImageMedia(resp.Metadata); len(media) > 0 {
 					out["media"] = media
 				}
@@ -191,19 +175,19 @@ func BrowseEntry(configDomains []string, artStore artifact.Store, runtimeConfigs
 					localImages = inputs
 				}
 			}
-			if !isCollect && ocrPolicy.requested && ocrPolicy.skillOwned {
+			if ocrRequested && skillOCR {
 				if err := skill.Enhance(ctx, out, skillCfg, skill.EnhanceOptions{
 					IncludeOCR: true, ScreenshotBase64: resp.ScreenshotBase, ArtifactStore: artStore, LocalImages: localImages, InlineImages: inlineImages, ResolvedImages: imageItems > 0,
 				}); err != nil {
 					return out, nil, err
 				}
 			}
-			if !isCollect && ocrPolicy.requested && !ocrPolicy.skillOwned {
+			if ocrRequested && !skillOCR {
 				opts := ocr.EnrichOptions{ExtraImages: inlineImages, ResolvedImages: imageItems > 0}
 				if resp.ScreenshotBase != "" {
 					opts.ExtraImages = append(opts.ExtraImages, ocr.PNGDataURLImageRef("screenshot", resp.ScreenshotBase))
 				}
-				ocr.EnrichMap(ctx, out, ocrPolicy.rootConfig, opts)
+				ocr.EnrichMap(ctx, out, ocrCfg, opts)
 			}
 			if retainProviderImages && !returnMedia && !isCollect {
 				delete(out, "media")

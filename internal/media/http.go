@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -168,11 +169,22 @@ func DownloadFile(ctx context.Context, client *http.Client, rawURL, dest string,
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		return "", fmt.Errorf("http %d", resp.StatusCode)
 	}
-	if strings.EqualFold(strings.TrimSpace(mediaType), "video") && clearlyNonVideoContentType(resp.Header.Get("Content-Type")) {
+	mediaType = strings.ToLower(strings.TrimSpace(mediaType))
+	strictMP4 := mediaType == "video/mp4"
+	isVideo := mediaType == "video" || strictMP4
+	expectedLength := resp.ContentLength
+	if strictMP4 {
+		var complete bool
+		expectedLength, complete = completeMP4ResponseLength(resp)
+		if !complete {
+			return "", fmt.Errorf("response is not a complete video")
+		}
+	}
+	if isVideo && clearlyNonVideoContentType(resp.Header.Get("Content-Type")) {
 		return "", fmt.Errorf("response is not a video")
 	}
-	if resp.ContentLength > maxBytes {
-		return "", fmt.Errorf("content length %d exceeds max %d", resp.ContentLength, maxBytes)
+	if expectedLength > maxBytes {
+		return "", fmt.Errorf("content length %d exceeds max %d", expectedLength, maxBytes)
 	}
 	target, err := os.Create(dest)
 	if err != nil {
@@ -189,13 +201,42 @@ func DownloadFile(ctx context.Context, client *http.Client, rawURL, dest string,
 	if written > maxBytes {
 		return "", fmt.Errorf("download exceeds max bytes %d", maxBytes)
 	}
-	if strings.EqualFold(strings.TrimSpace(mediaType), "video") {
-		if err := ValidateVideoFile(dest); err != nil {
+	if isVideo {
+		if strictMP4 && expectedLength >= 0 && expectedLength != written {
+			return "", fmt.Errorf("video length does not match content length")
+		}
+		validate := ValidateVideoFile
+		if strictMP4 {
+			validate = ValidateMP4
+		}
+		if err := validate(dest); err != nil {
 			return "", err
 		}
 	}
 	completed = true
 	return resp.Header.Get("Content-Type"), nil
+}
+
+// Some media CDNs attach Content-Range to a 200 response containing the
+// entire MP4. Accept that header only when it declares the complete entity.
+func completeMP4ResponseLength(resp *http.Response) (int64, bool) {
+	if resp.StatusCode != http.StatusOK {
+		return 0, false
+	}
+	ranges := resp.Header.Values("Content-Range")
+	switch len(ranges) {
+	case 0:
+		return resp.ContentLength, true
+	case 1:
+		value := strings.TrimSpace(ranges[0])
+		_, size, _ := strings.Cut(value, "/")
+		total, err := strconv.ParseInt(size, 10, 64)
+		if err == nil && total > 0 && value == fmt.Sprintf("bytes 0-%d/%d", total-1, total) &&
+			(resp.ContentLength < 0 || resp.ContentLength == total) {
+			return total, true
+		}
+	}
+	return 0, false
 }
 
 func clearlyNonVideoContentType(contentType string) bool {

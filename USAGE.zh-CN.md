@@ -211,6 +211,10 @@ Codex 的 MCP proxy 是 stdio 协议所需的宿主子进程，各代理共享�
 
 微信公众号公开文章默认优先使用 HTTP HTML 静态解析，成功时会在 `platform_metadata` 中标记 `read_channel=http`、`extraction_source=html`。只有网络 transient 或解析状态不确定时才进入 Browser 兜底；验证码、频控、删除、私密、登录要求和最终 URL 跳出微信域名会直接返回结构化错误。
 
+### 微信视频号短链与本机转写
+
+本地微信实验分支提供 `wechat.channels.read`，使用同一 profile 的腾讯元宝会话读取普通视频分享短链。转写使用已配置的 ASR，登录与服务管理见[本地使用手册](docs/微信视频号本地抓取使用手册.md)和[本次更新](updates/2026-11-24-微信视频号短链与本机转写接入更新.md)。
+
 ### 微信视频号聊天卡片导入
 
 视频号聊天卡片没有稳定公开 URL 时，先启动 macOS 本地桥接；它会唤起微信。在微信桌面端打开并播放卡片后，从第二个终端执行导入：
@@ -1430,6 +1434,7 @@ MCP 返回操作前后的进度通知需要宿主随请求提供 progress token�
 - 仓库：<https://github.com/originaleric/digcrawl>
 - 示例配置：[`config/config.yaml`](config/config.yaml)
 - Collect 模块：[`collect/README.md`](collect/README.md)
+- 更新记录：[`updates/`](updates/)
 
 ---
 

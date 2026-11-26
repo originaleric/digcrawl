@@ -32,7 +32,7 @@ func (p *Provider) Register(_ context.Context, reg *registry.Registry) error {
 	}
 	store := p.ArtifactStore
 	reg.Register(WechatArticleReadEntry(domains, store, p.Config))
-	reg.Register(WechatChannelsReadEntry(domains, store))
+	reg.Register(WechatChannelsReadEntry(domains, store, p.Config))
 	reg.Register(XiaohongshuNoteReadEntry(domains, store, p.Config))
 	reg.Register(DouyinVideoReadEntry(domains, store, p.Config))
 	reg.Register(XPostReadEntry(domains, store, p.Config))

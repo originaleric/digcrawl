@@ -3,6 +3,7 @@ package config
 import (
 	"context"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -79,7 +80,7 @@ const (
 var supportedVideoDownloadProviders = map[string]struct{}{
 	"bilibili": {}, "douyin": {}, "instagram": {}, "kuaishou": {},
 	"threads": {}, "toutiao": {}, "weibo": {}, "xiaohongshu": {},
-	"youtube": {}, "zhihu": {},
+	"wechat_channels": {}, "youtube": {}, "zhihu": {},
 }
 
 var supportedImageDownloadProviders = map[string]struct{}{
@@ -342,6 +343,25 @@ func (c SkillSummaryConfig) InputBudgetOrDefault() SummaryInputBudget {
 		b.MetadataChars = 2000
 	}
 	return b
+}
+
+const (
+	defaultCollectMaxMediaBytes   = 10 * 1024 * 1024
+	defaultCollectMediaTimeoutSec = 30
+)
+
+func (c CollectConfig) MaxMediaBytesOrDefault() int64 {
+	if c.MaxMediaBytes > 0 {
+		return c.MaxMediaBytes
+	}
+	return defaultCollectMaxMediaBytes
+}
+
+func (c CollectConfig) MediaTimeoutSecOrDefault() int {
+	if c.MediaTimeoutSec > 0 {
+		return c.MediaTimeoutSec
+	}
+	return defaultCollectMediaTimeoutSec
 }
 
 // CollectConfig local content collect and export settings.
@@ -1627,8 +1647,8 @@ func init() {
 				PersistMode:       "index",
 				DBPath:            "storage/digcrawl/collect.db",
 				IndexEnabled:      &enabled,
-				MaxMediaBytes:     10 * 1024 * 1024,
-				MediaTimeoutSec:   30,
+				MaxMediaBytes:     defaultCollectMaxMediaBytes,
+				MediaTimeoutSec:   defaultCollectMediaTimeoutSec,
 				InboxPollInterval: 5,
 				RateLimitMs:       1500,
 				PlatformRateLimits: map[string]int{
@@ -1812,6 +1832,16 @@ func Skill() SkillConfig {
 	skillMu.RLock()
 	defer skillMu.RUnlock()
 	return defaultCfg.Skill
+}
+
+// SkillMediaSettings snapshots the three settings that govern one read.
+func SkillMediaSettings() (SkillConfig, VideoDownloadConfig, ImageDownloadConfig) {
+	skillMu.RLock()
+	defer skillMu.RUnlock()
+	video, image := defaultCfg.VideoDownload, defaultCfg.ImageDownload
+	video.Providers = maps.Clone(video.Providers)
+	image.Providers = maps.Clone(image.Providers)
+	return defaultCfg.Skill, video, image
 }
 
 // SkillVideoDownload returns the two local media settings that a running MCP

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/go-rod/rod"
 	"github.com/go-rod/rod/lib/proto"
+	"github.com/originaleric/digcrawl/config"
 )
 
 const cookieSessionSchemaVersion = 1
@@ -101,6 +103,9 @@ func cookieFileMutex(cookiePath string) *sync.Mutex {
 func loadDomainCookies(page interface {
 	SetCookies(cookies []*proto.NetworkCookieParam) error
 }, domain, cookieStoreDir string, targetURL *url.URL) error {
+	if canonical, _ := canonicalCookieDomain(domain); canonical == YuanbaoHost {
+		return fmt.Errorf("元宝会话仅用于视频号短链解析")
+	}
 	cookies, loaded, err := readCookieParamsForDomain(cookieStoreDir, domain)
 	if err != nil || !loaded || len(cookies) == 0 {
 		return err
@@ -123,11 +128,17 @@ func CookieHeaderForURL(cookieStoreDir, rawURL string) (string, error) {
 	if err != nil || target.Scheme == "" || target.Hostname() == "" {
 		return "", fmt.Errorf("cookie target URL is invalid")
 	}
+	if strings.EqualFold(target.Hostname(), YuanbaoHost) && rawURL != YuanbaoParseURL {
+		return "", fmt.Errorf("元宝会话仅用于视频号短链解析")
+	}
 	cookies, loaded, err := readCookieParamsForDomain(cookieStoreDir, target.Hostname())
 	if err != nil || !loaded {
 		return "", err
 	}
+	return cookieHeaderForTarget(target, cookies), nil
+}
 
+func cookieHeaderForTarget(target *url.URL, cookies []*proto.NetworkCookieParam) string {
 	host := strings.ToLower(target.Hostname())
 	path := target.EscapedPath()
 	if path == "" {
@@ -146,6 +157,9 @@ func CookieHeaderForURL(cookieStoreDir, rawURL string) (string, error) {
 			continue
 		}
 		cookieDomain := strings.TrimPrefix(strings.ToLower(strings.TrimSpace(cookie.Domain)), ".")
+		if host == YuanbaoHost && (!yuanbaoCookieScope(cookieDomain, cookie.Name) || cookie.PartitionKey != nil) {
+			continue
+		}
 		if cookieDomain != "" && host != cookieDomain && !strings.HasSuffix(host, "."+cookieDomain) {
 			continue
 		}
@@ -157,7 +171,27 @@ func CookieHeaderForURL(cookieStoreDir, rawURL string) (string, error) {
 		}
 		parts = append(parts, cookie.Name+"="+cookie.Value)
 	}
-	return strings.Join(parts, "; "), nil
+	return strings.Join(parts, "; ")
+}
+
+func yuanbaoCookieScope(domain, name string) bool {
+	return domain == YuanbaoHost || (domain == "tencent.com" && (name == "hy_user" || name == "hy_token"))
+}
+
+func hasYuanbaoLogin(header string) bool {
+	req := http.Request{Header: http.Header{"Cookie": {header}}}
+	user, userErr := req.Cookie("hy_user")
+	token, tokenErr := req.Cookie("hy_token")
+	return userErr == nil && tokenErr == nil && user.Value != "" && token.Value != ""
+}
+
+// YuanbaoCookieHeader loads only the session applicable to Yuanbao's renderer API.
+func YuanbaoCookieHeader(cfg config.LocalBrowserConfig) (string, error) {
+	header, err := CookieHeaderForURL(normalizeLocalBrowserConfig(cfg).CookieStoreDir, YuanbaoParseURL)
+	if err == nil && !hasYuanbaoLogin(header) {
+		return "", newCookieSessionUnavailableError(fmt.Errorf("元宝会话缺失或已过期"))
+	}
+	return header, err
 }
 
 func cookiePathMatches(requestPath, cookiePath string) bool {
@@ -400,9 +434,19 @@ func saveDomainCookies(page interface {
 	if err != nil {
 		return err
 	}
+	if canonical == YuanbaoHost {
+		parseTarget, err := url.Parse(YuanbaoParseURL)
+		if err != nil {
+			return err
+		}
+		targetURL = parseTarget
+	}
 	cookies, err := collectSessionCookies(page, canonical, targetURL)
 	if err != nil {
 		return err
+	}
+	if canonical == YuanbaoHost && !hasYuanbaoLogin(cookieHeaderForTarget(targetURL, cookies)) {
+		return fmt.Errorf("元宝登录尚未完成，请在浏览器登录成功后再确认")
 	}
 	sessionPath, _, err := cookieSessionFilePath(cookieStoreDir, canonical)
 	if err != nil {
@@ -420,7 +464,7 @@ func saveDomainCookies(page interface {
 func collectSessionCookies(page interface {
 	Cookies(urls []string) ([]*proto.NetworkCookie, error)
 }, canonical string, targetURL *url.URL) ([]*proto.NetworkCookieParam, error) {
-	if rodPage, ok := page.(*rod.Page); ok {
+	if rodPage, ok := page.(*rod.Page); ok && canonical != YuanbaoHost {
 		// Attachment setup may already be cancelled. Cookie collection belongs
 		// to the current interactive login, just like other page operations.
 		allCookies, err := rodPage.Browser().Context(rodPage.GetContext()).GetCookies()
@@ -432,6 +476,15 @@ func collectSessionCookies(page interface {
 	cookies, err := page.Cookies([]string{targetURL.String()})
 	if err != nil {
 		return nil, fmt.Errorf("读取页面 cookie 失败: %w", err)
+	}
+	if canonical == YuanbaoHost {
+		scoped := cookies[:0]
+		for _, cookie := range cookies {
+			if cookie != nil && cookie.PartitionKey == nil && yuanbaoCookieScope(strings.TrimPrefix(strings.ToLower(cookie.Domain), "."), cookie.Name) {
+				scoped = append(scoped, cookie)
+			}
+		}
+		cookies = scoped
 	}
 	return cookieParamsFromNetwork(cookies, canonical), nil
 }

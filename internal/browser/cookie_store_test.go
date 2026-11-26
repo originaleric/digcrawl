@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/go-rod/rod/lib/proto"
+	"github.com/originaleric/digcrawl/config"
 )
 
 type cookieSetPage struct {
@@ -336,4 +337,38 @@ func cookieValues(cookies []*proto.NetworkCookieParam) string {
 		}
 	}
 	return strings.Join(parts, "; ")
+}
+
+func TestYuanbaoLoginSavesOnlyUsableSiteSession(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.LocalBrowserConfig{CookieStoreDir: dir}
+	target := mustParseURL(t, YuanbaoOrigin)
+	page := &cookieReadPage{cookies: []*proto.NetworkCookie{
+		{Name: "hy_user", Value: "example", Domain: ".tencent.com", Path: "/", Secure: true},
+		{Name: "hy_token", Value: "example", Domain: YuanbaoHost, Path: "/api/weixin", Secure: true},
+		{Name: "mismatched", Value: "example", Domain: ".tencent.com", Path: "/"},
+		{Name: "unrelated", Value: "example", Domain: "other.tencent.com", Path: "/"},
+	}}
+	if err := saveDomainCookies(page, YuanbaoHost, dir, target); err != nil {
+		t.Fatal(err)
+	}
+	got, err := YuanbaoCookieHeader(cfg)
+	if err != nil || got != "hy_user=example; hy_token=example" {
+		t.Fatalf("unexpected session contents: %q, %v", got, err)
+	}
+	cookies, loaded, err := readCookieParamsForDomain(dir, YuanbaoHost)
+	if err != nil || !loaded || len(cookies) != 2 {
+		t.Fatalf("only site session cookies should be persisted: loaded=%v count=%d err=%v", loaded, len(cookies), err)
+	}
+	page.cookies = page.cookies[:1]
+	if err := saveDomainCookies(page, YuanbaoHost, dir, target); err == nil {
+		t.Fatal("expected incomplete login to fail")
+	}
+	if after, err := YuanbaoCookieHeader(cfg); err != nil || after != got {
+		t.Fatal("incomplete login overwrote a saved session")
+	}
+	generic := &cookieSetPage{}
+	if err := loadDomainCookies(generic, YuanbaoHost, dir, target); err == nil || len(generic.cookies) != 0 {
+		t.Fatal("Yuanbao session was made available to generic browsing")
+	}
 }

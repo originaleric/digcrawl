@@ -24,16 +24,18 @@ func WechatArticleReadEntry(configDomains []string, artStore artifact.Store, run
 	)
 }
 
-// WechatChannelsReadEntry reads a public WeChat Channels share page without
-// connecting to the desktop client or importing a stored WeChat session.
-func WechatChannelsReadEntry(configDomains []string, artStore artifact.Store) registry.Entry {
-	return platformReadEntry(
+// WechatChannelsReadEntry reads public page text and resolves requested videos
+// using the local Yuanbao session.
+func WechatChannelsReadEntry(configDomains []string, artStore artifact.Store, runtimeCfg ...*config.Config) registry.Entry {
+	return platformReadEntryWithConfig(
 		ToolWechatChannelsRead,
-		"Read a public WeChat Channels share URL through a local browser without desktop WeChat or cookie reuse.",
-		[]string{"browser", "wechat_channels", "platform.read"},
+		"Read a WeChat Channels share URL. Requested video media uses the local Yuanbao session; on LOGIN_REQUIRED, follow the login action for the active DigCrawl profile and retry.",
+		[]string{"api", "browser", "wechat_channels", "cookie.local", "platform.read", "video"},
 		wechatDefaultDomains,
 		configDomains,
 		artStore,
 		wechatchannels.ReadShare,
+		optionalRuntimeConfig(runtimeCfg),
+		resolveWechatChannelsVideo,
 	)
 }
