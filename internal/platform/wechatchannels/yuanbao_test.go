@@ -174,8 +174,23 @@ func TestYuanbaoLoginCommandPreservesNativeShellArgumentsAndDirectory(t *testing
 	}
 	got := strings.Split(strings.TrimSpace(strings.ReplaceAll(string(out), "\r\n", "\n")), "\n")
 	want := []string{workingDir, "browser", "login", "--platform", "wechat_channels", "--config", profile, original}
-	if !slices.Equal(got, want) {
+	if len(got) != len(want) || !slices.Equal(got[1:7], want[1:7]) {
 		t.Fatalf("login shell output=%q; want %q", got, want)
+	}
+	// Native shells may expand a Windows 8.3 path or resolve a Unix alias.
+	// Directory identity must match; command arguments above stay byte-exact.
+	for _, pair := range [][2]string{{got[0], workingDir}, {got[7], original}} {
+		actual, err := os.Stat(pair[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		expected, err := os.Stat(pair[1])
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !os.SameFile(actual, expected) {
+			t.Fatalf("login directory=%q; want %q", pair[0], pair[1])
+		}
 	}
 }
 
